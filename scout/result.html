@@ -824,7 +824,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
   /* Page breaks */
   #panel0{page-break-before:auto}
-  #panel1,#panel2,#panel3,#panel4{page-break-before:always}
+  #panel1,#panel2,#panel3,#panel4,#panel5{page-break-before:always}
 
   /* Headline block — hidden in print; the print-cover replaces it as page 1.
      Without this rule the headline-block (DOM line ~988, above .print-cover)
@@ -997,6 +997,25 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .cf-add-btn:disabled{opacity:.6;cursor:default}
 .cf-msg{font-size:11px;color:var(--grey2);margin-top:12px;line-height:1.6;font-style:italic}
 .cf-quota{font-size:10px;color:var(--grey2);letter-spacing:.04em;margin-top:12px}
+
+/* ── Leads tab ── */
+.leads-person-card{padding:24px 0}
+.leads-person-row{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.leads-person-name{font-family:'Cormorant Garamond',serif;font-size:18px;font-weight:300;color:var(--white);flex-shrink:0}
+.leads-status-label{font-family:'Tenor Sans',sans-serif;font-size:8px;letter-spacing:.15em;text-transform:uppercase;padding:3px 8px;border:1px solid;flex-shrink:0}
+.leads-status-found{color:var(--gold);border-color:rgba(224,146,47,0.4)}
+.leads-status-contacted{color:var(--grey1);border-color:var(--border2)}
+.leads-status-replied{color:#5a9e6f;border-color:rgba(90,158,111,0.4)}
+.leads-status-trial_booked{color:#7a8aba;border-color:rgba(122,138,186,0.4)}
+.leads-status-gone_quiet{color:var(--grey2);border-color:var(--border2)}
+.leads-person-meta{font-size:11px;color:var(--grey2);letter-spacing:.03em;margin-bottom:14px;line-height:1.6}
+.leads-sep{border-top:1px solid var(--border2);margin:4px 0}
+.leads-closing{margin-top:16px;padding:16px;background:var(--black3);border-left:2px solid rgba(224,146,47,0.3)}
+.leads-closing-title{font-family:'Tenor Sans',sans-serif;font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:14px}
+.leads-closing-row{display:flex;gap:16px;margin-bottom:10px;font-size:12px;line-height:1.7}
+.leads-closing-label{font-family:'Tenor Sans',sans-serif;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--grey1);flex-shrink:0;width:110px;padding-top:1px}
+.leads-closing-body{color:var(--white2);flex:1}
+@media(max-width:500px){.leads-closing-row{flex-direction:column;gap:4px}.leads-closing-label{width:auto}}
 </style>
 </head>
 <body>
@@ -1071,6 +1090,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <button class="tab-btn" onclick="switchTab(2)" id="tabBtn2">WhatsApp</button>
   <button class="tab-btn" onclick="switchTab(3)" id="tabBtn3">My Customers</button>
   <button class="tab-btn" onclick="switchTab(4)" id="tabBtn4">What's Next</button>
+  <button class="tab-btn" onclick="switchTab(5)" id="tabBtn5">Leads</button>
 </div>
 
 <!-- PRINT COVER PAGE (hidden on screen, first page when printing) -->
@@ -1171,6 +1191,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
         <div class="result-loading-msg">Rendering expansion plan...</div>
       </div>
     </div>
+  </div>
+
+  <!-- PANEL 5: LEADS — pipeline people (all open statuses) with messages and closing strategies -->
+  <div class="tab-panel" id="panel5">
+    <div class="print-section-header">SECTION 6: LEADS</div>
+    <div id="leadsContent"></div>
   </div>
 
 </div><!-- /tab-panels -->
@@ -1599,6 +1625,12 @@ function parseAndRender(rawOutput, biz) {
 
     try { updateReasoningPanel(data); } catch(_eRp) { console.error('updateReasoningPanel threw:', _eRp); }
 
+    try { renderLeadsTab(data); } catch(_eLeads) {
+      console.error('renderLeadsTab threw:', _eLeads);
+      var _elLeadsErr = document.getElementById('leadsContent');
+      if (_elLeadsErr) _elLeadsErr.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Leads could not be rendered. Refresh the page to try again.</div>';
+    }
+
     return;
   }
 
@@ -1670,6 +1702,9 @@ function parseAndRender(rawOutput, biz) {
   renderTab3(sections.tab3);
   renderTab4(sections.tab4, biz);
   renderTab5(sections.tab5);
+
+  /* Text path has no JSON — render pipeline only; messages and strategy will be absent */
+  try { renderLeadsTab(null); } catch(_eLT) { console.error('renderLeadsTab (text path) threw:', _eLT); }
 
   /* Text path has no calendar data — show placeholder in WhatsApp tab */
   var _wacElTxt = document.getElementById('wacContent');
@@ -3317,7 +3352,7 @@ function renderTab5(content) {
 ═══════════════════════════════════════════ */
 function switchTab(n) {
   /* Deactivate all */
-  for (var i = 0; i < 5; i++) {
+  for (var i = 0; i < 6; i++) {
     document.getElementById('tabBtn' + i).classList.remove('active');
     document.getElementById('panel' + i).classList.remove('active');
   }
@@ -3326,6 +3361,244 @@ function switchTab(n) {
   document.getElementById('panel' + n).classList.add('active');
   currentTab = n;
   window.scrollTo({top: document.querySelector('.tab-nav').offsetTop - 81, behavior:'smooth'});
+}
+
+/* ═══════════════════════════════════════════
+   LEADS TAB — PANEL 5
+   Reads the pipeline and renders open leads
+   with Scout's message and closing strategy.
+═══════════════════════════════════════════ */
+function renderLeadsTab(data) {
+  var el = document.getElementById('leadsContent');
+  if (!el) return;
+
+  /* Build ICP → primary message map (same logic as scout/index.html) */
+  var _norm = function(s) { return (s || '').trim().toLowerCase(); };
+  var _msgMap   = {};
+  var _stratMap = {};
+
+  try {
+    var _msgs = (data && data.tab2 && Array.isArray(data.tab2.messages))
+      ? data.tab2.messages : [];
+    _msgs.forEach(function(m) {
+      var _k = _norm(m.icp);
+      if (!_k) return;
+      /* Prefer primary; keep first seen otherwise */
+      if (!_msgMap[_k] || m.type === 'primary') _msgMap[_k] = m.versionA || m.text || '';
+    });
+  } catch (_me) { console.error('renderLeadsTab: message map failed:', _me); }
+
+  /* Build ICP → closingStrategy map */
+  try {
+    var _icps = (data && data.tab1 && Array.isArray(data.tab1.icps))
+      ? data.tab1.icps : [];
+    _icps.forEach(function(icp) {
+      var _k = _norm(icp.name);
+      if (!_k || !icp.closingStrategy || typeof icp.closingStrategy !== 'object') return;
+      _stratMap[_k] = icp.closingStrategy;
+    });
+  } catch (_se) { console.error('renderLeadsTab: strategy map failed:', _se); }
+
+  /* Load and filter pipeline — exclude closed statuses */
+  var people = [];
+  try {
+    var _all = pipelineAll();
+    people = _all.filter(function(p) {
+      return p.status !== 'joined' && p.status !== 'not_interested';
+    });
+    /* Order: found (new leads) → contacted → replied → trial_booked → gone_quiet */
+    var _ord = { found: 0, contacted: 1, replied: 2, trial_booked: 3, gone_quiet: 4 };
+    people.sort(function(a, b) {
+      return ((_ord[a.status] !== undefined) ? _ord[a.status] : 9) -
+             ((_ord[b.status] !== undefined) ? _ord[b.status] : 9);
+    });
+  } catch (_pe) {
+    console.error('renderLeadsTab: pipeline read failed:', _pe);
+    el.innerHTML = '<div style="padding:32px;font-size:12px;color:var(--grey2)">Leads could not be loaded. Refresh the page to try again.</div>';
+    return;
+  }
+
+  /* Empty state */
+  if (people.length === 0) {
+    el.innerHTML =
+      '<div style="padding:32px 0">' +
+      '<div style="font-size:13px;color:var(--grey1);line-height:1.8;margin-bottom:20px">' +
+      'No leads yet. Open <strong style="color:var(--white2)">My Plan</strong> and use the ' +
+      '<strong style="color:var(--white2)">Find Businesses</strong> button on each ICP card to ' +
+      'discover local businesses and add them here.' +
+      '</div></div>';
+    return;
+  }
+
+  var _statusLabels = {
+    found:        'New Lead',
+    contacted:    'Contacted',
+    replied:      'Replied',
+    trial_booked: 'Trial Booked',
+    gone_quiet:   'Gone Quiet'
+  };
+
+  var _week = parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '1', 10);
+  var html  = '';
+
+  people.forEach(function(p, idx) {
+    var icpKey   = _norm(p.icp);
+    var msgText  = icpKey ? (_msgMap[icpKey]   || '') : '';
+    var strategy = icpKey ? (_stratMap[icpKey] || null) : null;
+    var phone    = waPhone(p.phone || '');
+    var cardId   = 'lmsg_' + escAttr(p.id || String(idx));
+    var sLbl     = _statusLabels[p.status] || p.status || '';
+
+    html += '<div class="leads-person-card"' +
+            ' data-person-id="'     + escAttr(p.id     || '') + '"' +
+            ' data-person-status="' + escAttr(p.status || '') + '">';
+
+    /* ── Name + status badge ── */
+    html += '<div class="leads-person-row">';
+    html += '<div class="leads-person-name">' + escHtml(p.name || '') + '</div>';
+    if (sLbl) {
+      html += '<span class="leads-status-label leads-status-' + escAttr(p.status || '') + '">' +
+              escHtml(sLbl) + '</span>';
+    }
+    html += '</div>';
+
+    /* ── Phone + address ── */
+    if (p.phone || p.address) {
+      html += '<div class="leads-person-meta">';
+      if (p.phone)  html += escHtml(p.phone);
+      if (p.phone && p.address) html += '<span style="margin:0 6px;color:var(--grey2)">·</span>';
+      if (p.address) html += escHtml(p.address);
+      html += '</div>';
+    }
+
+    /* ── No ICP: manually added contact ── */
+    if (!p.icp) {
+      html += '<div style="font-size:11px;color:var(--grey2);margin:4px 0 6px;font-family:\'Tenor Sans\',sans-serif;letter-spacing:.04em">' +
+              'Added manually — run an analysis to get a message and closing strategy for this contact.</div>';
+      html += '</div>';
+      if (idx < people.length - 1) html += '<div class="leads-sep"></div>';
+      return;
+    }
+
+    /* ── ICP found but no message or strategy yet (text path or pre-schema analysis) ── */
+    if (!msgText && !strategy) {
+      html += '<div style="font-size:11px;color:var(--grey2);margin:4px 0 6px;font-family:\'Tenor Sans\',sans-serif;letter-spacing:.04em">' +
+              'Message and closing strategy will appear after your next analysis.</div>';
+      html += '</div>';
+      if (idx < people.length - 1) html += '<div class="leads-sep"></div>';
+      return;
+    }
+
+    /* ── Message card ── */
+    if (msgText) {
+      var waUrl = phone
+        ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msgText)
+        : '';
+      html += '<div class="message-card" id="' + cardId + '">';
+      html += '<div class="message-card-header">';
+      html += '<div><div class="message-card-label">' + escHtml(p.icp) + ' — message</div></div>';
+      html += '<button class="copy-btn" data-lead-copy="' + cardId + '">Copy</button>';
+      if (waUrl) {
+        /* Direct wa.me link — no modal needed, phone already known.
+           data-lead-wa-id triggers 'found' → 'contacted' promotion in the delegated listener. */
+        html += '<a class="copy-btn" href="' + escAttr(waUrl) + '" target="_blank" rel="noopener"' +
+                ' data-lead-wa-id="' + escAttr(p.id || '') + '"' +
+                ' style="text-decoration:none">Send on WhatsApp</a>';
+      }
+      html += '</div>';
+      html += '<div class="message-text" data-text="' + escAttr(msgText) + '">' + escHtml(msgText) + '</div>';
+      html += '</div>';
+    }
+
+    /* ── Closing strategy ── */
+    if (strategy) {
+      html += '<div class="leads-closing">';
+      html += '<div class="leads-closing-title">How to close this one</div>';
+      if (strategy.openWith)
+        html += '<div class="leads-closing-row"><span class="leads-closing-label">Open with</span><span class="leads-closing-body">' + escHtml(strategy.openWith) + '</span></div>';
+      if (strategy.theyWillSay)
+        html += '<div class="leads-closing-row"><span class="leads-closing-label">They\'ll say</span><span class="leads-closing-body">' + escHtml(strategy.theyWillSay) + '</span></div>';
+      if (strategy.youSay)
+        html += '<div class="leads-closing-row"><span class="leads-closing-label">You say</span><span class="leads-closing-body">' + escHtml(strategy.youSay) + '</span></div>';
+      if (strategy.whatClosesIt)
+        html += '<div class="leads-closing-row"><span class="leads-closing-label">What closes it</span><span class="leads-closing-body">' + escHtml(strategy.whatClosesIt) + '</span></div>';
+      html += '</div>';
+    } else if (msgText) {
+      /* Message present but strategy absent — older analysis without closingStrategy */
+      html += '<div style="font-size:11px;color:var(--grey2);margin:10px 0 4px;font-family:\'Tenor Sans\',sans-serif;letter-spacing:.04em">' +
+              'Closing strategy will appear after your next analysis.</div>';
+    }
+
+    html += '</div>';
+    if (idx < people.length - 1) html += '<div class="leads-sep"></div>';
+  });
+
+  el.innerHTML = html;
+
+  /* Delegated listener — re-attach fresh each render */
+  if (_leadsClickHandler) el.removeEventListener('click', _leadsClickHandler);
+  _leadsClickHandler = function(e) {
+    /* COPY button */
+    var copyBtn = e.target.closest('[data-lead-copy]');
+    if (copyBtn) {
+      var cId   = copyBtn.getAttribute('data-lead-copy');
+      var cCard = document.getElementById(cId);
+      if (cCard) {
+        var cEl   = cCard.querySelector('.message-text');
+        var cText = (cEl && cEl.getAttribute('data-text')) || (cEl && cEl.textContent) || '';
+        if (cText) {
+          var _doCopy = function() {
+            copyBtn.textContent = 'Copied!';
+            copyBtn.classList.add('copied');
+            setTimeout(function() {
+              copyBtn.textContent = 'Copy';
+              copyBtn.classList.remove('copied');
+            }, 2000);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(cText).then(_doCopy).catch(function() {
+              var ta = document.createElement('textarea');
+              ta.value = cText; ta.style.cssText = 'position:fixed;opacity:0';
+              document.body.appendChild(ta); ta.select();
+              try { document.execCommand('copy'); } catch (_) {}
+              document.body.removeChild(ta); _doCopy();
+            });
+          } else {
+            var ta = document.createElement('textarea');
+            ta.value = cText; ta.style.cssText = 'position:fixed;opacity:0';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); } catch (_) {}
+            document.body.removeChild(ta); _doCopy();
+          }
+        }
+      }
+      return;
+    }
+
+    /* WHATSAPP link — promote 'found' → 'contacted' after tap */
+    var waEl = e.target.closest('[data-lead-wa-id]');
+    if (waEl) {
+      var pid = waEl.getAttribute('data-lead-wa-id');
+      if (pid) {
+        try {
+          var card = waEl.closest('.leads-person-card');
+          var curStatus = card ? card.getAttribute('data-person-status') : '';
+          if (curStatus === 'found') {
+            pipelineSetStatus(pid, 'contacted', _week);
+            if (card) {
+              card.setAttribute('data-person-status', 'contacted');
+              var lbl = card.querySelector('.leads-status-label');
+              if (lbl) {
+                lbl.textContent = 'Contacted';
+                lbl.className   = 'leads-status-label leads-status-contacted';
+              }
+            }
+          }
+        } catch (_we) { console.error('leads WA promote failed:', _we); }
+      }
+    }
+  };
+  el.addEventListener('click', _leadsClickHandler);
 }
 
 /* ═══════════════════════════════════════════
@@ -3543,6 +3816,7 @@ function cfAddToList(icpIdx, placeIdx, icpName, btn) {
 
 /* Pipeline capture state — holds pending send until modal is confirmed */
 var _pipePending = null;
+var _leadsClickHandler = null; /* module-level ref so we can removeEventListener before re-attaching */
 
 /* Opens the capture modal, remembering what to send once confirmed */
 function pipeAsk(text, icp) {

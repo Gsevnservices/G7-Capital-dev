@@ -6121,7 +6121,13 @@ REVENUE VELOCITY RULES:
         "revenuePerCustomer": "₹[X]/month for recurring | ₹[X] per visit × [N] visits/month for repeat | ₹[X] per project for project | ₹[X] one-time for oneoff — match to REVENUE MODEL",
         "confidence": "HIGH",
         "confidenceReason": "[One sentence why]",
-        "switchTrigger": "[Competitor name]'s customers leave when: [specific frustration]"
+        "switchTrigger": "[Competitor name]'s customers leave when: [specific frustration]",
+        "closingStrategy": {
+          "openWith": "[The single most effective opening angle for this customer type — what to lead with in the first 30 seconds of a real conversation. Specific to what this buyer cares about, not generic rapport advice.]",
+          "theyWillSay": "[The one objection this customer type raises most often, in their own words. Not a list — the single most likely one.]",
+          "youSay": "[The response that actually works. Concrete, references something real about the business. Never a generic reframe.]",
+          "whatClosesIt": "[The specific thing that converts this buyer type — a trial, a site visit, a sample, a first order at a reduced quantity, a reference from someone they know. Name the mechanism, not 'build trust'.]"
+        }
       },
       {
         "name": "[ICP 2 name]",
@@ -6135,7 +6141,13 @@ REVENUE VELOCITY RULES:
         "revenuePerCustomer": "₹[X]/month for recurring | ₹[X] per visit × [N] visits/month for repeat | ₹[X] per project for project | ₹[X] one-time for oneoff — match to REVENUE MODEL",
         "confidence": "MEDIUM",
         "confidenceReason": "[One sentence]",
-        "switchTrigger": "[Switch trigger sentence]"
+        "switchTrigger": "[Switch trigger sentence]",
+        "closingStrategy": {
+          "openWith": "[Opening angle specific to this buyer type — what they care about, not a generic intro.]",
+          "theyWillSay": "[The most common objection from this group, in their own words.]",
+          "youSay": "[Concrete response that references something real about the business.]",
+          "whatClosesIt": "[The mechanism that converts this buyer — trial, visit, sample, referral, first order. Name it specifically.]"
+        }
       },
       {
         "name": "[ICP 3 name]",
@@ -6144,7 +6156,13 @@ REVENUE VELOCITY RULES:
         "searchQuery": "[Business category + specific area + city that finds POTENTIAL BUYERS, not competitors. Null for any ICP of individual people.]",
         "revenuePerCustomer": "₹[X]/month for recurring | ₹[X] per visit × [N] visits/month for repeat | ₹[X] per project for project | ₹[X] one-time for oneoff — match to REVENUE MODEL",
         "confidence": "LOW",
-        "confidenceReason": "[One sentence]"
+        "confidenceReason": "[One sentence]",
+        "closingStrategy": {
+          "openWith": "[Opening angle for this buyer type.]",
+          "theyWillSay": "[Most common objection in their own words.]",
+          "youSay": "[Concrete response referencing the business.]",
+          "whatClosesIt": "[The mechanism — trial, visit, sample, referral. Name it.]"
+        }
       }
     ],
     "priorityOrder": [
@@ -7179,6 +7197,53 @@ Format when not null: a business category
 Google Maps recognises + specific area +
 city. "advertising agencies Andheri West
 Mumbai" — not the ICP name, not a phrase.
+
+ADDITION 5B — CLOSING STRATEGY RULES
+
+Every ICP must include a closingStrategy
+object with four fields: openWith,
+theyWillSay, youSay, whatClosesIt.
+
+Rules:
+
+— closingStrategy must be drawn from this
+  business type's playbook in Component 3,
+  not invented. If Component 3 covers the
+  sector, use its patterns. If not, apply
+  the same playbook logic to the actual
+  category.
+
+— It describes how to close this TYPE of
+  buyer. It will be shown against individual
+  businesses in the Leads tab, so it must
+  hold true for any business in the group —
+  not just one specific example.
+
+— theyWillSay must be a real objection in
+  the buyer's own words. Not a category
+  label like "price concerns" or "timing
+  issues" — write the actual sentence the
+  buyer says out loud.
+
+— youSay must be concrete. It must reference
+  something real and specific about the
+  business (the product, a result, a name,
+  a process). Never a generic reframe like
+  "acknowledge the concern and pivot."
+
+— whatClosesIt must name a mechanism the
+  owner can actually do this week: a trial,
+  a site visit, a sample, a first order at
+  a reduced quantity, a reference from
+  someone the buyer knows. "Build trust"
+  is not a mechanism.
+
+— For consumer ICPs where searchQuery is
+  null (individuals not findable on a map),
+  closingStrategy is still required and
+  still useful — the owner meets these
+  people in person. Do not set it to null.
+  Apply the same four-field format.
 
 ADDITION 6 — STREET-LEVEL LANGUAGE RULES
 
