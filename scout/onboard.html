@@ -243,6 +243,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <p class="section-desc">Tell Scout the fundamentals. Be specific — vague answers produce generic plans.</p>
     <div class="section-divider"></div>
     <div class="field-group">
+      <label class="field-label" for="customerType">Who Are Your Customers</label>
+      <select class="field-select" id="customerType" required>
+        <option value="" disabled selected>Select who you sell to</option>
+        <option value="consumers">Individual people who come to me</option>
+        <option value="businesses">Other companies and businesses</option>
+      </select>
+    </div>
+    <div class="field-group">
       <label class="field-label" for="businessTypeInput">What Kind of Business</label>
       <div class="bt-wrap" id="btWrap">
         <input class="field-input" type="text" id="businessTypeInput"
@@ -336,6 +344,25 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div class="field-group">
       <label class="field-label" for="bestCustomers">Describe Your 3 Best Existing Customers</label>
       <textarea class="field-textarea" id="bestCustomers" rows="4" placeholder="e.g. Government teacher, 45 years old, lives in Civil Lines colony, orders weekly, refers neighbours" required></textarea>
+    </div>
+    <!-- B2B FIELDS — shown only when customerType is "businesses" -->
+    <div id="b2bFieldsGroup" style="display:none">
+      <div class="field-group">
+        <label class="field-label" for="b2bIndustries">Which Industries You Sell To</label>
+        <input class="field-input" type="text" id="b2bIndustries" placeholder="e.g. IT companies, manufacturing units, hospitals">
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="b2bDecisionMaker">Who Signs Off On Buying</label>
+        <input class="field-input" type="text" id="b2bDecisionMaker" placeholder="e.g. HR head, plant manager, founder">
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="b2bSalesCycle">How Long From First Contact To Payment</label>
+        <input class="field-input" type="text" id="b2bSalesCycle" placeholder="e.g. two weeks, three months">
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="b2bCompanySize">How Big Are The Companies You Sell To</label>
+        <input class="field-input" type="text" id="b2bCompanySize" placeholder="e.g. 20-100 employees">
+      </div>
     </div>
     <div class="form-nav">
       <button class="btn-back" onclick="goBack(2)">← Back</button>
@@ -766,6 +793,44 @@ function applyRevenueModelVisibility() {
   if (!show && pf) pf.classList.remove('error');
 }
 
+/* Show/hide B2B fields and reword landmark labels based on customerType value */
+function applyCustomerTypeVisibility() {
+  var sel = document.getElementById('customerType');
+  var grp = document.getElementById('b2bFieldsGroup');
+  if (!sel || !grp) return;
+  var isB2B = sel.value === 'businesses';
+  grp.style.display = isB2B ? 'block' : 'none';
+  /* Clear error state on hidden B2B fields so they do not block validation */
+  if (!isB2B) {
+    ['b2bIndustries','b2bDecisionMaker','b2bSalesCycle','b2bCompanySize'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.remove('error');
+    });
+  }
+  /* Reword landmark labels: B2B businesses identify customer business areas, not physical landmarks */
+  var lm1Label = document.querySelector('label[for="landmark1"]');
+  var lm2Label = document.querySelector('label[for="landmark2"]');
+  var lm3Label = document.querySelector('label[for="landmark3"]');
+  var lm1Input = document.getElementById('landmark1');
+  var lm2Input = document.getElementById('landmark2');
+  var lm3Input = document.getElementById('landmark3');
+  if (isB2B) {
+    if (lm1Label) lm1Label.textContent = 'Which Business Areas Or Tech Parks Are Your Customers In';
+    if (lm2Label) lm2Label.innerHTML = 'Customer Area 2 <span class="optional">optional</span>';
+    if (lm3Label) lm3Label.innerHTML = 'Customer Area 3 <span class="optional">optional</span>';
+    if (lm1Input) lm1Input.placeholder = 'e.g. MIDC industrial area, Cyber City Gurugram, Whitefield tech park';
+    if (lm2Input) lm2Input.placeholder = 'e.g. Andheri East commercial district';
+    if (lm3Input) lm3Input.placeholder = 'e.g. Noida Sector 62 office cluster';
+  } else {
+    if (lm1Label) lm1Label.textContent = 'Landmark 1';
+    if (lm2Label) lm2Label.innerHTML = 'Landmark 2 <span class="optional">optional</span>';
+    if (lm3Label) lm3Label.innerHTML = 'Landmark 3 <span class="optional">optional</span>';
+    if (lm1Input) lm1Input.placeholder = 'e.g. Near DM office, opposite Central Bank branch';
+    if (lm2Input) lm2Input.placeholder = 'e.g. 200m from Nexus Mall main gate';
+    if (lm3Input) lm3Input.placeholder = 'e.g. Same lane as Axis Bank ATM';
+  }
+}
+
 window.addEventListener('DOMContentLoaded', function() {
   var token = localStorage.getItem('g7_session_token');
   if (!token) { window.location.href = '../login.html?product=scout'; return; }
@@ -778,6 +843,8 @@ window.addEventListener('DOMContentLoaded', function() {
   initBusinessTypeWidget();
   var _revSel = document.getElementById('revenueModel');
   if (_revSel) _revSel.addEventListener('change', applyRevenueModelVisibility);
+  var _ctSel = document.getElementById('customerType');
+  if (_ctSel) _ctSel.addEventListener('change', applyCustomerTypeVisibility);
   initQualityScoring();
   initQualityPanel();
   initDraftAutoSave();
@@ -845,13 +912,20 @@ function validateSection(n) {
       if (!_btHid.value) { _btInp.classList.add('error'); valid = false; }
       else _btInp.classList.remove('error');
     }
-    ['businessName','businessPhone','whatYouSell','location','monthlyRevenue','revenueModel',
+    ['customerType','businessName','businessPhone','whatYouSell','location','monthlyRevenue','revenueModel',
      'avgTransaction','currentCustomers','targetCustomers'].forEach(check);
     /* purchaseFrequency is required only when its group is visible */
     var _pfGrp = document.getElementById('purchaseFrequencyGroup');
     if (_pfGrp && _pfGrp.style.display !== 'none') check('purchaseFrequency');
   }
-  if (n === 2) ['areaType','landmark1','bestCustomers'].forEach(check);
+  if (n === 2) {
+    ['areaType','landmark1','bestCustomers'].forEach(check);
+    /* B2B fields are required only when their group is visible */
+    var _b2bGrp = document.getElementById('b2bFieldsGroup');
+    if (_b2bGrp && _b2bGrp.style.display !== 'none') {
+      ['b2bIndustries','b2bDecisionMaker','b2bSalesCycle','b2bCompanySize'].forEach(check);
+    }
+  }
   if (n === 5) {
     if (!document.querySelector('input[name="language"]:checked')) {
       alert('Please select a language for customer outreach.'); valid = false;
@@ -876,6 +950,7 @@ function collectFormData() {
     language = rn ? 'Regional — ' + rn : 'Regional language (unspecified)';
   }
   return {
+    customerType:document.getElementById('customerType').value,
     businessType:document.getElementById('businessType').value,
     businessTypeInput:document.getElementById('businessTypeInput').value.trim(),
     revenueModel:document.getElementById('revenueModel').value,
@@ -893,6 +968,10 @@ function collectFormData() {
     landmark2:document.getElementById('landmark2').value.trim(),
     landmark3:document.getElementById('landmark3').value.trim(),
     bestCustomers:document.getElementById('bestCustomers').value.trim(),
+    b2bIndustries:   document.getElementById('b2bIndustries').value.trim(),
+    b2bDecisionMaker:document.getElementById('b2bDecisionMaker').value.trim(),
+    b2bSalesCycle:   document.getElementById('b2bSalesCycle').value.trim(),
+    b2bCompanySize:  document.getElementById('b2bCompanySize').value.trim(),
     comp1name:document.getElementById('comp1name').value.trim(),
     comp1better:document.getElementById('comp1better').value.trim(),
     comp1worse:document.getElementById('comp1worse').value.trim(),
@@ -957,6 +1036,11 @@ function buildScoutUserMessage(d) {
     '  Target (12 months): ' + d.targetCustomers,
     '',
     'BEST EXISTING CUSTOMERS:', d.bestCustomers,
+    d.customerType ? 'CUSTOMER TYPE: ' + (d.customerType === 'businesses' ? 'B2B — sells to other businesses' : 'B2C — sells to individual consumers') : '',
+    d.b2bIndustries    ? 'B2B TARGET INDUSTRIES: ' + d.b2bIndustries    : '',
+    d.b2bDecisionMaker ? 'B2B DECISION MAKER: '   + d.b2bDecisionMaker : '',
+    d.b2bSalesCycle    ? 'B2B SALES CYCLE: '      + d.b2bSalesCycle    : '',
+    d.b2bCompanySize   ? 'B2B COMPANY SIZE: '     + d.b2bCompanySize   : '',
     '',
     '═══════════════════════════════════════',
     'COMPETITIVE LANDSCAPE',
@@ -1212,6 +1296,7 @@ function saveDraft() {
     var draft = {
       section:          currentSection,
       savedAt:          new Date().toISOString(),
+      customerType:     document.getElementById('customerType').value,
       businessType:     document.getElementById('businessType').value,
       businessTypeInput:document.getElementById('businessTypeInput').value,
       revenueModel:     document.getElementById('revenueModel').value,
@@ -1229,6 +1314,10 @@ function saveDraft() {
       landmark2:        document.getElementById('landmark2').value,
       landmark3:        document.getElementById('landmark3').value,
       bestCustomers:    document.getElementById('bestCustomers').value,
+      b2bIndustries:    document.getElementById('b2bIndustries').value,
+      b2bDecisionMaker: document.getElementById('b2bDecisionMaker').value,
+      b2bSalesCycle:    document.getElementById('b2bSalesCycle').value,
+      b2bCompanySize:   document.getElementById('b2bCompanySize').value,
       comp1name:        document.getElementById('comp1name').value,
       comp1better:      document.getElementById('comp1better').value,
       comp1worse:       document.getElementById('comp1worse').value,
@@ -1275,7 +1364,8 @@ function restoreDraft(draft) {
     'businessTypeInput','purchaseFrequency',
     'businessName','businessPhone','whatYouSell','location','monthlyRevenue','avgTransaction',
     'currentCustomers','targetCustomers','landmark1','landmark2','landmark3',
-    'bestCustomers','comp1name','comp1better','comp1worse','comp2name',
+    'bestCustomers','b2bIndustries','b2bDecisionMaker','b2bSalesCycle','b2bCompanySize',
+    'comp1name','comp1better','comp1worse','comp2name',
     'comp2better','comp2worse','largeChains','whatWorked','whatFailed',
     'bestMonths','worstMonths','seasonalEvents','triedSoFar','specificFocus'
   ];
@@ -1284,15 +1374,16 @@ function restoreDraft(draft) {
     if (el && draft[id] !== undefined) el.value = draft[id];
   });
   /* Select fields */
-  ['areaType','whatsappListSize','howFoundYou','revenueModel'].forEach(function(id) {
+  ['areaType','whatsappListSize','howFoundYou','revenueModel','customerType'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el && draft[id]) el.value = draft[id];
   });
   /* Restore businessType hidden value (visible text already restored via textFields above) */
   var _btHid = document.getElementById('businessType');
   if (_btHid && draft.businessType) _btHid.value = draft.businessType;
-  /* Re-apply conditional visibility after revenueModel is restored */
+  /* Re-apply conditional visibility after selects are restored */
   applyRevenueModelVisibility();
+  applyCustomerTypeVisibility();
   /* Checkboxes */
   var saved = Array.isArray(draft.channels) ? draft.channels : [];
   document.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
@@ -1364,16 +1455,18 @@ function checkForDraft() {
 
 /* ─── QUALITY SCORING ─── */
 
-/* The 8 fields being scored and their display names */
+/* The scored fields and their display names.
+   b2bDecisionMaker is conditional — only counted for B2B businesses (see calcTotalQuality). */
 var QUALITY_FIELDS = {
-  businessPhone:  'WhatsApp Number',
-  whatYouSell:    'What You Sell',
-  location:       'Location',
-  bestCustomers:  'Best Existing Customers',
-  landmark1:      'Landmark 1',
-  comp1worse:     'What Makes You Different',
-  monthlyRevenue: 'Monthly Revenue',
-  avgTransaction: 'Average Transaction Value'
+  businessPhone:    'WhatsApp Number',
+  whatYouSell:      'What You Sell',
+  location:         'Location',
+  bestCustomers:    'Best Existing Customers',
+  landmark1:        'Landmark 1',
+  comp1worse:       'What Makes You Different',
+  monthlyRevenue:   'Monthly Revenue',
+  avgTransaction:   'Average Transaction Value',
+  b2bDecisionMaker: 'Decision Maker (B2B)'
 };
 
 /* Section each scored field lives in — used by "Improve my inputs" to navigate */
@@ -1381,7 +1474,8 @@ var QUALITY_FIELD_SECTION = {
   businessPhone: 1, whatYouSell: 1, location: 1,
   bestCustomers: 2, landmark1: 2,
   comp1worse: 3,
-  monthlyRevenue: 1, avgTransaction: 1
+  monthlyRevenue: 1, avgTransaction: 1,
+  b2bDecisionMaker: 2
 };
 
 /* Score a single field 0-2:
@@ -1453,6 +1547,12 @@ function scoreFieldQuality(fieldId, value) {
     return 1;
   }
 
+  if (fieldId === 'b2bDecisionMaker') {
+    /* Score 0 if empty, 2 if a role is named — any non-empty answer names a role */
+    if (!v) return 0;
+    return 2;
+  }
+
   return 0;
 }
 
@@ -1491,10 +1591,11 @@ var FIELD_QUALITY_MSGS = {
                     1: 'Add a direction or distance — opposite, 200m from, same lane as' },
   comp1worse:     { 0: 'What do you do that they don\'t? Be concrete',
                     1: 'Add one more specific difference' },
-  monthlyRevenue: { 0: 'Enter a number — Scout uses this to calculate what growth is realistic',
-                    1: 'Add the period — per month, per week' },
-  avgTransaction: { 0: 'Enter a number — what does one customer typically spend?',
-                    1: 'Add the unit — per visit, per month, per order' }
+  monthlyRevenue:   { 0: 'Enter a number — Scout uses this to calculate what growth is realistic',
+                      1: 'Add the period — per month, per week' },
+  avgTransaction:   { 0: 'Enter a number — what does one customer typically spend?',
+                      1: 'Add the unit — per visit, per month, per order' },
+  b2bDecisionMaker: { 0: 'Name a role — e.g. HR manager, plant head, founder. Scout uses this to find the right contact.' }
 };
 
 /* Render the coloured dot + message for a given field */
@@ -1522,21 +1623,27 @@ function renderQualityIndicator(fieldId, score) {
 }
 
 /* Calculate total quality score (normalised to 0-10) and list of weak field names.
-   Raw sum is over all QUALITY_FIELDS (7 × max 2 = 14). Normalising keeps the
-   gate thresholds (≤4 modal, ≤7 tip banner) semantically stable regardless of
-   how many fields are in QUALITY_FIELDS. */
+   b2bDecisionMaker is only counted when customerType is "businesses" — a B2C business
+   correctly leaves it empty so it must not drag down their score.
+   scoredCount tracks how many fields were actually evaluated so the denominator
+   adjusts automatically: B2C scores over 8 fields (max 16), B2B over 9 (max 18). */
 function calcTotalQuality() {
   var rawTotal = 0;
+  var scoredCount = 0;
   var weakFields = [];
+  var isB2B = (document.getElementById('customerType') || {}).value === 'businesses';
   var keys = Object.keys(QUALITY_FIELDS);
   keys.forEach(function(fieldId) {
+    /* b2bDecisionMaker only contributes for B2B businesses */
+    if (fieldId === 'b2bDecisionMaker' && !isB2B) return;
+    scoredCount++;
     var el = document.getElementById(fieldId);
     var val = el ? el.value : '';
     var score = scoreFieldQuality(fieldId, val);
     rawTotal += score;
     if (score <= 1) weakFields.push(QUALITY_FIELDS[fieldId]);
   });
-  var maxRaw = keys.length * 2;
+  var maxRaw = scoredCount * 2;
   var total = maxRaw > 0 ? Math.round(rawTotal / maxRaw * 10) : 0;
   return { total: total, weakFields: weakFields };
 }
