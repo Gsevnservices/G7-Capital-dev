@@ -3602,10 +3602,14 @@ function renderLeadsTab(data) {
   try { renderLeadsSearchBlock(data); } catch(_esb) { console.error('renderLeadsSearchBlock threw:', _esb); }
   try { renderLeadsListOnly(data);    } catch(_elb) { console.error('renderLeadsListOnly threw:', _elb); }
 
-  /* Single delegated listener on #leadsContent — covers both sub-blocks.
-     Removed and re-attached each render so it is never duplicated. */
-  if (_leadsClickHandler) container.removeEventListener('click', _leadsClickHandler);
-  _leadsClickHandler = function(e) {
+  /* Attach delegated listener once — flag on the DOM element prevents duplication.
+     Same pattern as attachCFListeners / My Plan tab. The listener stays alive through
+     all subsequent re-renders of leadsSearchBlock and leadsListBlock because those
+     replace the innerHTML of CHILD elements; the parent leadsContent is never replaced. */
+  if (container._leadsListenerAttached) return;
+  container._leadsListenerAttached = true;
+
+  container.addEventListener('click', function(e) {
     var week = parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '1', 10);
 
     /* ── CF SEARCH BUTTON (.cf-btn inside leadsSearchBlock) ── */
@@ -3622,11 +3626,11 @@ function renderLeadsTab(data) {
     var cfAddBtn = e.target.closest('.cf-add-btn');
     if (cfAddBtn && !cfAddBtn.disabled) {
       var aIdx   = cfAddBtn.getAttribute('data-cf-idx')    || '';
-      var aPlace = parseInt(cfAddBtn.getAttribute('data-cf-place'),   10);
+      var aPlace = parseInt(cfAddBtn.getAttribute('data-cf-place'), 10);
       var aIcp   = cfAddBtn.getAttribute('data-cf-icpname') || '';
       cfAddToList(aIdx, aPlace, aIcp, cfAddBtn);
-      /* Re-render the leads list so the new entry appears immediately.
-         The search block (results) is not touched — the "Added ✓" button stays in place. */
+      /* Re-render leads list so new entry appears immediately.
+         leadsSearchBlock (search results + "Added ✓" state) is untouched. */
       try { renderLeadsListOnly(_leadsData); } catch(_re) { console.error('leads list re-render failed:', _re); }
       return;
     }
@@ -3690,8 +3694,7 @@ function renderLeadsTab(data) {
         } catch (_we) { console.error('leads WA promote failed:', _we); }
       }
     }
-  };
-  container.addEventListener('click', _leadsClickHandler);
+  });
 }
 
 /* ═══════════════════════════════════════════
@@ -3909,7 +3912,7 @@ function cfAddToList(icpIdx, placeIdx, icpName, btn) {
 
 /* Pipeline capture state — holds pending send until modal is confirmed */
 var _pipePending = null;
-var _leadsClickHandler = null; /* module-level ref so we can removeEventListener before re-attaching */
+/* _leadsClickHandler removed — Leads tab now uses the same flag-guard pattern as attachCFListeners */
 
 /* Opens the capture modal, remembering what to send once confirmed */
 function pipeAsk(text, icp) {
