@@ -1193,10 +1193,13 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
   </div>
 
-  <!-- PANEL 5: LEADS — pipeline people (all open statuses) with messages and closing strategies -->
+  <!-- PANEL 5: LEADS — search block + pipeline list -->
   <div class="tab-panel" id="panel5">
     <div class="print-section-header">SECTION 6: LEADS</div>
-    <div id="leadsContent"></div>
+    <div id="leadsContent">
+      <div id="leadsSearchBlock"></div>
+      <div id="leadsListBlock"></div>
+    </div>
   </div>
 
 </div><!-- /tab-panels -->
@@ -1233,6 +1236,8 @@ var currentTab       = 0;
 var icpNames         = [];     // extracted ICP names for pipeline form
 var referralRowCount = 3;      // tracks how many referral input rows are showing
 var _cfPlaces        = {};     // Customer Finder: place data keyed by '{icpIdx}_{placeIdx}'
+                               // My Plan uses integer prefix (e.g. '0_0'); Leads uses 'l' prefix (e.g. 'l0_0')
+var _leadsData       = null;   // last parsed data object passed to renderLeadsTab — used for list re-renders after CF add
 
 /* ═══════════════════════════════════════════
    PAGE INIT
@@ -3365,67 +3370,128 @@ function switchTab(n) {
 
 /* ═══════════════════════════════════════════
    LEADS TAB — PANEL 5
-   Reads the pipeline and renders open leads
-   with Scout's message and closing strategy.
+   Two sub-sections inside #leadsContent:
+     #leadsSearchBlock — Find New Businesses (rendered once; stays put when list refreshes)
+     #leadsListBlock   — Pipeline leads list (re-rendered after a CF add)
+
+   _cfPlaces key prefix: 'l{idx}' for Leads (e.g. 'l0_0').
+   My Plan uses bare integers (e.g. '0_0'). No collision.
 ═══════════════════════════════════════════ */
-function renderLeadsTab(data) {
-  var el = document.getElementById('leadsContent');
+
+/* Returns a shortened ICP name for a Leads search button label.
+   Takes up to 3 words; stops before exceeding 22 chars if possible.
+   Examples: "Startup employees relocating to Koramangala" → "Startup employees"
+             "Existing Customers" → "Existing Customers" */
+function _leadsIcpShortName(name) {
+  var words = (name || '').trim().split(/\s+/);
+  var result = '';
+  for (var w = 0; w < words.length && w < 3; w++) {
+    var candidate = result ? result + ' ' + words[w] : words[w];
+    if (candidate.length > 22 && result) break;
+    result = candidate;
+  }
+  return result || (name || '').slice(0, 22);
+}
+
+/* Render the search block (Find New Businesses) into #leadsSearchBlock.
+   One button per ICP that has a non-null searchQuery.
+   icpIdx for Leads uses 'l{n}' prefix to avoid key collision with My Plan ('0', '1', '2'). */
+function renderLeadsSearchBlock(data) {
+  var el = document.getElementById('leadsSearchBlock');
   if (!el) return;
 
-  /* Build ICP → primary message map (same logic as scout/index.html) */
-  var _norm = function(s) { return (s || '').trim().toLowerCase(); };
-  var _msgMap   = {};
-  var _stratMap = {};
+  var icps = (data && data.tab1 && Array.isArray(data.tab1.icps)) ? data.tab1.icps : [];
+  var searchableICPs = icps.filter(function(icp) {
+    return icp.searchQuery && typeof icp.searchQuery === 'string' && icp.searchQuery !== 'null';
+  });
 
+  var html = '<div style="margin-bottom:28px;padding-bottom:24px;border-bottom:1px solid var(--border2)">';
+  html += '<div style="font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:14px">Find New Businesses</div>';
+
+  if (searchableICPs.length === 0) {
+    html += '<div style="font-size:12px;color:var(--grey2);line-height:1.7">Scout could not identify searchable business types for this plan — your customer groups are individuals rather than businesses on a map. Use the WhatsApp messages in My Plan to reach them directly.</div>';
+  } else {
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:4px">';
+    searchableICPs.forEach(function(icp, i) {
+      /* Find original index in full icps array for stable icpIdx */
+      var origIdx = icps.indexOf(icp);
+      var icpIdx  = 'l' + origIdx;
+      var shortNm = _leadsIcpShortName(icp.name);
+      html += '<button class="cf-btn" id="cf-btn-' + escAttr(icpIdx) + '"';
+      html += ' data-cf-query="'  + escAttr(icp.searchQuery) + '"';
+      html += ' data-cf-icp="'    + escAttr(icp.name || '')  + '"';
+      html += ' data-cf-idx="'    + escAttr(icpIdx)           + '">';
+      html += 'Find ' + escHtml(shortNm) + ' \u2192';
+      html += '</button>';
+    });
+    html += '</div>';
+    /* One results container per ICP — searchPlaces targets 'cf-results-{icpIdx}' */
+    searchableICPs.forEach(function(icp) {
+      var origIdx = icps.indexOf(icp);
+      html += '<div id="cf-results-l' + origIdx + '"></div>';
+    });
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+/* Render only the leads list into #leadsListBlock.
+   Called by renderLeadsTab on initial render, and by the delegated listener after a CF add. */
+function renderLeadsListOnly(data) {
+  var el = document.getElementById('leadsListBlock');
+  if (!el) return;
+
+  var _norm = function(s) { return (s || '').trim().toLowerCase(); };
+
+  /* ICP → primary message map */
+  var _msgMap = {};
   try {
     var _msgs = (data && data.tab2 && Array.isArray(data.tab2.messages))
       ? data.tab2.messages : [];
     _msgs.forEach(function(m) {
       var _k = _norm(m.icp);
       if (!_k) return;
-      /* Prefer primary; keep first seen otherwise */
       if (!_msgMap[_k] || m.type === 'primary') _msgMap[_k] = m.versionA || m.text || '';
     });
-  } catch (_me) { console.error('renderLeadsTab: message map failed:', _me); }
+  } catch (_me) { console.error('renderLeadsListOnly: message map failed:', _me); }
 
-  /* Build ICP → closingStrategy map */
+  /* ICP → closingStrategy map */
+  var _stratMap = {};
   try {
-    var _icps = (data && data.tab1 && Array.isArray(data.tab1.icps))
-      ? data.tab1.icps : [];
-    _icps.forEach(function(icp) {
+    var _sICPs = (data && data.tab1 && Array.isArray(data.tab1.icps)) ? data.tab1.icps : [];
+    _sICPs.forEach(function(icp) {
       var _k = _norm(icp.name);
       if (!_k || !icp.closingStrategy || typeof icp.closingStrategy !== 'object') return;
       _stratMap[_k] = icp.closingStrategy;
     });
-  } catch (_se) { console.error('renderLeadsTab: strategy map failed:', _se); }
+  } catch (_se) { console.error('renderLeadsListOnly: strategy map failed:', _se); }
 
-  /* Load and filter pipeline — exclude closed statuses */
+  /* Pipeline — exclude closed statuses */
   var people = [];
   try {
     var _all = pipelineAll();
     people = _all.filter(function(p) {
       return p.status !== 'joined' && p.status !== 'not_interested';
     });
-    /* Order: found (new leads) → contacted → replied → trial_booked → gone_quiet */
     var _ord = { found: 0, contacted: 1, replied: 2, trial_booked: 3, gone_quiet: 4 };
     people.sort(function(a, b) {
       return ((_ord[a.status] !== undefined) ? _ord[a.status] : 9) -
              ((_ord[b.status] !== undefined) ? _ord[b.status] : 9);
     });
   } catch (_pe) {
-    console.error('renderLeadsTab: pipeline read failed:', _pe);
-    el.innerHTML = '<div style="padding:32px;font-size:12px;color:var(--grey2)">Leads could not be loaded. Refresh the page to try again.</div>';
+    console.error('renderLeadsListOnly: pipeline read failed:', _pe);
+    el.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--grey2)">Leads could not be loaded. Refresh the page to try again.</div>';
     return;
   }
 
-  /* Empty state */
   if (people.length === 0) {
     el.innerHTML =
-      '<div style="padding:32px 0">' +
-      '<div style="font-size:13px;color:var(--grey1);line-height:1.8;margin-bottom:20px">' +
-      'No leads yet. Open <strong style="color:var(--white2)">My Plan</strong> and use the ' +
-      '<strong style="color:var(--white2)">Find Businesses</strong> button on each customer group card to ' +
-      'discover local businesses and add them here.' +
+      '<div style="padding:20px 0">' +
+      '<div style="font-size:13px;color:var(--grey1);line-height:1.8">' +
+      'No leads yet. Use <strong style="color:var(--white2)">Find New Businesses</strong> above, or open ' +
+      '<strong style="color:var(--white2)">My Plan</strong> and use the ' +
+      '<strong style="color:var(--white2)">Find Businesses</strong> button on each customer group card.' +
       '</div></div>';
     return;
   }
@@ -3438,8 +3504,7 @@ function renderLeadsTab(data) {
     gone_quiet:   'Gone Quiet'
   };
 
-  var _week = parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '1', 10);
-  var html  = '';
+  var html = '';
 
   people.forEach(function(p, idx) {
     var icpKey   = _norm(p.icp);
@@ -3453,7 +3518,6 @@ function renderLeadsTab(data) {
             ' data-person-id="'     + escAttr(p.id     || '') + '"' +
             ' data-person-status="' + escAttr(p.status || '') + '">';
 
-    /* ── Name + status badge ── */
     html += '<div class="leads-person-row">';
     html += '<div class="leads-person-name">' + escHtml(p.name || '') + '</div>';
     if (sLbl) {
@@ -3462,7 +3526,6 @@ function renderLeadsTab(data) {
     }
     html += '</div>';
 
-    /* ── Phone + address ── */
     if (p.phone || p.address) {
       html += '<div class="leads-person-meta">';
       if (p.phone)  html += escHtml(p.phone);
@@ -3471,7 +3534,6 @@ function renderLeadsTab(data) {
       html += '</div>';
     }
 
-    /* ── No ICP: manually added contact ── */
     if (!p.icp) {
       html += '<div style="font-size:11px;color:var(--grey2);margin:4px 0 6px;font-family:\'Tenor Sans\',sans-serif;letter-spacing:.04em">' +
               'Added manually — run an analysis to get a message and closing strategy for this contact.</div>';
@@ -3480,7 +3542,6 @@ function renderLeadsTab(data) {
       return;
     }
 
-    /* ── ICP found but no message or strategy yet (text path or pre-schema analysis) ── */
     if (!msgText && !strategy) {
       html += '<div style="font-size:11px;color:var(--grey2);margin:4px 0 6px;font-family:\'Tenor Sans\',sans-serif;letter-spacing:.04em">' +
               'Message and closing strategy will appear after your next analysis.</div>';
@@ -3489,7 +3550,6 @@ function renderLeadsTab(data) {
       return;
     }
 
-    /* ── Message card ── */
     if (msgText) {
       var waUrl = phone
         ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msgText)
@@ -3499,8 +3559,6 @@ function renderLeadsTab(data) {
       html += '<div><div class="message-card-label">' + escHtml(p.icp) + ' — message</div></div>';
       html += '<button class="copy-btn" data-lead-copy="' + cardId + '">Copy</button>';
       if (waUrl) {
-        /* Direct wa.me link — no modal needed, phone already known.
-           data-lead-wa-id triggers 'found' → 'contacted' promotion in the delegated listener. */
         html += '<a class="copy-btn" href="' + escAttr(waUrl) + '" target="_blank" rel="noopener"' +
                 ' data-lead-wa-id="' + escAttr(p.id || '') + '"' +
                 ' style="text-decoration:none">Send on WhatsApp</a>';
@@ -3510,7 +3568,6 @@ function renderLeadsTab(data) {
       html += '</div>';
     }
 
-    /* ── Closing strategy ── */
     if (strategy) {
       html += '<div class="leads-closing">';
       html += '<div class="leads-closing-title">How to close this one</div>';
@@ -3524,7 +3581,6 @@ function renderLeadsTab(data) {
         html += '<div class="leads-closing-row"><span class="leads-closing-label">What closes it</span><span class="leads-closing-body">' + escHtml(strategy.whatClosesIt) + '</span></div>';
       html += '</div>';
     } else if (msgText) {
-      /* Message present but strategy absent — older analysis without closingStrategy */
       html += '<div style="font-size:11px;color:var(--grey2);margin:10px 0 4px;font-family:\'Tenor Sans\',sans-serif;letter-spacing:.04em">' +
               'Closing strategy will appear after your next analysis.</div>';
     }
@@ -3534,11 +3590,48 @@ function renderLeadsTab(data) {
   });
 
   el.innerHTML = html;
+}
 
-  /* Delegated listener — re-attach fresh each render */
-  if (_leadsClickHandler) el.removeEventListener('click', _leadsClickHandler);
+/* Main entry point — renders both blocks and attaches one delegated listener to #leadsContent. */
+function renderLeadsTab(data) {
+  _leadsData = data;
+
+  var container = document.getElementById('leadsContent');
+  if (!container) return;
+
+  try { renderLeadsSearchBlock(data); } catch(_esb) { console.error('renderLeadsSearchBlock threw:', _esb); }
+  try { renderLeadsListOnly(data);    } catch(_elb) { console.error('renderLeadsListOnly threw:', _elb); }
+
+  /* Single delegated listener on #leadsContent — covers both sub-blocks.
+     Removed and re-attached each render so it is never duplicated. */
+  if (_leadsClickHandler) container.removeEventListener('click', _leadsClickHandler);
   _leadsClickHandler = function(e) {
-    /* COPY button */
+    var week = parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '1', 10);
+
+    /* ── CF SEARCH BUTTON (.cf-btn inside leadsSearchBlock) ── */
+    var cfSearchBtn = e.target.closest('.cf-btn');
+    if (cfSearchBtn && !cfSearchBtn.disabled) {
+      var query   = cfSearchBtn.getAttribute('data-cf-query') || '';
+      var icpName = cfSearchBtn.getAttribute('data-cf-icp')   || '';
+      var icpIdx  = cfSearchBtn.getAttribute('data-cf-idx')   || '';
+      if (query) searchPlaces(query, icpName, icpIdx);
+      return;
+    }
+
+    /* ── CF ADD-TO-LIST BUTTON (.cf-add-btn inside leadsSearchBlock) ── */
+    var cfAddBtn = e.target.closest('.cf-add-btn');
+    if (cfAddBtn && !cfAddBtn.disabled) {
+      var aIdx   = cfAddBtn.getAttribute('data-cf-idx')    || '';
+      var aPlace = parseInt(cfAddBtn.getAttribute('data-cf-place'),   10);
+      var aIcp   = cfAddBtn.getAttribute('data-cf-icpname') || '';
+      cfAddToList(aIdx, aPlace, aIcp, cfAddBtn);
+      /* Re-render the leads list so the new entry appears immediately.
+         The search block (results) is not touched — the "Added ✓" button stays in place. */
+      try { renderLeadsListOnly(_leadsData); } catch(_re) { console.error('leads list re-render failed:', _re); }
+      return;
+    }
+
+    /* ── COPY button (message card in the leads list) ── */
     var copyBtn = e.target.closest('[data-lead-copy]');
     if (copyBtn) {
       var cId   = copyBtn.getAttribute('data-lead-copy');
@@ -3575,19 +3668,19 @@ function renderLeadsTab(data) {
       return;
     }
 
-    /* WHATSAPP link — promote 'found' → 'contacted' after tap */
+    /* ── WHATSAPP link — promote 'found' → 'contacted' after tap ── */
     var waEl = e.target.closest('[data-lead-wa-id]');
     if (waEl) {
       var pid = waEl.getAttribute('data-lead-wa-id');
       if (pid) {
         try {
-          var card = waEl.closest('.leads-person-card');
-          var curStatus = card ? card.getAttribute('data-person-status') : '';
+          var pCard     = waEl.closest('.leads-person-card');
+          var curStatus = pCard ? pCard.getAttribute('data-person-status') : '';
           if (curStatus === 'found') {
-            pipelineSetStatus(pid, 'contacted', _week);
-            if (card) {
-              card.setAttribute('data-person-status', 'contacted');
-              var lbl = card.querySelector('.leads-status-label');
+            pipelineSetStatus(pid, 'contacted', week);
+            if (pCard) {
+              pCard.setAttribute('data-person-status', 'contacted');
+              var lbl = pCard.querySelector('.leads-status-label');
               if (lbl) {
                 lbl.textContent = 'Contacted';
                 lbl.className   = 'leads-status-label leads-status-contacted';
@@ -3598,7 +3691,7 @@ function renderLeadsTab(data) {
       }
     }
   };
-  el.addEventListener('click', _leadsClickHandler);
+  container.addEventListener('click', _leadsClickHandler);
 }
 
 /* ═══════════════════════════════════════════
