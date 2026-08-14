@@ -1553,7 +1553,7 @@ function parseAndRender(rawOutput, biz) {
        cannot prevent any other section from rendering or leave a spinner showing.
        The finally block below guarantees every tab panel clears its spinner. ── */
     try { renderTab1JSON(data.tab1, data); } catch(_e1) {
-      console.error('renderTab1JSON threw:', _e1);
+      console.error('renderTab1JSON threw:', _e1.message, _e1.stack);
       var _el1Err = document.getElementById('tab1Content');
       if (_el1Err) _el1Err.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Your plan could not be rendered for this section. Re-run the analysis to fix this.</div>';
     }
@@ -3424,7 +3424,7 @@ function renderLeadsTab(data) {
       '<div style="padding:32px 0">' +
       '<div style="font-size:13px;color:var(--grey1);line-height:1.8;margin-bottom:20px">' +
       'No leads yet. Open <strong style="color:var(--white2)">My Plan</strong> and use the ' +
-      '<strong style="color:var(--white2)">Find Businesses</strong> button on each ICP card to ' +
+      '<strong style="color:var(--white2)">Find Businesses</strong> button on each customer group card to ' +
       'discover local businesses and add them here.' +
       '</div></div>';
     return;
@@ -4165,6 +4165,10 @@ function escHtml(str) {
    Do NOT use on message bodies (those go verbatim to customers). */
 function plainLang(str) {
   if (!str) return str;
+  /* Guard: coerce to string so objects (e.g. nested schema additions) never throw
+     "str.replace is not a function". escHtml already does String() internally;
+     plainLang does not, making it the only throw-path for non-string truthy inputs. */
+  str = String(str);
   return str
     .replace(/\bICP\s*1\b/gi, 'Group 1')
     .replace(/\bICP\s*2\b/gi, 'Group 2')
