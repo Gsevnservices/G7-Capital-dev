@@ -1215,75 +1215,82 @@ export default {
     // Returns: { links: { bio, google, status }, clicks: { bio, google, status } }
     // =========================================================================
     if (request.method === 'POST' && path === '/inbound/create') {
-      const session = await validateSession(request, env);
-      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      // Outer try/catch ensures every code path — including unexpected KV throws —
+      // returns a jsonResponse with CORS headers rather than a Cloudflare platform
+      // error page that has no CORS headers and blocks the browser fetch.
+      try {
+        const session = await validateSession(request, env);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
 
-      let body;
-      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid JSON body' }, 400); }
+        let body;
+        try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid JSON body' }, 400); }
 
-      const { waNumber, message } = body;
-      if (!waNumber || !message) {
-        return jsonResponse({ error: 'waNumber and message are required' }, 400);
-      }
-
-      const firmCode = session.firmCode;
-      const linksKey = 'scout:inbound:' + firmCode + ':links';
-      const now      = new Date().toISOString();
-      const sources  = ['bio', 'google', 'status'];
-
-      // ── Idempotent path: firm already has links ──────────────────────────────
-      const existing = await env.G7_KV.get(linksKey, 'json');
-      if (existing) {
-        // Update waNumber + message on each existing link record (in parallel)
-        await Promise.all(sources.map(source => {
-          const code = existing[source];
-          if (!code) return;
-          return env.G7_KV.put(
-            'scout:inbound:link:' + code,
-            JSON.stringify({ firmCode, source, waNumber, message, createdAt: now })
-          );
-        }));
-
-        // Fetch current click counts (in parallel)
-        const clicks = {};
-        await Promise.all(sources.map(async source => {
-          const raw = await env.G7_KV.get('scout:inbound:' + firmCode + ':' + source + ':clicks');
-          clicks[source] = raw ? parseInt(raw, 10) : 0;
-        }));
-
-        return jsonResponse({ links: existing, clicks });
-      }
-
-      // ── New firm: generate 3 codes, one per source ───────────────────────────
-      const codes = {};
-      for (const source of sources) {
-        let code = genInboundCode();
-        // Collision check — retry once if the code is already taken
-        if (await env.G7_KV.get('scout:inbound:link:' + code)) {
-          code = genInboundCode();
-          // Second collision is astronomically unlikely; fail loudly if it happens
-          if (await env.G7_KV.get('scout:inbound:link:' + code)) {
-            return jsonResponse({ error: 'Code generation collision — please retry' }, 500);
-          }
+        const { waNumber, message } = body;
+        if (!waNumber || !message) {
+          return jsonResponse({ error: 'waNumber and message are required' }, 400);
         }
-        codes[source] = code;
+
+        const firmCode = session.firmCode;
+        const linksKey = 'scout:inbound:' + firmCode + ':links';
+        const now      = new Date().toISOString();
+        const sources  = ['bio', 'google', 'status'];
+
+        // ── Idempotent path: firm already has links ──────────────────────────────
+        const existing = await env.G7_KV.get(linksKey, 'json');
+        if (existing) {
+          // Update waNumber + message on each existing link record (in parallel)
+          await Promise.all(sources.map(source => {
+            const code = existing[source];
+            if (!code) return;
+            return env.G7_KV.put(
+              'scout:inbound:link:' + code,
+              JSON.stringify({ firmCode, source, waNumber, message, createdAt: now })
+            );
+          }));
+
+          // Fetch current click counts (in parallel)
+          const clicks = {};
+          await Promise.all(sources.map(async source => {
+            const raw = await env.G7_KV.get('scout:inbound:' + firmCode + ':' + source + ':clicks');
+            clicks[source] = raw ? parseInt(raw, 10) : 0;
+          }));
+
+          return jsonResponse({ links: existing, clicks });
+        }
+
+        // ── New firm: generate 3 codes, one per source ───────────────────────────
+        const codes = {};
+        for (const source of sources) {
+          let code = genInboundCode();
+          // Collision check — retry once if the code is already taken
+          if (await env.G7_KV.get('scout:inbound:link:' + code)) {
+            code = genInboundCode();
+            // Second collision is astronomically unlikely; fail loudly if it happens
+            if (await env.G7_KV.get('scout:inbound:link:' + code)) {
+              return jsonResponse({ error: 'Code generation collision — please retry' }, 500);
+            }
+          }
+          codes[source] = code;
+        }
+
+        // Write all link records + the index in parallel
+        await Promise.all([
+          ...sources.map(source =>
+            env.G7_KV.put(
+              'scout:inbound:link:' + codes[source],
+              JSON.stringify({ firmCode, source, waNumber, message, createdAt: now })
+            )
+          ),
+          env.G7_KV.put(linksKey, JSON.stringify(codes))
+        ]);
+
+        return jsonResponse({
+          links:  codes,
+          clicks: { bio: 0, google: 0, status: 0 }
+        });
+      } catch (e) {
+        return jsonResponse({ error: 'Internal error', detail: e.message }, 500);
       }
-
-      // Write all link records + the index in parallel
-      await Promise.all([
-        ...sources.map(source =>
-          env.G7_KV.put(
-            'scout:inbound:link:' + codes[source],
-            JSON.stringify({ firmCode, source, waNumber, message, createdAt: now })
-          )
-        ),
-        env.G7_KV.put(linksKey, JSON.stringify(codes))
-      ]);
-
-      return jsonResponse({
-        links:  codes,
-        clicks: { bio: 0, google: 0, status: 0 }
-      });
     }
 
     // =========================================================================
@@ -1294,25 +1301,32 @@ export default {
     //            clicks: { bio, google, status } | null }
     // =========================================================================
     if (request.method === 'GET' && path === '/inbound/stats') {
-      const session = await validateSession(request, env);
-      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      // Outer try/catch ensures every code path — including unexpected KV throws —
+      // returns a jsonResponse with CORS headers rather than a Cloudflare platform
+      // error page that has no CORS headers and blocks the browser fetch.
+      try {
+        const session = await validateSession(request, env);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
 
-      const firmCode = session.firmCode;
-      const links    = await env.G7_KV.get('scout:inbound:' + firmCode + ':links', 'json');
+        const firmCode = session.firmCode;
+        const links    = await env.G7_KV.get('scout:inbound:' + firmCode + ':links', 'json');
 
-      if (!links) {
-        // Firm has not created links yet
-        return jsonResponse({ links: null, clicks: null });
+        if (!links) {
+          // Firm has not created links yet
+          return jsonResponse({ links: null, clicks: null });
+        }
+
+        const sources = ['bio', 'google', 'status'];
+        const clicks  = {};
+        await Promise.all(sources.map(async source => {
+          const raw = await env.G7_KV.get('scout:inbound:' + firmCode + ':' + source + ':clicks');
+          clicks[source] = raw ? parseInt(raw, 10) : 0;
+        }));
+
+        return jsonResponse({ links, clicks });
+      } catch (e) {
+        return jsonResponse({ error: 'Internal error', detail: e.message }, 500);
       }
-
-      const sources = ['bio', 'google', 'status'];
-      const clicks  = {};
-      await Promise.all(sources.map(async source => {
-        const raw = await env.G7_KV.get('scout:inbound:' + firmCode + ':' + source + ':clicks');
-        clicks[source] = raw ? parseInt(raw, 10) : 0;
-      }));
-
-      return jsonResponse({ links, clicks });
     }
 
     // =========================================================================
