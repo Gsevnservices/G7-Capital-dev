@@ -271,7 +271,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
     <div class="field-group">
       <label class="field-label" for="whatYouSell">What You Sell</label>
-      <textarea class="field-textarea" id="whatYouSell" rows="3" placeholder="Be specific — 'premium gym memberships at ₹2,500/month' not just 'gym'" required></textarea>
+      <span class="field-sub">What you sell and what it costs — the price matters for Scout's revenue maths</span>
+      <textarea class="field-textarea" id="whatYouSell" rows="3" placeholder="e.g. gym memberships at ₹2,500/month and personal training at ₹800/session" required></textarea>
     </div>
     <div class="field-group">
       <label class="field-label" for="location">Location — Area and City</label>
@@ -279,7 +280,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
     <div class="field-group">
       <label class="field-label" for="monthlyRevenue">Monthly Revenue</label>
-      <input class="field-input" type="text" id="monthlyRevenue" placeholder="e.g. ₹3,50,000/month" required>
+      <span class="field-sub">Roughly what the business takes in per month — a range is fine</span>
+      <input class="field-input" type="text" id="monthlyRevenue" placeholder="e.g. ₹4-5 lakh per month" required>
     </div>
     <div class="field-group">
       <label class="field-label" for="revenueModel">How Customers Pay You</label>
@@ -305,8 +307,9 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       </select>
     </div>
     <div class="field-group">
-      <label class="field-label" for="avgTransaction">Average Transaction Value</label>
-      <input class="field-input" type="text" id="avgTransaction" placeholder="e.g. ₹650 per visit or ₹2,500/month membership" required>
+      <label class="field-label" for="avgTransaction">What One Customer Typically Spends</label>
+      <span class="field-sub">The average value of a single sale, order or visit</span>
+      <input class="field-input" type="text" id="avgTransaction" placeholder="e.g. ₹550 per visit, or ₹85,000 per order" required>
     </div>
     <div class="field-group">
       <label class="field-label" for="currentCustomers">Current Customers</label>
@@ -352,8 +355,9 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <input class="field-input" type="text" id="landmark3" placeholder="e.g. Same lane as Axis Bank ATM">
     </div>
     <div class="field-group">
-      <label class="field-label" for="bestCustomers">Describe Your 3 Best Existing Customers</label>
-      <textarea class="field-textarea" id="bestCustomers" rows="4" placeholder="e.g. Government teacher, 45 years old, lives in Civil Lines colony, orders weekly, refers neighbours" required></textarea>
+      <label class="field-label" for="bestCustomers">Your Best Existing Customers</label>
+      <span class="field-sub">Describe two or three real customers — their work, age, area, what they buy</span>
+      <textarea class="field-textarea" id="bestCustomers" rows="4" placeholder="e.g. Ananya, 28, product manager in Koramangala, comes 3-4 times a week" required></textarea>
     </div>
     <!-- B2B FIELDS — shown only when customerType is "businesses" -->
     <div id="b2bFieldsGroup" style="display:none">
@@ -402,7 +406,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
         </div>
         <div class="field-group" style="margin-bottom:0">
           <label class="field-label" for="comp1worse">What You Do Better</label>
-          <input class="field-input" type="text" id="comp1worse" placeholder="e.g. Personal attention, home delivery, longer hours">
+          <span class="field-sub">Something concrete a customer would notice — not "better service"</span>
+          <input class="field-input" type="text" id="comp1worse" placeholder="e.g. we deliver same day, they take three days">
         </div>
       </div>
     </div>
@@ -419,7 +424,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
         </div>
         <div class="field-group" style="margin-bottom:0">
           <label class="field-label" for="comp2worse">What You Do Better</label>
-          <input class="field-input" type="text" id="comp2worse" placeholder="e.g. Newer equipment, qualified trainers">
+          <span class="field-sub">Something concrete a customer would notice — not "better service"</span>
+          <input class="field-input" type="text" id="comp2worse" placeholder="e.g. we deliver same day, they take three days">
         </div>
       </div>
     </div>
