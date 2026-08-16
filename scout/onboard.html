@@ -61,8 +61,9 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .section-desc{font-size:12px;line-height:1.8;color:var(--grey1);margin-bottom:28px}
 .section-divider{width:40px;height:1px;background:var(--gold);margin-bottom:32px;opacity:.5}
 .field-group{margin-bottom:28px}
-.field-label{display:block;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
+.field-label{display:block;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:6px}
 .field-label .optional{color:var(--grey2);font-size:8px;letter-spacing:.1em;margin-left:6px;text-transform:lowercase}
+.field-sub{display:block;font-size:11px;color:var(--grey1);line-height:1.6;margin-bottom:10px;letter-spacing:0.01em}
 .field-input,.field-textarea,.field-select{width:100%;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-family:'Tenor Sans',sans-serif;font-size:13px;line-height:1.6;padding:14px 18px;transition:border-color .3s;outline:none;-webkit-appearance:none}
 .field-input:focus,.field-textarea:focus,.field-select:focus{border-color:rgba(224,146,47,0.5)}
 .field-input::placeholder,.field-textarea::placeholder{color:var(--grey2);font-size:12px}
@@ -357,20 +358,24 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <!-- B2B FIELDS — shown only when customerType is "businesses" -->
     <div id="b2bFieldsGroup" style="display:none">
       <div class="field-group">
-        <label class="field-label" for="b2bIndustries">Which Industries You Sell To</label>
-        <input class="field-input" type="text" id="b2bIndustries" placeholder="e.g. IT companies, manufacturing units, hospitals">
+        <label class="field-label" for="b2bIndustries">Which Industries Do You Sell To</label>
+        <span class="field-sub">List the kinds of companies that buy from you — you can name several</span>
+        <input class="field-input" type="text" id="b2bIndustries" placeholder="e.g. IT services companies, manufacturing units, hospitals">
       </div>
       <div class="field-group">
-        <label class="field-label" for="b2bDecisionMaker">Who Signs Off On Buying</label>
-        <input class="field-input" type="text" id="b2bDecisionMaker" placeholder="e.g. HR head, plant manager, founder">
+        <label class="field-label" for="b2bDecisionMaker">Who Approves The Purchase</label>
+        <span class="field-sub">The job title of the person who says yes — not their name. List more than one if several are involved.</span>
+        <input class="field-input" type="text" id="b2bDecisionMaker" placeholder="e.g. Head of Sales, HR Manager, Founder">
       </div>
       <div class="field-group">
-        <label class="field-label" for="b2bSalesCycle">How Long From First Contact To Payment</label>
-        <input class="field-input" type="text" id="b2bSalesCycle" placeholder="e.g. two weeks, three months">
+        <label class="field-label" for="b2bSalesCycle">How Long From First Contact To Getting Paid</label>
+        <span class="field-sub">Roughly how long a typical deal takes from first conversation to money in the bank</span>
+        <input class="field-input" type="text" id="b2bSalesCycle" placeholder="e.g. two weeks, three months, six months">
       </div>
       <div class="field-group">
-        <label class="field-label" for="b2bCompanySize">How Big Are The Companies You Sell To</label>
-        <input class="field-input" type="text" id="b2bCompanySize" placeholder="e.g. 20-100 employees">
+        <label class="field-label" for="b2bCompanySize">How Big Are Your Customer Companies</label>
+        <span class="field-sub">Employee count or revenue size of the companies you sell to</span>
+        <input class="field-input" type="text" id="b2bCompanySize" placeholder="e.g. 20-100 employees, or ₹5-50 crore turnover">
       </div>
     </div>
     <div class="form-nav">
@@ -1597,12 +1602,14 @@ function initQualityScoring() {
     var el = document.getElementById(fieldId);
     if (!el) return;
 
-    /* Create the indicator div and insert it after the field's parent group */
+    /* Create the indicator div and append it inside the field's own group.
+       Inserting inside (not after) means the field-group's margin-bottom
+       provides natural separation from the next field — no misread alignment. */
     var group = el.closest('.field-group') || el.parentNode;
     var div = document.createElement('div');
     div.className = 'qi-wrap';
     div.id = 'qi-' + fieldId;
-    group.parentNode.insertBefore(div, group.nextSibling);
+    group.appendChild(div);
 
     /* Score on blur — when user leaves the field */
     el.addEventListener('blur', function() {
