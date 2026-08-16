@@ -6687,10 +6687,34 @@ REVENUE VELOCITY RULES:
 — The formula depends on the REVENUE MODEL field provided in the submission:
 
   RECURRING (membership / subscription / retainer):
-  new customers per month × monthly fee
+  The calculation depends on BILLING PERIOD provided in the submission.
+  If BILLING PERIOD is absent, assume monthly and state the assumption.
+
+  BILLING PERIOD: monthly
+  new customers × monthly fee = revenue added per month
   No frequency multiplier — each customer pays every month automatically.
   The added revenue persists and compounds as more customers join.
   Example: "8 new gym members × ₹2,500/month = ₹20,000/month added"
+
+  BILLING PERIOD: quarterly
+  new customers × quarterly fee ÷ 3 = monthly revenue equivalent
+  Always state the quarterly figure the owner recognises alongside
+  the monthly equivalent. Never present the quarterly fee as monthly.
+  Example: "6 new members × ₹6,000/quarter (₹2,000/month equivalent)
+  = ₹36,000 in new quarterly billings = ₹12,000/month added"
+
+  BILLING PERIOD: yearly (annual)
+  new customers × annual fee ÷ 12 = monthly revenue equivalent
+  Always state the annual figure the owner recognises alongside
+  the monthly equivalent. Never present the annual fee as monthly.
+  The cash lands in one lump when the customer signs — note this.
+  Example: "4 new SaaS clients × ₹45,000/year (₹3,750/month equivalent)
+  = ₹1,80,000 in new annual contracts = ₹15,000/month added"
+
+  BILLING PERIOD: not specified
+  Assume monthly and state: "Billing period not provided — velocity
+  calculated as if monthly. If customers pay quarterly or annually,
+  the monthly equivalent is lower than this figure."
 
   REPEAT (customer returns regularly, pays each time):
   new customers per month × average transaction value × PURCHASE FREQUENCY
@@ -6746,6 +6770,16 @@ the revenue velocity and projection must reflect the lag:
   Scout-sourced revenue regardless of pipeline. Do not treat this as a smooth
   monthly income curve."
   Do NOT present a smooth month-on-month growth curve as certainty for these models.
+— RECURRING with non-monthly BILLING PERIOD caveat (mandatory when applicable):
+  For quarterly billing: a customer acquired in month 1 contributes their full
+  quarterly fee in month 1 as cash received, but monthly revenue equivalent is
+  fee ÷ 3. Show both. Do not add the full quarterly fee to each of the three months.
+  For annual billing: a customer acquired in month 1 contributes their full annual
+  fee as a cash event in month 1, but monthly revenue equivalent is fee ÷ 12.
+  Show both. Do not spread the annual fee across all three projection months as if
+  it were collected monthly — it is one payment, not twelve.
+  State in the projection: "Annual customers pay once — cash collected in month of
+  acquisition. Monthly equivalent shown for revenue run-rate comparison only."
   "tab1": {
     "honestAssessment": "[One paragraph. 3-5 sentences. One specific problem with current approach. Ends connecting to Scout plan.]",
     "unfairAdvantage": "[One paragraph. 3 sentences max. The single most powerful competitive advantage.]",
@@ -6759,7 +6793,7 @@ the revenue velocity and projection must reflect the lag:
         "searchQuery": "[B2C non-consumer: A Google Maps search string that finds BUSINESSES THAT COULD BECOME CUSTOMERS — not businesses in the same category as the user. Rule: the businesses returned must be potential buyers, not competitors. Pattern: find the organisation that contains the people. Example: ICP is 'startup employees relocating to Koramangala' → 'software companies Koramangala Bengaluru'. Wrong: ICP is 'weekend cafe visitors' → null. Set to null for ICPs of individual people. B2B PRIMARY USE: For B2B businesses, searchQuery is the primary Customer Finder tool — it finds actual companies to pitch. The query must target CUSTOMER companies from the B2B TARGET INDUSTRIES field, in the areas from the onboarding form. Never return the user's own competitors. WORKED EXAMPLE: SaaS company selling HR software to mid-size IT firms in Bengaluru → searchQuery: 'IT companies Whitefield Bengaluru' (returns the companies that would buy the software). WRONG: 'HR software companies Bengaluru' (returns the user's own competitors). Format when not null: recognisable business category + specific area + city.]",
         "volumeEstimate": "[Realistic number with calculation shown]",
         "conversionProbability": "HIGH",
-        "revenuePerCustomer": "₹[X]/month for recurring | ₹[X] per visit × [N] visits/month for repeat | ₹[X] per project for project | ₹[X] one-time for oneoff — match to REVENUE MODEL",
+        "revenuePerCustomer": "For recurring: match BILLING PERIOD — monthly: '₹[X]/month'; quarterly: '₹[X]/quarter (₹[Y]/month)'; yearly: '₹[X]/year (₹[Y]/month)'. Never state an annual or quarterly fee as a monthly figure. For repeat: ₹[X] per visit × [N] visits/month. For project: ₹[X] per project. For oneoff: ₹[X] one-time.",
         "confidence": "HIGH",
         "confidenceReason": "[One sentence why]",
         "switchTrigger": "[Competitor name]'s customers leave when: [specific frustration]",
@@ -6779,7 +6813,7 @@ the revenue velocity and projection must reflect the lag:
         "searchQuery": "[B2C: Business category + specific area + city that finds POTENTIAL BUYERS, not competitors. Null for ICPs of individual people. B2B: Customer company category + area + city from B2B TARGET INDUSTRIES. Never the user's own competitors.]",
         "volumeEstimate": "[Number with working]",
         "conversionProbability": "MEDIUM",
-        "revenuePerCustomer": "₹[X]/month for recurring | ₹[X] per visit × [N] visits/month for repeat | ₹[X] per project for project | ₹[X] one-time for oneoff — match to REVENUE MODEL",
+        "revenuePerCustomer": "For recurring: match BILLING PERIOD — monthly: '₹[X]/month'; quarterly: '₹[X]/quarter (₹[Y]/month)'; yearly: '₹[X]/year (₹[Y]/month)'. Never state an annual or quarterly fee as a monthly figure. For repeat: ₹[X] per visit × [N] visits/month. For project: ₹[X] per project. For oneoff: ₹[X] one-time.",
         "confidence": "MEDIUM",
         "confidenceReason": "[One sentence]",
         "switchTrigger": "[Switch trigger sentence]",
@@ -6795,7 +6829,7 @@ the revenue velocity and projection must reflect the lag:
         "priority": "third",
         "summary": "[3 bullet points: who they are, why now, how to reach them. B2B: first bullet names the company type and decision-maker role. B2C: first bullet describes the person.]",
         "searchQuery": "[B2C: Business category + specific area + city that finds POTENTIAL BUYERS, not competitors. Null for ICPs of individual people. B2B: Customer company category + area + city from B2B TARGET INDUSTRIES. Never the user's own competitors.]",
-        "revenuePerCustomer": "₹[X]/month for recurring | ₹[X] per visit × [N] visits/month for repeat | ₹[X] per project for project | ₹[X] one-time for oneoff — match to REVENUE MODEL",
+        "revenuePerCustomer": "For recurring: match BILLING PERIOD — monthly: '₹[X]/month'; quarterly: '₹[X]/quarter (₹[Y]/month)'; yearly: '₹[X]/year (₹[Y]/month)'. Never state an annual or quarterly fee as a monthly figure. For repeat: ₹[X] per visit × [N] visits/month. For project: ₹[X] per project. For oneoff: ₹[X] one-time.",
         "confidence": "LOW",
         "confidenceReason": "[One sentence]",
         "closingStrategy": {

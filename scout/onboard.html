@@ -294,6 +294,15 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <label class="field-label" for="purchaseFrequency">How Often Does One Customer Buy</label>
       <input class="field-input" type="text" id="purchaseFrequency" placeholder="e.g. 4 times a month, or twice a year">
     </div>
+    <div class="field-group" id="billingPeriodGroup" style="display:none">
+      <label class="field-label" for="billingPeriod">How Often Do They Pay</label>
+      <select class="field-select" id="billingPeriod">
+        <option value="" disabled selected>Select billing period</option>
+        <option value="monthly">Every month</option>
+        <option value="quarterly">Every three months</option>
+        <option value="yearly">Once a year</option>
+      </select>
+    </div>
     <div class="field-group">
       <label class="field-label" for="avgTransaction">Average Transaction Value</label>
       <input class="field-input" type="text" id="avgTransaction" placeholder="e.g. ₹650 per visit or ₹2,500/month membership" required>
@@ -782,7 +791,7 @@ function initBusinessTypeWidget() {
   });
 }
 
-/* Show/hide purchaseFrequency based on revenueModel value */
+/* Show/hide purchaseFrequency and billingPeriod based on revenueModel value */
 function applyRevenueModelVisibility() {
   var sel = document.getElementById('revenueModel');
   var grp = document.getElementById('purchaseFrequencyGroup');
@@ -792,6 +801,13 @@ function applyRevenueModelVisibility() {
   grp.style.display = show ? 'block' : 'none';
   /* When hidden, clear any error state so it does not block validation */
   if (!show && pf) pf.classList.remove('error');
+  /* billingPeriod: only shown for recurring revenue model */
+  var bpGrp = document.getElementById('billingPeriodGroup');
+  var bp    = document.getElementById('billingPeriod');
+  if (!bpGrp) return;
+  var showBp = (sel.value === 'recurring');
+  bpGrp.style.display = showBp ? 'block' : 'none';
+  if (!showBp && bp) { bp.classList.remove('error'); bp.value = ''; }
 }
 
 /* Show/hide B2B fields and reword landmark labels based on customerType value */
@@ -918,6 +934,9 @@ function validateSection(n) {
     /* purchaseFrequency is required only when its group is visible */
     var _pfGrp = document.getElementById('purchaseFrequencyGroup');
     if (_pfGrp && _pfGrp.style.display !== 'none') check('purchaseFrequency');
+    /* billingPeriod is required only when its group is visible (recurring model) */
+    var _bpGrp = document.getElementById('billingPeriodGroup');
+    if (_bpGrp && _bpGrp.style.display !== 'none') check('billingPeriod');
   }
   if (n === 2) {
     ['areaType','landmark1','bestCustomers'].forEach(check);
@@ -956,6 +975,7 @@ function collectFormData() {
     businessTypeInput:document.getElementById('businessTypeInput').value.trim(),
     revenueModel:document.getElementById('revenueModel').value,
     purchaseFrequency:document.getElementById('purchaseFrequency').value.trim(),
+    billingPeriod:document.getElementById('billingPeriod').value,
     businessName:document.getElementById('businessName').value.trim(),
     businessPhone:waPhone(document.getElementById('businessPhone').value.trim()),
     whatYouSell:document.getElementById('whatYouSell').value.trim(),
@@ -1028,12 +1048,18 @@ function buildScoutUserMessage(d) {
     'LANDMARKS:', lm.join('\n'),
     '',
     'REVENUE MODEL: ' + (
-      d.revenueModel === 'recurring' ? 'Recurring (monthly membership / subscription)' :
+      d.revenueModel === 'recurring' ? 'Recurring (membership / subscription / retainer)' :
       d.revenueModel === 'repeat'    ? 'Repeat purchase (customer returns regularly, pays each time)' :
       d.revenueModel === 'project'   ? 'Project / event (customer pays per project, returns rarely)' :
       d.revenueModel === 'oneoff'    ? 'One-off (customer buys once, usually does not return)' :
       'not specified'
     ),
+    d.revenueModel === 'recurring' ? 'BILLING PERIOD: ' + (
+      d.billingPeriod === 'monthly'   ? 'Monthly — customers pay every month' :
+      d.billingPeriod === 'quarterly' ? 'Quarterly — customers pay every three months' :
+      d.billingPeriod === 'yearly'    ? 'Annual — customers pay once a year' :
+      'not specified — assume monthly'
+    ) : '',
     d.purchaseFrequency ? 'PURCHASE FREQUENCY: ' + d.purchaseFrequency : '',
     '',
     'FINANCIAL BASELINE:',
@@ -1308,6 +1334,7 @@ function saveDraft() {
       businessTypeInput:document.getElementById('businessTypeInput').value,
       revenueModel:     document.getElementById('revenueModel').value,
       purchaseFrequency:document.getElementById('purchaseFrequency').value,
+      billingPeriod:    document.getElementById('billingPeriod').value,
       businessName:     document.getElementById('businessName').value,
       businessPhone:    document.getElementById('businessPhone').value,
       whatYouSell:      document.getElementById('whatYouSell').value,
@@ -1381,7 +1408,7 @@ function restoreDraft(draft) {
     if (el && draft[id] !== undefined) el.value = draft[id];
   });
   /* Select fields */
-  ['areaType','whatsappListSize','howFoundYou','revenueModel','customerType'].forEach(function(id) {
+  ['areaType','whatsappListSize','howFoundYou','revenueModel','billingPeriod','customerType'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el && draft[id]) el.value = draft[id];
   });
