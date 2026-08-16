@@ -494,7 +494,13 @@ function collectData() {
    callScoutCheckin() integration.
 ═══════════════════════════════════════ */
 function _buildCheckinMessageLocal(d) {
+  /* Derive today's date at send time — full prose format the model reads best */
+  var _now = new Date();
+  var _months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var _todayStr = _now.getDate() + ' ' + _months[_now.getMonth()] + ' ' + _now.getFullYear();
   var lines = [
+    'TODAY\'S DATE: ' + _todayStr,
+    '',
     'This is a weekly check-in. Produce a Type 2 Weekly Check-In Output following Component 7 format.',
     '',
     'WEEK: ' + d.weekNum,

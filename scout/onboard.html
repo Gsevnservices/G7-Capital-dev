@@ -1004,7 +1004,13 @@ function buildScoutUserMessage(d) {
   if (d.comp1name) { comp.push('COMPETITOR 1: ' + d.comp1name); if (d.comp1better) comp.push('  They do better: ' + d.comp1better); if (d.comp1worse) comp.push('  We do better: ' + d.comp1worse); }
   if (d.comp2name) { comp.push('COMPETITOR 2: ' + d.comp2name); if (d.comp2better) comp.push('  They do better: ' + d.comp2better); if (d.comp2worse) comp.push('  We do better: ' + d.comp2worse); }
   if (d.largeChains) comp.push('LARGE CHAINS NEARBY: ' + d.largeChains);
+  /* Derive today's date at send time — full prose format the model reads best */
+  var _now = new Date();
+  var _months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var _todayStr = _now.getDate() + ' ' + _months[_now.getMonth()] + ' ' + _now.getFullYear();
   return [
+    'TODAY\'S DATE: ' + _todayStr,
+    '',
     'Please produce a complete Scout Customer Acquisition System for this business.',
     'Follow the exact 4-tab output format from Component 7 of your system prompt.',
     'Apply the Anti-Generic Filter before delivering.',
