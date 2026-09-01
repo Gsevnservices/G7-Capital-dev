@@ -1554,6 +1554,14 @@ function parseAndRender(rawOutput, biz) {
     renderHealthBlock();
     scoutData = data;
 
+    /* Write ICP names to localStorage so check-in page can label blocks correctly */
+    try {
+      var _icpArr = (data.tab1 && data.tab1.icps) ? data.tab1.icps : [];
+      localStorage.setItem(scoutKey('scout_icp_names'), JSON.stringify(
+        _icpArr.slice(0, 3).map(function(icp, idx) { return icp.name || ('ICP ' + (idx + 1)); })
+      ));
+    } catch(_eIcp) {}
+
     /* ── Section renderers — each wrapped individually so one malformed section
        cannot prevent any other section from rendering or leave a spinner showing.
        The finally block below guarantees every tab panel clears its spinner. ── */
@@ -2364,6 +2372,17 @@ function refCopy(elId, btn) {
 function renderWeekTargets(tab4) {
   var t4 = tab4 || {};
   var wt = t4.weekTargets || {};
+
+  /* Write structured targets to localStorage — check-in page reads this on load.
+     Key mapping: wt.newCustomers → customers (checkin.html uses 'customers' key). */
+  try {
+    localStorage.setItem(scoutKey('scout_last_targets'), JSON.stringify({
+      contacts:  wt.contacts  || '',
+      responses: wt.responses || '',
+      customers: wt.newCustomers || ''
+    }));
+  } catch(_eTgt) {}
+
   var el = document.getElementById('tab3Content');
   if (!el) return;
   var html = '';

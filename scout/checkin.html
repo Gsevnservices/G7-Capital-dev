@@ -231,29 +231,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <p class="form-section-desc">Fill in your numbers for each customer group. Round numbers are fine.</p>
     <div class="form-divider"></div>
 
-    <div class="icp-block">
-      <div class="icp-block-title" id="icp1Label">ICP 1</div>
-      <input type="hidden" id="icp1_sent" value="">
-      <input type="hidden" id="icp1_replies" value="">
-      <input type="hidden" id="icp1_conv" value="">
-      <div id="icp1_tap_area"></div>
-    </div>
-
-    <div class="icp-block">
-      <div class="icp-block-title" id="icp2Label">ICP 2</div>
-      <input type="hidden" id="icp2_sent" value="">
-      <input type="hidden" id="icp2_replies" value="">
-      <input type="hidden" id="icp2_conv" value="">
-      <div id="icp2_tap_area"></div>
-    </div>
-
-    <div class="icp-block">
-      <div class="icp-block-title" id="icp3Label">ICP 3</div>
-      <input type="hidden" id="icp3_sent" value="">
-      <input type="hidden" id="icp3_replies" value="">
-      <input type="hidden" id="icp3_conv" value="">
-      <div id="icp3_tap_area"></div>
-    </div>
+    <!-- ICP blocks are generated dynamically in DOMContentLoaded based on actual ICPs -->
+    <div id="icpBlocksContainer"></div>
 
     <div class="step-nav">
       <button type="button" class="btn-next" onclick="goStep(2)">Next</button>
@@ -372,24 +351,53 @@ window.addEventListener('DOMContentLoaded', async function() {
     } catch(e) {}
   }
 
-  /* ICP names */
+  /* ICP names — read from scout_icp_names written by result.html on every successful render.
+     Cap at 3 because the check-in payload and scout.js are wired to icp1/icp2/icp3 keys. */
   var icpNamesRaw = localStorage.getItem(scoutKey('scout_icp_names'));
   var icpNames = ['ICP 1', 'ICP 2', 'ICP 3'];
+  var icpCount = 3;
   if (icpNamesRaw) {
     try {
       var parsed = JSON.parse(icpNamesRaw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        icpNames = [
-          parsed[0] || 'ICP 1',
-          parsed[1] || 'ICP 2',
-          parsed[2] || 'ICP 3'
-        ];
+        icpCount = Math.min(parsed.length, 3);
+        icpNames = [];
+        for (var i = 0; i < 3; i++) {
+          icpNames.push(parsed[i] || ('ICP ' + (i + 1)));
+        }
       }
     } catch(e) {}
   }
-  document.getElementById('icp1Label').textContent = icpNames[0];
-  document.getElementById('icp2Label').textContent = icpNames[1];
-  document.getElementById('icp3Label').textContent = icpNames[2];
+
+  /* Build ICP blocks dynamically — one block per actual ICP (up to 3).
+     Each block gets:
+       - a visible number input for "sent" (exact count, no buckets)
+       - hidden inputs + tap buttons for replies and customers (unchanged)
+     All element IDs are preserved (icp1_sent, icp1_replies, icp1_conv …)
+     so collectData() and the submit payload continue to work as-is. */
+  var container = document.getElementById('icpBlocksContainer');
+  var slots = ['icp1', 'icp2', 'icp3'];
+  for (var b = 0; b < icpCount; b++) {
+    var slot = slots[b];
+    var label = icpNames[b];
+    var block = document.createElement('div');
+    block.className = 'icp-block';
+    block.innerHTML =
+      '<div class="icp-block-title">' + label + '</div>' +
+      /* Exact number input for sent — collectData reads .value, no behavioural change */
+      '<div style="margin-bottom:18px">' +
+        '<span class="tap-label">How many did you send?</span>' +
+        '<input type="number" id="' + slot + '_sent" min="0" step="1" placeholder="0"' +
+          ' style="width:100%;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);' +
+          'color:var(--white1);font-family:var(--font2);font-size:14px;border-radius:0;' +
+          '-moz-appearance:textfield;appearance:textfield;margin-top:6px">' +
+      '</div>' +
+      /* Hidden inputs + tap areas for replies and customers */
+      '<input type="hidden" id="' + slot + '_replies" value="">' +
+      '<input type="hidden" id="' + slot + '_conv" value="">' +
+      '<div id="' + slot + '_tap_area"></div>';
+    container.appendChild(block);
+  }
 
   /* Inject tap rows for totalCustomers and revenueAdded */
   document.getElementById('totalCust_tap_area').innerHTML =
@@ -404,13 +412,12 @@ window.addEventListener('DOMContentLoaded', async function() {
       {label:'₹5,000-₹20,000', val:12000}, {label:'₹20,000-₹50,000', val:35000},
       {label:'₹50,000+', val:75000}], 'Revenue added this week');
 
-  /* Inject tap rows for each ICP block */
-  ['icp1','icp2','icp3'].forEach(function(p) {
+  /* Inject tap rows for replies and customers into each rendered ICP block.
+     Sent is now a number input (built above), so we only inject reply + conv tap rows. */
+  slots.slice(0, icpCount).forEach(function(p) {
     var area = document.getElementById(p + '_tap_area');
+    if (!area) return;
     area.innerHTML =
-      buildTapRow(p + '_sent', [
-        {label:'None', val:0}, {label:'1-5', val:3}, {label:'6-15', val:10},
-        {label:'16-30', val:22}, {label:'30+', val:35}], 'How many did you send?') +
       buildTapRow(p + '_replies', [
         {label:'0', val:0}, {label:'1', val:1}, {label:'2', val:2},
         {label:'3', val:3}, {label:'4', val:4}, {label:'5+', val:6}], 'How many replied?') +
@@ -470,15 +477,16 @@ function collectData() {
   return {
     weekNum:         parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '1', 10),
     icpNames:        icpNames,
-    icp1_sent:       document.getElementById('icp1_sent').value    || '0',
-    icp1_replies:    document.getElementById('icp1_replies').value  || '0',
-    icp1_conv:       document.getElementById('icp1_conv').value     || '0',
-    icp2_sent:       document.getElementById('icp2_sent').value     || '0',
-    icp2_replies:    document.getElementById('icp2_replies').value  || '0',
-    icp2_conv:       document.getElementById('icp2_conv').value     || '0',
-    icp3_sent:       document.getElementById('icp3_sent').value     || '0',
-    icp3_replies:    document.getElementById('icp3_replies').value  || '0',
-    icp3_conv:       document.getElementById('icp3_conv').value     || '0',
+    /* Null-safe reads — elements only exist for ICPs that were actually rendered */
+    icp1_sent:       (document.getElementById('icp1_sent')    || {}).value || '0',
+    icp1_replies:    (document.getElementById('icp1_replies') || {}).value || '0',
+    icp1_conv:       (document.getElementById('icp1_conv')    || {}).value || '0',
+    icp2_sent:       (document.getElementById('icp2_sent')    || {}).value || '0',
+    icp2_replies:    (document.getElementById('icp2_replies') || {}).value || '0',
+    icp2_conv:       (document.getElementById('icp2_conv')    || {}).value || '0',
+    icp3_sent:       (document.getElementById('icp3_sent')    || {}).value || '0',
+    icp3_replies:    (document.getElementById('icp3_replies') || {}).value || '0',
+    icp3_conv:       (document.getElementById('icp3_conv')    || {}).value || '0',
     totalCustomers:  document.getElementById('totalCustomers').value || '0',
     revenueAdded:    document.getElementById('revenueAdded').value   || '0',
     whatWorked:      document.getElementById('whatWorked').value.trim(),

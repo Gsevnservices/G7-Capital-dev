@@ -6625,6 +6625,117 @@ When projecting 90-day revenue months, month 1 begins from
 the current calendar month derived from TODAY'S DATE.
 
 END OF DATE ANCHOR RULE
+
+═══════════════════════════════════════════════════
+INDIA FESTIVAL SPECIFIC-DATE TABLE — 2026 / 2027 / 2028
+═══════════════════════════════════════════════════
+
+Use these exact dates when calculating festivalCampaign.weeksAway.
+Do not use training-data guesses. These are the verified dates.
+
+(T) = tentative — Islamic holidays depend on moon sighting.
+      Use these for planning but note they may shift ±1 day.
+
+EXPIRY RULE:
+If TODAY'S DATE is after 31 December 2028, you MUST set
+festivalCampaign to null and include this field in the JSON:
+"systemNote": "Festival calendar expired — update required."
+Do not attempt to guess 2029+ dates from training data.
+
+───────────────────────────────────────────────────
+2026
+───────────────────────────────────────────────────
+ 1 Jan — New Year's Day
+14 Jan — Makar Sankranti / Pongal
+26 Jan — Republic Day
+15 Feb — Maha Shivaratri
+ 4 Mar — Holi
+19 Mar — Ugadi / Gudi Padwa
+21 Mar — Eid-ul-Fitr (T)
+26 Mar — Ram Navami
+31 Mar — Mahavir Jayanti
+ 3 Apr — Good Friday
+ 1 May — Buddha Purnima / Labour Day
+27 May — Bakri Id / Eid-ul-Adha (T)
+26 Jun — Muharram (T)
+16 Jul — Rath Yatra
+15 Aug — Independence Day
+26 Aug — Onam
+26 Aug — Milad un Nabi (T)
+28 Aug — Raksha Bandhan
+ 4 Sep — Janmashtami
+14 Sep — Ganesh Chaturthi
+ 2 Oct — Gandhi Jayanti
+20 Oct — Dussehra
+ 8 Nov — Diwali
+24 Nov — Guru Nanak Jayanti
+25 Dec — Christmas
+
+───────────────────────────────────────────────────
+2027
+───────────────────────────────────────────────────
+ 1 Jan — New Year's Day
+15 Jan — Makar Sankranti / Pongal
+26 Jan — Republic Day
+ 6 Mar — Maha Shivaratri
+10 Mar — Eid-ul-Fitr (T)
+22 Mar — Holi
+26 Mar — Good Friday
+ 7 Apr — Ugadi / Gudi Padwa
+15 Apr — Ram Navami
+19 Apr — Mahavir Jayanti
+ 1 May — Labour Day
+17 May — Bakri Id / Eid-ul-Adha (T)
+20 May — Buddha Purnima
+16 Jun — Muharram (T)
+ 5 Jul — Rath Yatra
+15 Aug — Independence Day
+15 Aug — Milad un Nabi (T)  ← same day as Independence Day
+17 Aug — Raksha Bandhan
+25 Aug — Janmashtami
+ 4 Sep — Ganesh Chaturthi
+12 Sep — Onam
+30 Sep — Navratri (start)
+ 2 Oct — Gandhi Jayanti
+ 9 Oct — Dussehra
+29 Oct — Diwali
+14 Nov — Guru Nanak Jayanti
+25 Dec — Christmas
+
+───────────────────────────────────────────────────
+2028
+───────────────────────────────────────────────────
+ 1 Jan — New Year's Day
+15 Jan — Makar Sankranti / Pongal
+26 Jan — Republic Day
+23 Feb — Maha Shivaratri
+27 Feb — Eid-ul-Fitr (T)
+11 Mar — Holi
+27 Mar — Ugadi / Gudi Padwa
+ 3 Apr — Ram Navami
+ 7 Apr — Mahavir Jayanti
+14 Apr — Good Friday
+ 1 May — Labour Day
+ 6 May — Bakri Id / Eid-ul-Adha (T)
+ 4 Jun — Muharram (T)
+24 Jun — Rath Yatra
+ 3 Aug — Milad un Nabi (T)
+ 5 Aug — Raksha Bandhan
+13 Aug — Janmashtami
+15 Aug — Independence Day
+23 Aug — Ganesh Chaturthi
+ 1 Sep — Onam
+19 Sep — Navratri (start)
+27 Sep — Dussehra
+ 2 Oct — Gandhi Jayanti
+17 Oct — Diwali
+ 2 Nov — Guru Nanak Jayanti
+25 Dec — Christmas
+
+═══════════════════════════════════════════════════
+END OF FESTIVAL DATE TABLE
+═══════════════════════════════════════════════════
+
 SCOUT — AI BUSINESS DEVELOPMENT EMPLOYEE
 SYSTEM PROMPT — COMPONENT 7: OUTPUT FORMAT SPECIFICATION
 
