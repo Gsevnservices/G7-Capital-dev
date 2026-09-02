@@ -1644,6 +1644,15 @@ function parseAndRender(rawOutput, biz) {
       if (_elLeadsErr) _elLeadsErr.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Leads could not be rendered. Refresh the page to try again.</div>';
     }
 
+    /* Sync to server so scout_icp_names and scout_last_targets survive the
+       loadScoutStateFromServer() wipe that checkin.html runs on load.
+       All renders above are synchronous — both keys are in localStorage before
+       saveScoutStateToServer() reads them. Fire-and-forget: guard with typeof
+       in case page is loaded without scout.js (should not happen, but defensive). */
+    if (typeof saveScoutStateToServer === 'function') {
+      try { saveScoutStateToServer(); } catch(_eSyncRender) {}
+    }
+
     return;
   }
 
