@@ -1238,6 +1238,8 @@ var referralRowCount = 3;      // tracks how many referral input rows are showin
 var _cfPlaces        = {};     // Customer Finder: place data keyed by '{icpIdx}_{placeIdx}'
                                // My Plan uses integer prefix (e.g. '0_0'); Leads uses 'l' prefix (e.g. 'l0_0')
 var _leadsData       = null;   // last parsed data object passed to renderLeadsTab — used for list re-renders after CF add
+var _checklistSyncTimer = null; // debounce handle for toggleDayComplete → saveScoutStateToServer
+var _checklistSyncFired = false; // leading-edge flag (matches pipelineSave pattern)
 
 /* ═══════════════════════════════════════════
    PAGE INIT
@@ -2096,6 +2098,20 @@ function toggleDayComplete(dayKey, idx, isChecked) {
   try { store = JSON.parse(localStorage.getItem(scoutKey('scout_week_checklist')) || '{}'); } catch(e) {}
   store[dayKey] = isChecked;
   localStorage.setItem(scoutKey('scout_week_checklist'), JSON.stringify(store));
+
+  /* Debounced server sync — leading-edge + trailing-edge, matches pipelineSave pattern.
+     Five rapid ticks fire one immediate call then one trailing call 2 s later. */
+  if (typeof saveScoutStateToServer === 'function') {
+    clearTimeout(_checklistSyncTimer);
+    if (!_checklistSyncFired) {
+      _checklistSyncFired = true;
+      try { saveScoutStateToServer(); } catch(_ce) {}
+    }
+    _checklistSyncTimer = setTimeout(function() {
+      _checklistSyncFired = false;
+      try { saveScoutStateToServer(); } catch(_ce) {}
+    }, 2000);
+  }
 
   /* Visual: add/remove completed class */
   var card = document.getElementById('dayCard_' + idx);
@@ -4472,6 +4488,11 @@ async function buildReferralChain() {
         date: new Date().toISOString()
       }));
     } catch(e) {}
+
+    /* Sync to server — one-off write, no debounce needed */
+    if (typeof saveScoutStateToServer === 'function') {
+      try { saveScoutStateToServer(); } catch(_rse) {}
+    }
 
   } catch (err) {
     if (results) {
