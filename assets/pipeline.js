@@ -266,7 +266,7 @@ function pipelineDue() {
   var store = pipelineLoad();
   var out = [];
   store.people.forEach(function(p) {
-    if (p.status === 'joined' || p.status === 'not_interested' || p.status === 'found') return;
+    if (p.status === 'joined' || p.status === 'not_interested') return;
     var d = pipelineDaysSince(p.lastStatusAt || p.lastContactedAt);
     var first = (p.name || '').split(' ')[0] || 'there';
     var item = null;
@@ -289,6 +289,9 @@ function pipelineDue() {
     } else if (p.status === 'gone_quiet' && d >= 14) {
       item = { reason: 'Quiet for ' + d + ' days', urgency: 1,
                msg: 'Hi ' + first + ' — kaafi time ho gaya. Jab ready ho, bata dena.' };
+    } else if (p.status === 'found' && d >= 1) {
+      item = { reason: 'Found ' + d + ' day(s) ago — never messaged', urgency: 2,
+               msg: 'Hi ' + first + ' — main [your business] se hoon. Aapke liye ek baat thi, 2 min baat kar sakte hain?' };
     }
 
     if (item) {
