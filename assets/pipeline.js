@@ -252,6 +252,17 @@ function pipelineDaysSince(iso) {
   return Math.floor((Date.now() - then) / 86400000);
 }
 
+/* Read the user's own business name from scout_pending_result.businessData.
+   Used to personalise first-contact messages for Customer Finder leads. */
+function pipelineBusinessName() {
+  try {
+    var raw = localStorage.getItem(scoutKey('scout_pending_result'));
+    if (!raw) return '';
+    var d = JSON.parse(raw);
+    return (d && d.businessData && d.businessData.businessName) || '';
+  } catch (e) { return ''; }
+}
+
 /* Returns people who need action today, each with a reason and a suggested message.
    Rules:
      contacted, no reply 3+ days   -> follow up
@@ -290,8 +301,9 @@ function pipelineDue() {
       item = { reason: 'Quiet for ' + d + ' days', urgency: 1,
                msg: 'Hi ' + first + ' — kaafi time ho gaya. Jab ready ho, bata dena.' };
     } else if (p.status === 'found' && d >= 1) {
+      var biz = pipelineBusinessName();
       item = { reason: 'Found ' + d + ' day(s) ago — never messaged', urgency: 2,
-               msg: 'Hi ' + first + ' — main [your business] se hoon. Aapke liye ek baat thi, 2 min baat kar sakte hain?' };
+               msg: 'Hi ' + (p.name || 'there') + ' — ' + (biz ? 'main ' + biz + ' se hoon. ' : '') + 'Aapke liye ek baat thi, 2 min baat kar sakte hain?' };
     }
 
     if (item) {
