@@ -244,7 +244,18 @@ function renderEveryone() {
   var html = '';
   people.forEach(function(p) {
     var days = pipelineDaysSince(p.lastStatusAt || p.lastContactedAt);
-    var daysLabel = days === 999 ? 'No contact yet' : days === 0 ? 'Today' : days === 1 ? '1 day ago' : days + ' days ago';
+    var dayN = days === 1 ? '1 day ago' : days + ' days ago';
+    var daysVerb = p.status === 'found'          ? 'Found '
+                 : p.status === 'contacted'      ? 'Messaged '
+                 : p.status === 'replied'        ? 'Replied '
+                 : p.status === 'trial_booked'   ? 'Booked '
+                 : p.status === 'joined'         ? 'Joined '
+                 : p.status === 'not_interested' ? 'Closed '
+                 : p.status === 'gone_quiet'     ? 'Quiet '
+                 : '';
+    var daysLabel = days === 999 ? 'No contact yet'
+                  : days === 0   ? daysVerb + 'today'
+                  :                daysVerb + dayN;
     var statusClass = p.status.replace(/_/g, '_'); /* keep underscores for CSS class match */
     html += '<div class="everyone-row">';
     /* Name + ICP */
