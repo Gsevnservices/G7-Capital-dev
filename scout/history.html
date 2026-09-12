@@ -379,12 +379,27 @@ function viewWeek(idx) {
    EMPTY STATE
 ═══════════════════════════════════════ */
 function renderEmpty() {
+  var hasAnalysis = false;
+  try {
+    var raw = localStorage.getItem(scoutKey('scout_history'));
+    var h = raw ? JSON.parse(raw) : [];
+    hasAnalysis = Array.isArray(h) && h.length > 0;
+  } catch (e) {}
+
+  var title = hasAnalysis ? 'No check-ins yet' : 'No history yet';
+  var desc  = hasAnalysis
+    ? 'Your plan is live. Submit your first Friday check-in and your weekly results will build up here.'
+    : 'Complete your first week and submit a Friday check-in to see your progress here.';
+  var cta   = hasAnalysis
+    ? '<a href="checkin.html" class="btn-start">Go to Friday Check-In →</a>'
+    : '<a href="onboard.html" class="btn-start">Start Your First Analysis →</a>';
+
   document.getElementById('historyList').innerHTML =
     '<div class="empty-state">' +
     '<div class="empty-state-icon">S</div>' +
-    '<div class="empty-state-title">No history yet</div>' +
-    '<div class="empty-state-desc">Complete your first week and submit a Friday check-in to see your progress here.</div>' +
-    '<a href="onboard.html" class="btn-start">Start Your First Analysis →</a>' +
+    '<div class="empty-state-title">' + title + '</div>' +
+    '<div class="empty-state-desc">' + desc + '</div>' +
+    cta +
     '</div>';
 }
 
