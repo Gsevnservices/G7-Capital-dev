@@ -271,8 +271,8 @@ function renderEveryone() {
     if (p.status !== 'joined' && p.status !== 'not_interested') {
       html += '<button class="copy-btn" onclick="evStatus(' + JSON.stringify(p.id) + ', \'joined\')">Joined</button>';
     }
-    if (p.status !== 'not_interested') {
-      html += '<button class="copy-btn" onclick="evStatus(' + JSON.stringify(p.id) + ', \'not_interested\')">✕</button>';
+    if (p.status !== 'not_interested' && p.status !== 'joined') {
+      html += '<button class="copy-btn" onclick="evStatus(' + JSON.stringify(p.id) + ', \'not_interested\')">Not interested</button>';
     }
     html += '</div>';
     html += '</div>';
