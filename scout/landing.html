@@ -64,6 +64,8 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:900;o
 
 /* ============ SECTIONS ============ */
 .section{max-width:1180px;margin:0 auto;padding:128px 64px;border-top:1px solid var(--border3)}
+.video-wrap{max-width:900px;margin:0 auto;aspect-ratio:16/9;border:1px solid var(--border);background:var(--black2)}
+.video-wrap iframe{width:100%;height:100%;display:block;border:0}
 .sec-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--amber);margin-bottom:26px}
 .sec-h{font-family:var(--serif);font-weight:300;line-height:1.12;letter-spacing:-.01em;color:var(--white)}
 .sec-h .it{font-style:italic;color:var(--amber)}
@@ -214,6 +216,21 @@ footer{border-top:1px solid var(--border3);padding:44px 64px;max-width:1340px;ma
     </div>
   </div>
   <div class="scrollcue"><div class="ln"></div><span>Scroll</span></div>
+</section>
+
+<!-- SEE IT WORK -->
+<section class="section" id="demo">
+  <div class="reveal">
+    <div class="sec-label">See It Work</div>
+    <h2 class="sec-h">Two minutes. <span class="it">Start to finish.</span></h2>
+  </div>
+  <div class="video-wrap reveal">
+    <iframe src="https://www.youtube.com/embed/V_jShoqzVFU"
+            title="Scout demo"
+            loading="lazy"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowfullscreen></iframe>
+  </div>
 </section>
 
 <!-- 01 — PROBLEM -->
