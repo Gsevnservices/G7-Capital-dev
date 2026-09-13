@@ -6780,6 +6780,16 @@ truncated one.
 Output this exact JSON structure:
 
 {
+  "economics": {
+    "avgTransactionValue": <number, INR — the value of one sale/visit/order. Digits only, no ₹ symbol, no commas, no unit text. e.g. 2500 not "₹2,500". If genuinely undeterminable from the user's input, use null.>,
+    "isRecurring": <boolean true or false — true if REVENUE MODEL is 'recurring'>,
+    "billingPeriod": <"monthly" | "quarterly" | "yearly" | null — null when REVENUE MODEL is not recurring>,
+    "annualCustomerValue": <number, INR — what ONE customer is worth over 12 months. For recurring: avgTransactionValue multiplied out by billing period (monthly ×12, quarterly ×4, yearly ×1). For repeat: avgTransactionValue × yearly purchase frequency. For one-off or project: equals avgTransactionValue. Digits only, no symbols.>,
+    "currentCustomerCount": <number, digits only — parsed from CURRENT CUSTOMERS field. e.g. "180 active members" → 180>,
+    "targetCustomerCount": <number, digits only — parsed from TARGET (12 MONTHS) field. e.g. "350 active members" → 350>,
+    "monthlyRevenue": <number, INR, digits only — parsed from MONTHLY REVENUE field. If the user gave a range (e.g. "₹4-5 lakh"), use the midpoint (450000). e.g. "₹3 lakh" → 300000>,
+    "confidence": "<high | low — 'high' if the user provided clear numeric figures for transaction value, customer count and revenue; 'low' if any figure had to be inferred from vague text>"
+  },
   "business": "[Business name]",
   "location": "[Area, City, State]",
   "date": "[Generated date]",
@@ -7384,6 +7394,19 @@ CRITICAL JSON RULES:
 — Output ONLY the JSON object
 — Start with { and end with }
 — Nothing before { Nothing after }
+
+ECONOMICS FIELD RULES:
+— Every numeric value must be a raw integer or float with NO currency
+  symbol, comma, lakh/crore suffix, or unit text. 2500 not "₹2,500".
+  300000 not "₹3 lakh". The front-end formats these for display.
+— If a figure genuinely cannot be determined from what the user wrote,
+  use null for that field and set confidence to "low".
+  Never guess a plausible-looking number to fill a gap.
+— annualCustomerValue is always derived, never copied verbatim from
+  the user. Show your calculation logic in revenueVelocityNote (headline),
+  not here — this block is machine-readable only.
+— Numbers and booleans must be emitted as JSON numbers and booleans,
+  never as quoted strings. 2500 not "2500". true not "true".
 
 END OF TYPE 1 FORMAT
 

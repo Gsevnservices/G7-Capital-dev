@@ -614,6 +614,7 @@ function buildCheckinMessage(d) {
 function saveScoutResult(rawOutput, weekNumber) {
 
   var metrics = extractScoutMetrics(rawOutput);
+  var _economics = null;
 
   // Override metrics with JSON headline values if Scout output is valid JSON
   // (new architecture: TYPE 1 onboarding outputs pure JSON)
@@ -630,6 +631,7 @@ function saveScoutResult(rawOutput, weekNumber) {
       if (typeof _hl.momentumScore === 'number') metrics.momentumScore = _hl.momentumScore;
       if (_hl.momentumNote)          metrics.momentumNote    = _hl.momentumNote;
     }
+    if (_parsed && _parsed.economics) _economics = _parsed.economics;
   } catch(e) { /* not JSON — keep regex-extracted metrics */ }
 
   // Build the result object
@@ -642,6 +644,7 @@ function saveScoutResult(rawOutput, weekNumber) {
     acquisitionEff:  metrics.acquisitionEff,
     momentumScore:   metrics.momentumScore,
     momentumNote:    metrics.momentumNote,
+    economics:       _economics,
     totalContacts:   0,   // populated by checkin.html from user input
     totalResponses:  0,
     totalCustomers:  0
