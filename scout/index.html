@@ -9,7 +9,7 @@
 <script src="../assets/scout-master-v1.js?v=19"></script>
 <script src="../assets/auth.js?v=16"></script>
 <script src="../assets/scout.js?v=19"></script>
-<script src="../assets/pipeline.js?v=16"></script>
+<script src="../assets/pipeline.js?v=19"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -576,73 +576,17 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <!-- TODAY LIST — ordered task list: check-in, chase, leads, Scout's plan -->
     <div class="momentum-card" id="todayList" style="display:none"></div>
 
-    <!-- FOUR METRIC CARDS -->
-    <div class="metric-row">
-      <div class="metric-card">
-        <div class="metric-card-label">Money Coming In</div>
-        <div class="metric-card-value" id="dashRevenue">—</div>
-        <div class="metric-card-sub" id="dashRevenueSub">once you record your first sale</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-card-label">Messages Per Customer</div>
-        <div class="metric-card-value" id="dashAcq">—</div>
-        <div class="metric-card-sub" id="dashAcqSub">after your first check-in</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-card-label">New Customers</div>
-        <div class="metric-card-value" id="dashCustomers">—</div>
-        <div class="metric-card-sub" id="dashCustomersSub">after your first check-in</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-card-label">Total New Business</div>
-        <div class="metric-card-value" id="dashTotalRevenue">₹0</div>
-        <div class="metric-card-sub" id="dashTotalRevenueSub">earned since you started — your journey begins now</div>
-      </div>
-    </div>
-
-    <!-- MOMENTUM CARD (Progression System) -->
-    <div class="momentum-card" id="momentumCard">
-      <div class="momentum-card-top">
-        <div class="momentum-label-block">
-          <div class="momentum-eyebrow">Your Scout Score</div>
-          <div class="momentum-level-name" id="dashLevelName">Getting Started</div>
-          <div class="momentum-score-display">
-            <div class="momentum-big" id="dashMomentumScore">0</div>
-            <div class="momentum-denom">/100</div>
-          </div>
-        </div>
-        <div class="momentum-trend" id="dashMomentumTrend"></div>
-      </div>
-      <div class="momentum-bar-wrap">
-        <div class="momentum-bar-fill" id="dashMomentumBar"></div>
-      </div>
-      <button class="score-detail-toggle" id="scoreDetailToggle" onclick="toggleScoreDetail()">Why this score ▾</button>
-      <div class="score-detail" id="scoreDetail">
-        <div class="momentum-level-desc" id="dashLevelDesc">Scout is learning your market and you're taking your first steps. Every message you send this week builds momentum.</div>
-        <div class="momentum-next-level" id="dashNextLevel"></div>
-        <div class="momentum-note" id="dashMomentumNote">
-          Your score starts at zero and grows every week you use Scout. This is week one — you're right on track.
-        </div>
-      </div>
-    </div>
+    <!-- INBOUND LINKS CARD — shown only when businessPhone is set -->
+    <div class="momentum-card" id="inboundCard" style="display:none"></div>
 
     <!-- STREAK BADGE -->
     <div class="streak-badge" id="streakBadge"></div>
-
-    <!-- SCOUT BUSINESS HEALTH SCORE (Feature 5.2) -->
-    <div class="health-card" id="healthScoreCard">
-      <div class="health-eyebrow">What's Driving Your Score</div>
-      <div class="health-empty">Your business health score appears after your first check-in.</div>
-    </div>
 
     <!-- QUICK ACTIONS -->
     <div class="actions-row">
       <a href="checkin.html" class="btn-action-primary">Weekly Check-In →</a>
       <a href="result.html" class="btn-action-outline">View My Full Plan →</a>
     </div>
-
-    <!-- INBOUND LINKS CARD — shown only when businessPhone is set -->
-    <div class="momentum-card" id="inboundCard" style="display:none"></div>
 
     <!-- RECENT HISTORY -->
     <div class="recent-section" id="recentSection">
@@ -724,20 +668,6 @@ function showWelcome() {
 /* Health score bands — 5 dimensions × 20 pts each.
    90/100 = near-perfect across winning customers, revenue, retention,
    reply rate and festival readiness. Bands reflect realistic weekly progress. */
-function getMomentumLevel(score) {
-  var levels = [
-    { min: 0,  max: 30,  name: 'Getting Started',   desc: 'Scout is learning your market. Every message you send builds momentum.',                    next: 31  },
-    { min: 31, max: 50,  name: 'Finding Your Feet',  desc: 'You\'re starting to see what works. Keep going.',                                           next: 51  },
-    { min: 51, max: 70,  name: 'Working Well',       desc: 'Your system is bringing in customers steadily.',                                             next: 71  },
-    { min: 71, max: 85,  name: 'Strong',             desc: 'You have a repeatable way of winning customers.',                                             next: 86  },
-    { min: 86, max: 100, name: 'Outstanding',        desc: 'You\'re running one of the best customer systems in your area.',                              next: null }
-  ];
-  for (var i = 0; i < levels.length; i++) {
-    if (score <= levels[i].max) return levels[i];
-  }
-  return levels[levels.length - 1];
-}
-
 /* ═══════════════════════════════════════════
    SHOW DASHBOARD STATE
 ═══════════════════════════════════════════ */
@@ -775,83 +705,6 @@ function showDashboard(history, weekNum, firmName) {
   /* ── Filter to check-in entries only for all metric displays ── */
   var checkins = history.filter(isCheckinEntry);
   var last = checkins[checkins.length - 1] || {};
-  var prev = checkins.length > 1 ? checkins[checkins.length - 2] : null;
-
-  /* ── MOMENTUM PROGRESSION ── */
-  var score;
-  if (checkins.length === 0) {
-    score = null;
-  } else if (last.healthScore !== undefined) {
-    score = last.healthScore;
-  } else {
-    var _hsRaw = parseInt(localStorage.getItem(scoutKey('scout_health_score')), 10);
-    score = isNaN(_hsRaw) ? null : _hsRaw;
-  }
-  var prevScore = prev
-    ? (prev.healthScore !== undefined ? prev.healthScore : null)
-    : null;
-  var level     = getMomentumLevel(score !== null ? score : 0);
-  var prevLevel = prevScore !== null ? getMomentumLevel(prevScore) : null;
-
-  if (score === null) {
-    document.getElementById('dashMomentumScore').textContent = '—';
-    document.getElementById('dashLevelName').textContent     = '';
-    document.getElementById('dashLevelDesc').textContent     = 'Complete your first Friday check-in to see your progress score.';
-    document.getElementById('dashNextLevel').textContent     = '';
-  } else {
-    document.getElementById('dashMomentumScore').textContent = score;
-    document.getElementById('dashLevelName').textContent     = level.name;
-    document.getElementById('dashLevelDesc').textContent     = level.desc;
-    document.getElementById('dashNextLevel').textContent     = level.next
-      ? 'Next level at ' + level.next + ' points.'
-      : '';
-  }
-
-  /* Mastery glow — Outstanding band starts at 86 */
-  var card = document.getElementById('momentumCard');
-  if (score !== null && score >= 86) { card.classList.add('mastery'); }
-
-  /* Level-up celebration flash */
-  if (score !== null && prevLevel && level.name !== prevLevel.name) {
-    card.classList.add('level-up');
-    setTimeout(function() { card.classList.remove('level-up'); }, 900);
-  }
-
-  /* Animate bar — only when there is a real score */
-  if (score !== null) {
-    setTimeout(function() {
-      document.getElementById('dashMomentumBar').style.width = Math.min(score, 100) + '%';
-    }, 300);
-  }
-
-  /* Trend indicator — only when there are at least 2 check-ins */
-  if (prevScore !== null) {
-    var diff = score - prevScore;
-    var trendEl = document.getElementById('dashMomentumTrend');
-    if (diff > 0) {
-      trendEl.textContent = '↑ up from last week';
-      trendEl.classList.add('up');
-    } else if (diff < 0) {
-      trendEl.textContent = '↓ down from last week';
-      trendEl.classList.add('down');
-    } else {
-      trendEl.textContent = 'same as last week';
-    }
-  }
-
-  /* Momentum note */
-  if (score === null) {
-    document.getElementById('dashMomentumNote').textContent = '';
-  } else if (score === 0) {
-    document.getElementById('dashMomentumNote').textContent =
-      'Your score starts at zero and grows every week you use Scout. This is week one — you\'re right on track.';
-  } else if (last.scoutOutput) {
-    var learnedMatch = last.scoutOutput.match(/WHAT\s+SCOUT\s+LEARNED[\s\S]{0,20}?\n([^\n]+)/i);
-    if (learnedMatch) {
-      document.getElementById('dashMomentumNote').textContent = plainLang(learnedMatch[1].trim());
-    }
-  }
-
   /* ── STREAK BADGE (Feature 3.3) ── */
   var streak = parseInt(localStorage.getItem(scoutKey('scout_streak')) || '0', 10);
   if (streak >= 2) {
@@ -863,70 +716,6 @@ function showDashboard(history, weekNum, firmName) {
     } else {
       sb.textContent = '🔥 Week ' + streak + ' streak — keep going';
     }
-  }
-
-  /* ── METRIC CARDS ── */
-  var custNew = checkins.length > 0 ? (last.totalCustomers || '—') : '—';
-
-  /* Card 1: Money Coming In — computed from check-in revenueAdded fields */
-  var revenue    = '—';
-  var revenueSub = 'once you record your first sale';
-  if (checkins.length > 0) {
-    var totalRev = checkins.reduce(function(s, e) { return s + (parseFloat(e.revenueAdded) || 0); }, 0);
-    if (totalRev > 0) {
-      var avgWeekly = totalRev / checkins.length;
-      if (checkins.length >= 3) {
-        revenue    = '₹' + Math.round(avgWeekly * 4.33).toLocaleString('en-IN') + '/month';
-        revenueSub = 'average, based on your last ' + checkins.length + ' weeks';
-      } else {
-        revenue    = '₹' + Math.round(avgWeekly).toLocaleString('en-IN') + '/week';
-        revenueSub = 'your weekly average so far';
-      }
-    }
-  }
-
-  /* Card 2: Messages Per Customer — cumulative sent vs conversions */
-  var acq    = '—';
-  var acqSub = 'after your first check-in';
-  if (checkins.length > 0) {
-    var totalSentAll = checkins.reduce(function(s, e) {
-      return s + (parseInt(e.icp1_sent, 10) || 0)
-               + (parseInt(e.icp2_sent, 10) || 0)
-               + (parseInt(e.icp3_sent, 10) || 0);
-    }, 0);
-    var totalWonAll = checkins.reduce(function(s, e) {
-      return s + (parseInt(e.icp1_conv, 10) || 0)
-               + (parseInt(e.icp2_conv, 10) || 0)
-               + (parseInt(e.icp3_conv, 10) || 0);
-    }, 0);
-    if (totalWonAll > 0) {
-      acq    = String(Math.round(totalSentAll / totalWonAll));
-      acqSub = 'messages to win one customer';
-    } else if (totalSentAll > 0) {
-      acqSub = totalSentAll + ' messages sent, no customers yet';
-    } else {
-      acqSub = 'after your first check-in';
-    }
-  }
-
-  document.getElementById('dashRevenue').textContent   = revenue;
-  document.getElementById('dashAcq').textContent       = acq;
-  document.getElementById('dashCustomers').textContent = custNew;
-  document.getElementById('dashRevenueSub').textContent   = revenueSub;
-  document.getElementById('dashAcqSub').textContent       = acqSub;
-  document.getElementById('dashCustomersSub').textContent =
-    checkins.length === 0 ? 'after your first check-in' : (custNew !== '—' ? 'won this week' : '');
-
-  /* ── TOTAL REVENUE COUNTER (Feature 3.5) ── */
-  var totalRevenue = checkins.reduce(function(sum, entry) {
-    return sum + (parseFloat(entry.revenueAdded) || 0);
-  }, 0);
-  document.getElementById('dashTotalRevenue').textContent =
-    checkins.length === 0 ? '—' : (totalRevenue > 0 ? '₹' + totalRevenue.toLocaleString('en-IN') : '₹0');
-  if (checkins.length === 0) {
-    document.getElementById('dashTotalRevenueSub').textContent = 'after your first check-in';
-  } else if (totalRevenue > 0) {
-    document.getElementById('dashTotalRevenueSub').textContent = 'earned since you started Scout';
   }
 
   /* ── TODAY LIST — ordered task list replacing todayCard / leadsCard / chaseCard ──
@@ -1010,12 +799,18 @@ function showDashboard(history, weekNum, firmName) {
       });
     }
 
+    /* Dedupe: collect ids already shown in task B so task C does not repeat them */
+    var _shownIds = {};
+    _dueList.slice(0, 3).forEach(function(it) {
+      if (it.person && it.person.id) _shownIds[it.person.id] = true;
+    });
+
     /* ── C: Leads — 'found' businesses not yet messaged ── */
     var _allFound = [];
     try {
       var _store = pipelineLoad();
       _allFound = _store.people
-        .filter(function(p) { return p.status === 'found'; })
+        .filter(function(p) { return p.status === 'found' && !_shownIds[p.id]; })
         .sort(function(a, b) {
           /* Most recently added first — lastContactedAt is set to addedAt on creation */
           var ta = a.lastContactedAt ? new Date(a.lastContactedAt).getTime() : 0;
@@ -1159,19 +954,6 @@ function showDashboard(history, weekNum, firmName) {
     renderMondayBriefing(last, weekNum);
   }
 
-  /* ── BUSINESS HEALTH SCORE (Feature 5.2) ── */
-  if (checkins.length === 0) {
-    /* No check-in entries yet — render placeholder with dash score, no bars */
-    var healthEl = document.getElementById('healthScoreCard');
-    if (healthEl) {
-      healthEl.innerHTML =
-        '<div class="health-eyebrow">What\'s Driving Your Score</div>' +
-        '<div class="health-empty">Your business health score appears after your first check-in.</div>';
-    }
-  } else {
-    renderHealthScore();
-  }
-
   /* ── 12-WEEK ARC (Feature 3.7) ── */
   renderTransformationArc(weekNum);
 
@@ -1283,66 +1065,6 @@ function renderTransformationArc(weekNum) {
    scout_health_breakdown from localStorage
    and renders the 5-dimension health card.
 ═══════════════════════════════════════════ */
-function renderHealthScore() {
-  var el = document.getElementById('healthScoreCard');
-  if (!el) return;
-
-  var scoreRaw    = localStorage.getItem(scoutKey('scout_health_score'));
-  var breakdownRaw = localStorage.getItem(scoutKey('scout_health_breakdown'));
-
-  if (!scoreRaw || !breakdownRaw) {
-    /* No check-in data yet — show default message */
-    return;
-  }
-
-  var breakdown;
-  try { breakdown = JSON.parse(breakdownRaw); } catch(e) { return; }
-
-  /* Ordered dimension list — use label stored by calculateHealthScore(), key as fallback */
-  var dimKeys = ['acquisition', 'revenue', 'retention', 'competitive', 'seasonal'];
-  var dims = dimKeys.map(function(k) {
-    var d = breakdown[k];
-    if (!d) return null;
-    return { key: k, score: d.score, label: d.label || k };
-  }).filter(Boolean);
-
-  /* Find lowest-scoring dimension for focus area */
-  var lowest = dims.reduce(function(a, b) {
-    return (a && a.score <= b.score) ? a : b;
-  }, null);
-
-  var html = '';
-  html += '<div class="health-eyebrow">What\'s Driving Your Score</div>';
-
-  /* Dimension bars */
-  html += '<div class="health-bars">';
-  dims.forEach(function(dim) {
-    var pct = Math.round((dim.score / 20) * 100);
-    html += '<div class="health-dim">';
-    html += '<div class="health-dim-row">';
-    html += '<span class="health-dim-label">' + escHtml(dim.label) + '</span>';
-    html += '<span class="health-dim-score">' + dim.score + '/20</span>';
-    html += '</div>';
-    html += '<div class="health-bar-wrap"><div class="health-bar-fill" style="width:0%" data-pct="' + pct + '"></div></div>';
-    html += '</div>';
-  });
-  html += '</div>';
-
-  /* Focus area */
-  if (lowest) {
-    html += '<div class="health-focus">Where to focus this week: <strong>' + escHtml(lowest.label) + '</strong></div>';
-  }
-
-  el.innerHTML = html;
-
-  /* Animate bars after render */
-  setTimeout(function() {
-    el.querySelectorAll('.health-bar-fill').forEach(function(bar) {
-      bar.style.width = (bar.getAttribute('data-pct') || '0') + '%';
-    });
-  }, 300);
-}
-
 /* ═══════════════════════════════════════════
    RENDER RECENT HISTORY ROWS (last 3 weeks)
 ═══════════════════════════════════════════ */
@@ -1602,14 +1324,6 @@ function formatDate(iso) {
   try {
     return new Date(iso).toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'});
   } catch(e) { return iso.slice(0, 10); }
-}
-
-function toggleScoreDetail() {
-  var detail = document.getElementById('scoreDetail');
-  var btn    = document.getElementById('scoreDetailToggle');
-  if (!detail || !btn) return;
-  var isOpen = detail.classList.toggle('open');
-  btn.textContent = isOpen ? 'Why this score ▴' : 'Why this score ▾';
 }
 
 /* ═══════════════════════════════════════════
