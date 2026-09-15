@@ -1693,6 +1693,7 @@ function initCursor() {
   var rot = 0;
   var pulse = 0;
   var target = 0;
+  var hue = 33;
   window._jarvisPulse = function(v){ target = v; };
   function frame() {
     ctx.clearRect(0,0,W,H);
@@ -1700,6 +1701,8 @@ function initCursor() {
     if (target > 0) target *= 0.88;
     var speed = 0.0016 + pulse * 0.004;
     rot += speed;
+    hue += pulse * 3.2;
+    if (hue > 360) hue -= 360;
     var cos = Math.cos(rot), sin = Math.sin(rot);
     for (var i = 0; i < N; i++) {
       var p = pts[i];
@@ -1712,10 +1715,11 @@ function initCursor() {
       var py = CY + p.y * RR * persp;
       var size = 0.4 + depth * depth * 1.8;
       var alpha = 0.06 + Math.pow(depth, 2.2) * 0.85;
-      var cr = Math.round(224 + pulse * 26);
-      var cg = Math.round(146 + pulse * 62);
-      var cb = Math.round(47 + pulse * 79);
-      ctx.fillStyle = 'rgba(' + cr + ',' + cg + ',' + cb + ',' + Math.min(1, alpha * (1 + pulse * 0.5)).toFixed(3) + ')';
+      var h = pulse > 0.02 ? hue : 33;
+      var sat = 55 + pulse * 35;
+      var lig = 46 + pulse * 18;
+      var a = Math.min(1, alpha * (1 + pulse * 0.5));
+      ctx.fillStyle = 'hsla(' + h.toFixed(1) + ',' + sat.toFixed(0) + '%,' + lig.toFixed(0) + '%,' + a.toFixed(3) + ')';
       ctx.beginPath();
       ctx.arc(px, py, size, 0, Math.PI*2);
       ctx.fill();
