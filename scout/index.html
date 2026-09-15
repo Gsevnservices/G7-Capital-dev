@@ -573,6 +573,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <div class="greeting-week" id="greetingWeek">Week 1 of 12</div>
     </div>
 
+    <div id="voiceTest" style="border:1px solid var(--border);padding:16px;margin:16px 0">
+      <button id="vtSpeak" style="padding:10px 16px;background:var(--amber);border:0;font-size:14px">Speak test line</button>
+      <select id="vtVoice" style="padding:10px;margin-left:8px;max-width:200px"></select>
+      <div id="vtList" style="font-size:11px;color:var(--grey1);margin-top:12px;line-height:1.6"></div>
+    </div>
+
     <!-- TODAY LIST — ordered task list: check-in, chase, leads, Scout's plan -->
     <div class="momentum-card" id="todayList" style="display:none"></div>
 
@@ -1646,6 +1652,33 @@ function initCursor() {
     r.style.transform='translate(-50%,-50%) scale(1)';
   });
 }
+
+(function(){
+  var TEST_LINE = "7 businesses in your pipeline, 5 never messaged. They have been sitting 31 days. Start with Smartried Software. Do the messages first.";
+  function fill() {
+    var voices = speechSynthesis.getVoices().filter(function(v){ return v.lang.indexOf('en') === 0; });
+    var sel = document.getElementById('vtVoice');
+    var list = document.getElementById('vtList');
+    if (!sel || !list) return;
+    sel.innerHTML = voices.map(function(v,i){
+      return '<option value="'+i+'">'+v.name+' ('+v.lang+')</option>';
+    }).join('');
+    list.textContent = voices.length + ' English voices: ' +
+      voices.map(function(v){ return v.name+' / '+v.lang; }).join('  ·  ');
+    window._vtVoices = voices;
+  }
+  speechSynthesis.onvoiceschanged = fill;
+  fill();
+  var btn = document.getElementById('vtSpeak');
+  if (btn) btn.addEventListener('click', function(){
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(TEST_LINE);
+    var idx = parseInt(document.getElementById('vtVoice').value, 10);
+    if (window._vtVoices && window._vtVoices[idx]) u.voice = window._vtVoices[idx];
+    u.rate = 0.95;
+    speechSynthesis.speak(u);
+  });
+})();
 </script>
 </body>
 </html>
