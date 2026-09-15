@@ -573,8 +573,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <div class="greeting-week" id="greetingWeek">Week 1 of 12</div>
     </div>
 
-    <div id="jarvisBlock" style="text-align:center;padding:24px 0">
-      <canvas id="jarvisCanvas" width="360" height="360" style="max-width:100%;height:auto"></canvas>
+    <div id="jarvisBlock" style="text-align:center;padding:8px 0">
+      <canvas id="jarvisCanvas" width="260" height="260" style="max-width:100%;height:auto"></canvas>
       <div style="margin-top:16px">
         <button id="vtSpeak" style="padding:10px 16px;background:var(--amber);border:0;font-size:14px">Speak test line</button>
         <select id="vtVoice" style="padding:10px;margin-left:8px;max-width:200px"></select>
@@ -1687,8 +1687,8 @@ function initCursor() {
   var cv = document.getElementById('jarvisCanvas');
   if (!cv) return;
   var ctx = cv.getContext('2d');
-  var W = cv.width, H = cv.height, CX = W/2, CY = H/2, R = 130;
-  var N = 900;
+  var W = cv.width, H = cv.height, CX = W/2, CY = H/2, R = 88;
+  var N = 700;
   var pts = [];
   for (var i = 0; i < N; i++) {
     var y = 1 - (i / (N - 1)) * 2;
@@ -1705,11 +1705,13 @@ function initCursor() {
       var p = pts[i];
       var x = p.x*cos - p.z*sin;
       var z = p.x*sin + p.z*cos;
+      var persp = 1.9 / (1.9 - z);
       var depth = (z + 1) / 2;
-      var px = CX + x*R;
-      var py = CY + p.y*R;
-      var size = 0.5 + depth*1.3;
-      ctx.fillStyle = 'rgba(224,146,47,' + (0.12 + depth*0.55).toFixed(3) + ')';
+      var px = CX + x * R * persp;
+      var py = CY + p.y * R * persp;
+      var size = 0.4 + depth * depth * 1.8;
+      var alpha = 0.06 + Math.pow(depth, 2.2) * 0.85;
+      ctx.fillStyle = 'rgba(224,146,47,' + alpha.toFixed(3) + ')';
       ctx.beginPath();
       ctx.arc(px, py, size, 0, Math.PI*2);
       ctx.fill();
