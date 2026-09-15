@@ -575,10 +575,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
     <div id="jarvisBlock" style="text-align:center;padding:8px 0">
       <canvas id="jarvisCanvas" width="260" height="260" style="max-width:100%;height:auto"></canvas>
-      <div style="margin-top:16px">
-        <button id="vtSpeak" style="padding:10px 16px;background:var(--amber);border:0;font-size:14px">Speak test line</button>
-        <select id="vtVoice" style="padding:10px;margin-left:8px;max-width:200px"></select>
-        <div id="vtList" style="font-size:11px;color:var(--grey1);margin-top:12px;line-height:1.6"></div>
+      <div style="margin-top:20px">
+        <button id="jarvisAsk" style="padding:12px 24px;background:transparent;border:1px solid var(--amber);color:var(--amber);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">What's my update today?</button>
       </div>
     </div>
 
@@ -1657,27 +1655,21 @@ function initCursor() {
 }
 
 (function(){
-  var TEST_LINE = "7 businesses in your pipeline, 5 never messaged. They have been sitting 31 days. Start with Smartried Software. Do the messages first.";
-  function fill() {
-    var voices = speechSynthesis.getVoices().filter(function(v){ return v.lang.indexOf('en') === 0; });
-    var sel = document.getElementById('vtVoice');
-    var list = document.getElementById('vtList');
-    if (!sel || !list) return;
-    sel.innerHTML = voices.map(function(v,i){
-      return '<option value="'+i+'">'+v.name+' ('+v.lang+')</option>';
-    }).join('');
-    list.textContent = voices.length + ' English voices: ' +
-      voices.map(function(v){ return v.name+' / '+v.lang; }).join('  ·  ');
-    window._vtVoices = voices;
+  var LINE = "7 businesses in your pipeline, 5 never messaged. They have been sitting 31 days. Start with Smartried Software. Do the messages first.";
+  function pickVoice() {
+    var v = speechSynthesis.getVoices();
+    return v.find(function(x){ return x.name === 'Samantha'; })
+        || v.find(function(x){ return x.lang === 'en-IN'; })
+        || v.find(function(x){ return x.lang === 'en-US'; })
+        || null;
   }
-  speechSynthesis.onvoiceschanged = fill;
-  fill();
-  var btn = document.getElementById('vtSpeak');
-  if (btn) btn.addEventListener('click', function(){
+  var btn = document.getElementById('jarvisAsk');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
     speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance(TEST_LINE);
-    var idx = parseInt(document.getElementById('vtVoice').value, 10);
-    if (window._vtVoices && window._vtVoices[idx]) u.voice = window._vtVoices[idx];
+    var u = new SpeechSynthesisUtterance(LINE);
+    var v = pickVoice();
+    if (v) u.voice = v;
     u.rate = 0.95;
     speechSynthesis.speak(u);
   });
