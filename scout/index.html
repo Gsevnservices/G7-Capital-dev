@@ -573,10 +573,13 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <div class="greeting-week" id="greetingWeek">Week 1 of 12</div>
     </div>
 
-    <div id="voiceTest" style="border:1px solid var(--border);padding:16px;margin:16px 0">
-      <button id="vtSpeak" style="padding:10px 16px;background:var(--amber);border:0;font-size:14px">Speak test line</button>
-      <select id="vtVoice" style="padding:10px;margin-left:8px;max-width:200px"></select>
-      <div id="vtList" style="font-size:11px;color:var(--grey1);margin-top:12px;line-height:1.6"></div>
+    <div id="jarvisBlock" style="text-align:center;padding:24px 0">
+      <canvas id="jarvisCanvas" width="360" height="360" style="max-width:100%;height:auto"></canvas>
+      <div style="margin-top:16px">
+        <button id="vtSpeak" style="padding:10px 16px;background:var(--amber);border:0;font-size:14px">Speak test line</button>
+        <select id="vtVoice" style="padding:10px;margin-left:8px;max-width:200px"></select>
+        <div id="vtList" style="font-size:11px;color:var(--grey1);margin-top:12px;line-height:1.6"></div>
+      </div>
     </div>
 
     <!-- TODAY LIST — ordered task list: check-in, chase, leads, Scout's plan -->
@@ -1678,6 +1681,42 @@ function initCursor() {
     u.rate = 0.95;
     speechSynthesis.speak(u);
   });
+})();
+
+(function(){
+  var cv = document.getElementById('jarvisCanvas');
+  if (!cv) return;
+  var ctx = cv.getContext('2d');
+  var W = cv.width, H = cv.height, CX = W/2, CY = H/2, R = 130;
+  var N = 900;
+  var pts = [];
+  for (var i = 0; i < N; i++) {
+    var y = 1 - (i / (N - 1)) * 2;
+    var rad = Math.sqrt(1 - y*y);
+    var theta = i * Math.PI * (3 - Math.sqrt(5));
+    pts.push({ x: Math.cos(theta)*rad, y: y, z: Math.sin(theta)*rad });
+  }
+  var rot = 0;
+  function frame() {
+    ctx.clearRect(0,0,W,H);
+    rot += 0.0016;
+    var cos = Math.cos(rot), sin = Math.sin(rot);
+    for (var i = 0; i < N; i++) {
+      var p = pts[i];
+      var x = p.x*cos - p.z*sin;
+      var z = p.x*sin + p.z*cos;
+      var depth = (z + 1) / 2;
+      var px = CX + x*R;
+      var py = CY + p.y*R;
+      var size = 0.5 + depth*1.3;
+      ctx.fillStyle = 'rgba(224,146,47,' + (0.12 + depth*0.55).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(px, py, size, 0, Math.PI*2);
+      ctx.fill();
+    }
+    requestAnimationFrame(frame);
+  }
+  frame();
 })();
 </script>
 </body>
