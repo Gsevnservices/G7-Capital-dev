@@ -1712,7 +1712,10 @@ function initCursor() {
       var py = CY + p.y * RR * persp;
       var size = 0.4 + depth * depth * 1.8;
       var alpha = 0.06 + Math.pow(depth, 2.2) * 0.85;
-      ctx.fillStyle = 'rgba(224,146,47,' + alpha.toFixed(3) + ')';
+      var cr = Math.round(224 + pulse * 26);
+      var cg = Math.round(146 + pulse * 62);
+      var cb = Math.round(47 + pulse * 79);
+      ctx.fillStyle = 'rgba(' + cr + ',' + cg + ',' + cb + ',' + Math.min(1, alpha * (1 + pulse * 0.5)).toFixed(3) + ')';
       ctx.beginPath();
       ctx.arc(px, py, size, 0, Math.PI*2);
       ctx.fill();
