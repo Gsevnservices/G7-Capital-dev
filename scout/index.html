@@ -1701,7 +1701,7 @@ function initCursor() {
     if (target > 0) target *= 0.88;
     var speed = 0.0016 + pulse * 0.004;
     rot += speed;
-    hue += pulse * 3.2;
+    hue += pulse * 0.55;
     if (hue > 360) hue -= 360;
     var cos = Math.cos(rot), sin = Math.sin(rot);
     for (var i = 0; i < N; i++) {
