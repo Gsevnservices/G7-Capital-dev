@@ -1671,6 +1671,8 @@ function initCursor() {
     var v = pickVoice();
     if (v) u.voice = v;
     u.rate = 0.95;
+    u.onboundary = function(){ if (window._jarvisPulse) window._jarvisPulse(1); };
+    u.onend = function(){ if (window._jarvisPulse) window._jarvisPulse(0); };
     speechSynthesis.speak(u);
   });
 })();
@@ -1689,9 +1691,15 @@ function initCursor() {
     pts.push({ x: Math.cos(theta)*rad, y: y, z: Math.sin(theta)*rad });
   }
   var rot = 0;
+  var pulse = 0;
+  var target = 0;
+  window._jarvisPulse = function(v){ target = v; };
   function frame() {
     ctx.clearRect(0,0,W,H);
-    rot += 0.0016;
+    pulse += (target - pulse) * 0.12;
+    if (target > 0) target *= 0.88;
+    var speed = 0.0016 + pulse * 0.004;
+    rot += speed;
     var cos = Math.cos(rot), sin = Math.sin(rot);
     for (var i = 0; i < N; i++) {
       var p = pts[i];
@@ -1699,8 +1707,9 @@ function initCursor() {
       var z = p.x*sin + p.z*cos;
       var persp = 1.9 / (1.9 - z);
       var depth = (z + 1) / 2;
-      var px = CX + x * R * persp;
-      var py = CY + p.y * R * persp;
+      var RR = R * (1 + pulse * 0.13);
+      var px = CX + x * RR * persp;
+      var py = CY + p.y * RR * persp;
       var size = 0.4 + depth * depth * 1.8;
       var alpha = 0.06 + Math.pow(depth, 2.2) * 0.85;
       ctx.fillStyle = 'rgba(224,146,47,' + alpha.toFixed(3) + ')';
