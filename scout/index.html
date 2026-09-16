@@ -1677,6 +1677,73 @@ function initCursor() {
   });
 })();
 
+/* ═══════════════════════════════════════════
+   JARVIS STATE — pure arithmetic over pipeline + history.
+   Returns an object of real counts. No inference, no model call.
+   Every number here must be computed, never guessed.
+═══════════════════════════════════════════ */
+function jarvisState() {
+  var s = {
+    leadsFound: 0, neverMessaged: 0, oldestUnmessagedDays: 0,
+    oldestUnmessagedName: '', contacted: 0, replied: 0, booked: 0,
+    joined: 0, notInterested: 0, dueToday: 0,
+    repliedUnchased: [], sentThisWeek: 0, sentLastWeek: 0,
+    checkinCount: 0, weeksSinceLastCheckin: null
+  };
+
+  try {
+    var store = pipelineLoad();
+    var people = (store && store.people) || [];
+    s.leadsFound = people.length;
+
+    people.forEach(function(p) {
+      if (p.status === 'found') {
+        s.neverMessaged++;
+        var d = pipelineDaysSince(p.lastStatusAt || p.lastContactedAt);
+        if (d !== 999 && d > s.oldestUnmessagedDays) {
+          s.oldestUnmessagedDays = d;
+          s.oldestUnmessagedName = p.name || '';
+        }
+      }
+      if (p.status === 'contacted')      s.contacted++;
+      if (p.status === 'replied')        s.replied++;
+      if (p.status === 'trial_booked')   s.booked++;
+      if (p.status === 'joined')         s.joined++;
+      if (p.status === 'not_interested') s.notInterested++;
+
+      if (p.status === 'replied') {
+        var rd = pipelineDaysSince(p.lastStatusAt);
+        if (rd !== 999 && rd >= 2) {
+          s.repliedUnchased.push({ name: p.name || '', days: rd });
+        }
+      }
+    });
+  } catch (e) {}
+
+  try { s.dueToday = pipelineDue().length; } catch (e) {}
+
+  try {
+    var hist = JSON.parse(localStorage.getItem(scoutKey('scout_history')) || '[]');
+    var checkins = hist.filter(isCheckinEntry);
+    s.checkinCount = checkins.length;
+    if (checkins.length > 0) {
+      var lastC = checkins[checkins.length - 1];
+      var cd = pipelineDaysSince(lastC.timestamp);
+      s.weeksSinceLastCheckin = cd === 999 ? null : Math.floor(cd / 7);
+      function sent(e) {
+        return (parseInt(e.icp1_sent, 10) || 0)
+             + (parseInt(e.icp2_sent, 10) || 0)
+             + (parseInt(e.icp3_sent, 10) || 0);
+      }
+      s.sentThisWeek = sent(lastC);
+      if (checkins.length > 1) s.sentLastWeek = sent(checkins[checkins.length - 2]);
+    }
+  } catch (e) {}
+
+  return s;
+}
+window.jarvisState = jarvisState;
+
 (function(){
   var cv = document.getElementById('jarvisCanvas');
   if (!cv) return;
