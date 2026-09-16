@@ -1655,7 +1655,6 @@ function initCursor() {
 }
 
 (function(){
-  var LINE = "7 businesses in your pipeline, 5 never messaged. They have been sitting 31 days. Start with Smartried Software. Do the messages first.";
   function pickVoice() {
     var v = speechSynthesis.getVoices();
     return v.find(function(x){ return x.name === 'Samantha'; })
@@ -1667,7 +1666,7 @@ function initCursor() {
   if (!btn) return;
   btn.addEventListener('click', function(){
     speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance(LINE);
+    var u = new SpeechSynthesisUtterance(jarvisBriefing());
     var v = pickVoice();
     if (v) u.voice = v;
     u.rate = 0.95;
@@ -1743,6 +1742,67 @@ function jarvisState() {
   return s;
 }
 window.jarvisState = jarvisState;
+
+/* ═══════════════════════════════════════════
+   JARVIS BRIEFING — turns jarvisState() into spoken sentences.
+   Every number comes from the state object. Nothing is invented.
+   Three tiers by how much the user has actually done.
+═══════════════════════════════════════════ */
+function jarvisBriefing() {
+  var s = jarvisState();
+  var out = [];
+  var plural = function(n, one, many) { return n === 1 ? one : many; };
+
+  /* Tier 0 — empty pipeline */
+  if (s.leadsFound === 0) {
+    return 'Your pipeline is empty. Open Customer Finder and add your first few businesses, then I can tell you who to chase.';
+  }
+
+  /* Tier 1 — leads exist, nothing messaged yet */
+  if (s.contacted === 0 && s.replied === 0 && s.joined === 0) {
+    out.push(s.leadsFound + ' ' + plural(s.leadsFound, 'business', 'businesses') + ' in your pipeline. ' +
+             (s.neverMessaged === s.leadsFound ? 'None have been messaged' : s.neverMessaged + ' never messaged') + '.');
+    if (s.oldestUnmessagedDays >= 2 && s.oldestUnmessagedName) {
+      out.push('The oldest has been waiting ' + s.oldestUnmessagedDays + ' days. Start with ' + s.oldestUnmessagedName + '.');
+    } else if (s.oldestUnmessagedName) {
+      out.push('Start with ' + s.oldestUnmessagedName + '.');
+    }
+    return out.join(' ');
+  }
+
+  /* Tier 2 and 3 — real activity */
+  out.push(s.leadsFound + ' in your pipeline. ' + s.contacted + ' messaged, ' +
+           s.replied + ' replied, ' + s.joined + ' joined.');
+
+  if (s.neverMessaged > 0) {
+    out.push(s.neverMessaged + ' still ' + plural(s.neverMessaged, 'has', 'have') +
+             ' never been messaged' +
+             (s.oldestUnmessagedDays >= 7 ? ', the oldest for ' + s.oldestUnmessagedDays + ' days' : '') + '.');
+  }
+
+  if (s.repliedUnchased.length > 0) {
+    var r = s.repliedUnchased[0];
+    out.push(r.name + ' replied ' + r.days + ' days ago and has not been followed up. Replies go cold after a week. Do that first.');
+  } else if (s.dueToday > 0) {
+    out.push(s.dueToday + ' ' + plural(s.dueToday, 'person needs', 'people need') + ' chasing today.');
+  }
+
+  /* Tier 3 — week-over-week, only when two or more check-ins exist */
+  if (s.checkinCount >= 2) {
+    if (s.sentThisWeek < s.sentLastWeek) {
+      out.push('You sent ' + s.sentThisWeek + ' messages last week, down from ' + s.sentLastWeek + ' the week before.');
+    } else if (s.sentThisWeek > s.sentLastWeek) {
+      out.push('You sent ' + s.sentThisWeek + ' messages last week, up from ' + s.sentLastWeek + '.');
+    }
+  }
+
+  if (s.weeksSinceLastCheckin !== null && s.weeksSinceLastCheckin >= 2) {
+    out.push('Your last check-in was ' + s.weeksSinceLastCheckin + ' weeks ago. I cannot track revenue without it.');
+  }
+
+  return out.join(' ');
+}
+window.jarvisBriefing = jarvisBriefing;
 
 (function(){
   var cv = document.getElementById('jarvisCanvas');
