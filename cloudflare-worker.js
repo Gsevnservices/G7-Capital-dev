@@ -749,6 +749,51 @@ export default {
     }
 
     // =========================================================================
+    // ROUTE 13b — POST /scout/briefing
+    // Lightweight non-streaming call for Jarvis voice briefings.
+    // Session-protected. No rate limit — briefings are cheap and frequent.
+    // Returns plain JSON { text } instead of SSE stream.
+    // =========================================================================
+    if (request.method === 'POST' && path === '/scout/briefing') {
+      const session = await validateSession(request, env);
+      if (!session) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400);
+      }
+
+      const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model:      'claude-sonnet-4-6',
+          max_tokens: 400,
+          stream:     false,
+          messages:   body.messages || []
+        })
+      });
+
+      if (!anthropicResponse.ok) {
+        const errText = await anthropicResponse.text();
+        return jsonResponse({ error: 'Anthropic error', detail: errText }, anthropicResponse.status);
+      }
+
+      const result = await anthropicResponse.json();
+      const text = (result.content && result.content[0] && result.content[0].text) || '';
+
+      return jsonResponse({ text: text });
+    }
+
+    // =========================================================================
     // ROUTE 14 — POST /scout/checkin
     // Scout weekly check-in. Session-protected.
     // Multi-turn conversation — lower max_tokens than initial analysis.
