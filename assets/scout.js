@@ -1493,9 +1493,18 @@ function speakableName(s) {
   out = out.replace(/[.,]/g, ' ');
   out = out.replace(/\b(pvt|private|ltd|limited|llp|inc|incorporated|corp|corporation|co|company|and co)\b/gi, ' ');
   out = out.replace(/\b(technologies|technology|solutions|services|enterprises|ventures|industries|systems|group|holdings)\b/gi, ' ');
+  /* Cut at a separator if there is one — business names often carry a
+     descriptive tail after a dash, pipe or bullet that adds nothing spoken. */
+  var sep = out.split(/\s+[-–—|·]\s+/)[0];
+  if (sep && sep.trim().length >= 3) out = sep;
+
   out = out.replace(/\s+/g, ' ').trim();
   var words = out.split(' ');
   if (words.length > 4) out = words.slice(0, 4).join(' ');
+
+  /* Never end on punctuation — TTS reads a trailing dash aloud or pauses. */
+  out = out.replace(/[\s\-–—|·,&]+$/, '').trim();
+
   return out || String(s).trim();
 }
 
