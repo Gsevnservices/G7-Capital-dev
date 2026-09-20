@@ -1416,6 +1416,90 @@ async function repairOrphanedScoutResult() {
 }
 
 
+/* ═══════════════════════════════════════════
+   SPEAKABLE — number and name formatting for text-to-speech.
+   TTS reads "₹1,20,000" as "rupees one comma two zero comma zero zero zero".
+   These convert to what a person would actually say.
+   Indian numbering system: thousand, lakh, crore.
+═══════════════════════════════════════════ */
+var _SPK_ONES = ['zero','one','two','three','four','five','six','seven','eight',
+  'nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen',
+  'seventeen','eighteen','nineteen'];
+var _SPK_TENS = ['','','twenty','thirty','forty','fifty','sixty','seventy',
+  'eighty','ninety'];
+
+function _spkUnder100(n) {
+  if (n < 20) return _SPK_ONES[n];
+  var t = Math.floor(n / 10), r = n % 10;
+  return _SPK_TENS[t] + (r ? '-' + _SPK_ONES[r] : '');
+}
+
+function _spkUnder1000(n) {
+  if (n < 100) return _spkUnder100(n);
+  var h = Math.floor(n / 100), r = n % 100;
+  return _SPK_ONES[h] + ' hundred' + (r ? ' ' + _spkUnder100(r) : '');
+}
+
+/* speakable(42000)        -> "forty-two thousand"
+   speakable(120000)       -> "one lakh twenty thousand"
+   speakable(4500000)      -> "forty-five lakh"
+   speakable(12500000)     -> "one crore twenty-five lakh"
+   speakable(34)           -> "thirty-four"
+   speakable(42500, true)  -> "about forty-two thousand"   (rounded)
+   Non-numeric or NaN returns an empty string. */
+function speakable(n, round) {
+  n = Number(n);
+  if (!isFinite(n)) return '';
+  var neg = n < 0;
+  n = Math.abs(Math.round(n));
+
+  if (round) {
+    if (n >= 10000000)  n = Math.round(n / 100000) * 100000;
+    else if (n >= 100000) n = Math.round(n / 10000) * 10000;
+    else if (n >= 10000)  n = Math.round(n / 1000) * 1000;
+    else if (n >= 1000)   n = Math.round(n / 100) * 100;
+  }
+
+  if (n === 0) return 'zero';
+
+  var parts = [];
+  var crore = Math.floor(n / 10000000); n %= 10000000;
+  var lakh  = Math.floor(n / 100000);   n %= 100000;
+  var thou  = Math.floor(n / 1000);     n %= 1000;
+
+  if (crore) parts.push(_spkUnder1000(crore) + ' crore');
+  if (lakh)  parts.push(_spkUnder1000(lakh) + ' lakh');
+  if (thou)  parts.push(_spkUnder1000(thou) + ' thousand');
+  if (n)     parts.push(_spkUnder1000(n));
+
+  var out = parts.join(' ');
+  return (neg ? 'minus ' : '') + out;
+}
+
+/* speakableMoney(42000) -> "forty-two thousand rupees" */
+function speakableMoney(n, round) {
+  var s = speakable(n, round);
+  return s ? s + ' rupees' : '';
+}
+
+/* speakableName("Smartried Software Technologies PVT LTD")
+     -> "Smartried Software"
+   Strips legal suffixes and trailing corporate filler so TTS does not
+   spell out "P V T L T D". Never returns empty — falls back to the
+   original string if stripping would remove everything. */
+function speakableName(s) {
+  if (!s) return '';
+  var out = String(s);
+  out = out.replace(/[.,]/g, ' ');
+  out = out.replace(/\b(pvt|private|ltd|limited|llp|inc|incorporated|corp|corporation|co|company|and co)\b/gi, ' ');
+  out = out.replace(/\b(technologies|technology|solutions|services|enterprises|ventures|industries|systems|group|holdings)\b/gi, ' ');
+  out = out.replace(/\s+/g, ' ').trim();
+  var words = out.split(' ');
+  if (words.length > 4) out = words.slice(0, 4).join(' ');
+  return out || String(s).trim();
+}
+
+
 // ─────────────────────────────────────────────────────────────
 // MODULE EXPORT (Node.js validation only)
 // Not used in browser — Scout pages load this via <script> tag
