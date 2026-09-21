@@ -1677,12 +1677,31 @@ function initCursor() {
 })();
 
 /* ═══════════════════════════════════════════
+   JARVIS MODE — what kind of briefing fits the hour.
+   morning  05:00–11:59  lead with what to do today
+   midday   12:00–17:59  lead with what is still outstanding
+   evening  18:00–04:59  lead with what moved, what waits tomorrow
+   window._jarvisHourOverride (0–23) forces an hour for testing.
+═══════════════════════════════════════════ */
+function jarvisMode() {
+  var h = (typeof window._jarvisHourOverride === 'number')
+    ? window._jarvisHourOverride
+    : new Date().getHours();
+  if (h >= 5 && h < 12)  return 'morning';
+  if (h >= 12 && h < 18) return 'midday';
+  return 'evening';
+}
+window.jarvisMode = jarvisMode;
+
+/* ═══════════════════════════════════════════
    JARVIS STATE — pure arithmetic over pipeline + history.
    Returns an object of real counts. No inference, no model call.
    Every number here must be computed, never guessed.
 ═══════════════════════════════════════════ */
 function jarvisState() {
   var s = {
+    mode: jarvisMode(),
+    dayName: ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()],
     leadsFound: 0, neverMessaged: 0, oldestUnmessagedDays: 0,
     oldestUnmessagedName: '', contacted: 0, replied: 0, booked: 0,
     joined: 0, notInterested: 0, dueToday: 0,
