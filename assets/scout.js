@@ -48,7 +48,8 @@ var SCOUT_STATE_KEYS = [
   'scout_referral_chain',
   'scout_pipeline',
   'scout_onboard_draft',
-  'scout_daily_snapshot'
+  'scout_daily_snapshot',
+  'scout_jarvis_pinned'
 ];
 
 /* DEPRECATED — intentionally disabled.

@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/scout-master-v1.js?v=19"></script>
 <script src="../assets/auth.js?v=16"></script>
-<script src="../assets/scout.js?v=22"></script>
+<script src="../assets/scout.js?v=23"></script>
 <script src="../assets/pipeline.js?v=16"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -580,6 +580,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       </div>
     </div>
 
+    <div id="jarvisPinned" style="display:none;max-width:560px;margin:8px auto 24px"></div>
+
     <!-- TODAY LIST — ordered task list: check-in, chase, leads, Scout's plan -->
     <div class="momentum-card" id="todayList" style="display:none"></div>
 
@@ -694,6 +696,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   await loadScoutStateFromServer();
   await repairOrphanedScoutResult(); // must run after server load, before first scoped read
   jarvisWriteSnapshot();
+  jarvisPinnedRender();
 
   /* Firm name in nav */
   var firmName = localStorage.getItem('g7_session_name') || '';
@@ -1795,6 +1798,97 @@ function jarvisConversion() {
 window.jarvisConversion = jarvisConversion;
 
 /* ═══════════════════════════════════════════
+   PINNED ACTIONS — what Jarvis told him to do, held until he does it.
+   He may hear the briefing while driving and be unable to act. The action
+   waits on the dashboard. Synced so it follows him across devices.
+   Max 3. Cleared when dismissed, or automatically when the lead it refers
+   to changes status — at that point he has acted on it.
+═══════════════════════════════════════════ */
+function jarvisPinnedLoad() {
+  try { return JSON.parse(localStorage.getItem(scoutKey('scout_jarvis_pinned')) || '[]'); }
+  catch (e) { return []; }
+}
+
+function jarvisPinnedSave(list) {
+  try {
+    localStorage.setItem(scoutKey('scout_jarvis_pinned'), JSON.stringify(list));
+    if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer();
+  } catch (e) {}
+}
+
+/* jarvisPin('Message Smartried Software', leadId)
+   leadId is optional. When given, the pin clears itself once that lead's
+   status moves on. Duplicate text is ignored. */
+function jarvisPin(text, leadId) {
+  if (!text) return;
+  var list = jarvisPinnedLoad();
+  if (list.some(function(p){ return p.text === text; })) return;
+  var statusAtPin = null;
+  if (leadId) {
+    try {
+      var lp = (pipelineLoad().people || []).filter(function(x){ return x.id === leadId; })[0];
+      statusAtPin = lp ? lp.status : null;
+    } catch (e) {}
+  }
+  list.unshift({
+    id: 'pin_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    text: String(text),
+    leadId: leadId || null,
+    statusAtPin: statusAtPin,
+    createdAt: new Date().toISOString()
+  });
+  jarvisPinnedSave(list.slice(0, 3));
+  jarvisPinnedRender();
+}
+
+function jarvisUnpin(id) {
+  jarvisPinnedSave(jarvisPinnedLoad().filter(function(p){ return p.id !== id; }));
+  jarvisPinnedRender();
+}
+
+/* Drop pins whose lead has moved on. Returns true if anything changed. */
+function jarvisPinnedPrune() {
+  var list = jarvisPinnedLoad();
+  if (!list.length) return false;
+  var people = [];
+  try { people = pipelineLoad().people || []; } catch (e) {}
+  var kept = list.filter(function(p) {
+    if (!p.leadId) return true;
+    var lp = people.filter(function(x){ return x.id === p.leadId; })[0];
+    if (!lp) return false;
+    return lp.status === p.statusAtPin;
+  });
+  if (kept.length !== list.length) { jarvisPinnedSave(kept); return true; }
+  return false;
+}
+
+function jarvisPinnedRender() {
+  var el = document.getElementById('jarvisPinned');
+  if (!el) return;
+  jarvisPinnedPrune();
+  var list = jarvisPinnedLoad();
+  if (!list.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  var html = '<div style="font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--amber);margin-bottom:12px">Jarvis said</div>';
+  list.forEach(function(p) {
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;margin-bottom:8px;border-left:2px solid var(--amber);background:rgba(224,146,47,0.05)">' +
+      '<span style="font-size:14px;color:var(--white);line-height:1.5">' + escHtml(p.text) + '</span>' +
+      '<button data-unpin="' + escHtml(p.id) + '" style="flex:0 0 auto;background:transparent;border:1px solid var(--border);color:var(--grey1);font-family:inherit;font-size:10px;letter-spacing:.18em;text-transform:uppercase;padding:6px 12px;cursor:pointer">Done</button>' +
+      '</div>';
+  });
+  el.innerHTML = html;
+  el.style.display = 'block';
+}
+
+document.addEventListener('click', function(e) {
+  var b = e.target.closest && e.target.closest('[data-unpin]');
+  if (b) jarvisUnpin(b.getAttribute('data-unpin'));
+});
+
+window.jarvisPin = jarvisPin;
+window.jarvisUnpin = jarvisUnpin;
+window.jarvisPinnedRender = jarvisPinnedRender;
+
+/* ═══════════════════════════════════════════
    JARVIS MODE — what kind of briefing fits the hour.
    morning  05:00–11:59  lead with what to do today
    midday   12:00–17:59  lead with what is still outstanding
@@ -1822,6 +1916,7 @@ function jarvisState() {
     dayName: ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()],
     changedSince: jarvisChangedSince(),
     conversion: jarvisConversion(),
+    pinned: jarvisPinnedLoad().map(function(p){ return p.text; }),
     leadsFound: 0, neverMessaged: 0, oldestUnmessagedDays: 0,
     oldestUnmessagedName: '', contacted: 0, replied: 0, booked: 0,
     joined: 0, notInterested: 0, dueToday: 0,
