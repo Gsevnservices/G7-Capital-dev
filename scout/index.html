@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/scout-master-v1.js?v=19"></script>
 <script src="../assets/auth.js?v=16"></script>
-<script src="../assets/scout.js?v=21"></script>
+<script src="../assets/scout.js?v=22"></script>
 <script src="../assets/pipeline.js?v=16"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -693,6 +693,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   migrateUnscopedScoutKeys();
   await loadScoutStateFromServer();
   await repairOrphanedScoutResult(); // must run after server load, before first scoped read
+  jarvisWriteSnapshot();
 
   /* Firm name in nav */
   var firmName = localStorage.getItem('g7_session_name') || '';
@@ -1677,6 +1678,72 @@ function initCursor() {
 })();
 
 /* ═══════════════════════════════════════════
+   DAILY SNAPSHOT — one entry per local date, last 14 days kept.
+   Stores cumulative funnel stage reached, not raw status counts, so the
+   numbers only rise and a day-over-day difference is always real movement.
+   Today's entry is overwritten on every load; yesterday's is left as the
+   last state seen yesterday.
+═══════════════════════════════════════════ */
+function jarvisLocalDate(d) {
+  d = d || new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+function jarvisFunnel() {
+  var f = { leads: 0, reachedContacted: 0, reachedReplied: 0, reachedBooked: 0, reachedJoined: 0 };
+  try {
+    var people = (pipelineLoad().people) || [];
+    f.leads = people.length;
+    people.forEach(function(p) {
+      var st = p.status;
+      if (st === 'contacted' || st === 'replied' || st === 'trial_booked' || st === 'joined' || st === 'gone_quiet') f.reachedContacted++;
+      if (st === 'replied' || st === 'trial_booked' || st === 'joined') f.reachedReplied++;
+      if (st === 'trial_booked' || st === 'joined') f.reachedBooked++;
+      if (st === 'joined') f.reachedJoined++;
+    });
+  } catch (e) {}
+  return f;
+}
+
+function jarvisWriteSnapshot() {
+  try {
+    var key = scoutKey('scout_daily_snapshot');
+    var all = JSON.parse(localStorage.getItem(key) || '{}');
+    all[jarvisLocalDate()] = jarvisFunnel();
+    var dates = Object.keys(all).sort();
+    while (dates.length > 14) { delete all[dates.shift()]; }
+    localStorage.setItem(key, JSON.stringify(all));
+    if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer();
+  } catch (e) {}
+}
+
+/* Difference between now and the most recent snapshot from a PRIOR date.
+   Returns null when no prior day exists — first day of use. */
+function jarvisChangedSince() {
+  try {
+    var all = JSON.parse(localStorage.getItem(scoutKey('scout_daily_snapshot')) || '{}');
+    var today = jarvisLocalDate();
+    var prior = Object.keys(all).filter(function(d){ return d < today; }).sort();
+    if (!prior.length) return null;
+    var prevDate = prior[prior.length - 1];
+    var prev = all[prevDate], now = jarvisFunnel();
+    return {
+      since: prevDate,
+      newLeads: now.leads - prev.leads,
+      newContacted: now.reachedContacted - prev.reachedContacted,
+      newReplies: now.reachedReplied - prev.reachedReplied,
+      newBookings: now.reachedBooked - prev.reachedBooked,
+      newJoins: now.reachedJoined - prev.reachedJoined
+    };
+  } catch (e) { return null; }
+}
+
+window.jarvisWriteSnapshot = jarvisWriteSnapshot;
+window.jarvisChangedSince = jarvisChangedSince;
+
+/* ═══════════════════════════════════════════
    JARVIS MODE — what kind of briefing fits the hour.
    morning  05:00–11:59  lead with what to do today
    midday   12:00–17:59  lead with what is still outstanding
@@ -1702,6 +1769,7 @@ function jarvisState() {
   var s = {
     mode: jarvisMode(),
     dayName: ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()],
+    changedSince: jarvisChangedSince(),
     leadsFound: 0, neverMessaged: 0, oldestUnmessagedDays: 0,
     oldestUnmessagedName: '', contacted: 0, replied: 0, booked: 0,
     joined: 0, notInterested: 0, dueToday: 0,

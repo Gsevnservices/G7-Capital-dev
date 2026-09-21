@@ -47,7 +47,8 @@ var SCOUT_STATE_KEYS = [
   'scout_week_checklist',
   'scout_referral_chain',
   'scout_pipeline',
-  'scout_onboard_draft'
+  'scout_onboard_draft',
+  'scout_daily_snapshot'
 ];
 
 /* DEPRECATED — intentionally disabled.
