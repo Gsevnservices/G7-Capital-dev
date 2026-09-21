@@ -1744,6 +1744,57 @@ window.jarvisWriteSnapshot = jarvisWriteSnapshot;
 window.jarvisChangedSince = jarvisChangedSince;
 
 /* ═══════════════════════════════════════════
+   CONVERSION — his own rate, from check-in history.
+   Overall and per customer group. Returns null for any rate whose sample
+   is too small to mean anything, so one lucky reply never becomes
+   "100% conversion". Thresholds:
+     overall   4+ check-ins AND 20+ messages sent
+     per group 10+ messages sent to that group
+═══════════════════════════════════════════ */
+function jarvisConversion() {
+  var out = { basis: 'none', checkins: 0, sent: 0, converted: 0, rate: null, groups: [] };
+  try {
+    var hist = JSON.parse(localStorage.getItem(scoutKey('scout_history')) || '[]');
+    var cks = hist.filter(isCheckinEntry);
+    out.checkins = cks.length;
+
+    var names = ['Group 1','Group 2','Group 3'];
+    try {
+      var _icpRaw = localStorage.getItem(scoutKey('scout_icp_names'));
+      if (_icpRaw) {
+        var _icpArr = JSON.parse(_icpRaw);
+        if (Array.isArray(_icpArr)) {
+          for (var ni = 0; ni < 3; ni++) {
+            if (_icpArr[ni]) names[ni] = _icpArr[ni];
+          }
+        }
+      }
+    } catch(_ne) {}
+
+    var g = [0,1,2].map(function(i){ return { name: names[i], sent: 0, converted: 0, rate: null }; });
+    cks.forEach(function(e) {
+      for (var i = 0; i < 3; i++) {
+        g[i].sent      += parseInt(e['icp' + (i+1) + '_sent'], 10) || 0;
+        g[i].converted += parseInt(e['icp' + (i+1) + '_conv'], 10) || 0;
+      }
+    });
+    g.forEach(function(x) {
+      out.sent += x.sent;
+      out.converted += x.converted;
+      if (x.sent >= 10) x.rate = Math.round((x.converted / x.sent) * 1000) / 1000;
+    });
+    out.groups = g;
+
+    if (out.checkins >= 4 && out.sent >= 20) {
+      out.rate = Math.round((out.converted / out.sent) * 1000) / 1000;
+      out.basis = 'own';
+    }
+  } catch (e) {}
+  return out;
+}
+window.jarvisConversion = jarvisConversion;
+
+/* ═══════════════════════════════════════════
    JARVIS MODE — what kind of briefing fits the hour.
    morning  05:00–11:59  lead with what to do today
    midday   12:00–17:59  lead with what is still outstanding
@@ -1770,6 +1821,7 @@ function jarvisState() {
     mode: jarvisMode(),
     dayName: ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()],
     changedSince: jarvisChangedSince(),
+    conversion: jarvisConversion(),
     leadsFound: 0, neverMessaged: 0, oldestUnmessagedDays: 0,
     oldestUnmessagedName: '', contacted: 0, replied: 0, booked: 0,
     joined: 0, notInterested: 0, dueToday: 0,
