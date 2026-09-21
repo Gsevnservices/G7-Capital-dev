@@ -52,6 +52,50 @@ var SCOUT_STATE_KEYS = [
   'scout_jarvis_pinned'
 ];
 
+/* ═══════════════════════════════════════════
+   SESSION EXPIRY PROTECTION
+   A token can exist locally after it has expired server-side. Every save
+   then fails with 401. Without protection, work done in that window is
+   erased the next time a valid session loads the server copy over it.
+   scout_unsynced marks a device that holds work the server has not seen.
+   It is deliberately NOT in SCOUT_STATE_KEYS — it describes this device,
+   and must never be synced or overwritten by a server load.
+═══════════════════════════════════════════ */
+var SCOUT_UNSYNCED_KEY = 'scout_unsynced';
+var _scoutExpiring = false;
+var _scoutLastSaveStatus = 0;
+
+function scoutMarkUnsynced() {
+  try { localStorage.setItem(scoutKey(SCOUT_UNSYNCED_KEY), '1'); } catch (e) {}
+}
+function scoutClearUnsynced() {
+  try { localStorage.removeItem(scoutKey(SCOUT_UNSYNCED_KEY)); } catch (e) {}
+}
+function scoutIsUnsynced() {
+  try { return localStorage.getItem(scoutKey(SCOUT_UNSYNCED_KEY)) === '1'; } catch (e) { return false; }
+}
+
+/* Session is dead server-side. Remove ONLY the token — never Scout data,
+   never call handleLogout(). Local work must survive to be pushed after
+   the user signs back in. */
+function scoutSessionExpired() {
+  if (_scoutExpiring) return;
+  _scoutExpiring = true;
+  scoutMarkUnsynced();
+  try { localStorage.removeItem('g7_session_token'); } catch (e) {}
+  window.location.href = '../login.html?product=scout&expired=1';
+}
+
+/* Single source of truth for sign-out cleanup. Iterates SCOUT_STATE_KEYS so
+   it can never fall out of date again, and clears the unsynced flag so a
+   later login cannot push an empty or partial blob over the server copy. */
+function scoutClearLocalState() {
+  for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
+    try { localStorage.removeItem(scoutKey(SCOUT_STATE_KEYS[i])); } catch (e) {}
+  }
+  scoutClearUnsynced();
+}
+
 /* DEPRECATED — intentionally disabled.
    This function previously copied raw unscoped keys into the current firm's
    scoped keys on every page load. That caused a cross-firm data leak:
@@ -76,14 +120,15 @@ function migrateUnscopedScoutKeys() {
 async function saveScoutStateToServer() {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
-    if (!token) return;
+    if (!token) return false;
     var blob = {};
     for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
       var base = SCOUT_STATE_KEYS[i];
       var v = localStorage.getItem(scoutKey(base));
       if (v !== null) blob[base] = v;
     }
-    await fetch(SCOUT_WORKER + '/data/save', {
+    if (Object.keys(blob).length === 0) return false;
+    var res = await fetch(SCOUT_WORKER + '/data/save', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -91,8 +136,14 @@ async function saveScoutStateToServer() {
       },
       body: JSON.stringify({ type: 'scout_state', data: blob })
     });
+    _scoutLastSaveStatus = res.status;
+    if (res.status === 401) { scoutMarkUnsynced(); return false; }
+    if (res.ok) { scoutClearUnsynced(); return true; }
+    return false;
   } catch (e) {
     console.warn('Scout state save failed (non-blocking):', e);
+    _scoutLastSaveStatus = 0;
+    return false;
   }
 }
 
@@ -105,10 +156,32 @@ async function loadScoutStateFromServer() {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return false;
+
+    /* Push before pull. If this device holds unsynced work, send it to the
+       server before loading, so the server copy does not erase it. Only
+       push a blob that contains the core analysis — never a fragment. */
+    if (scoutIsUnsynced()) {
+      if (localStorage.getItem(scoutKey('scout_pending_result')) !== null) {
+        var pushed = await saveScoutStateToServer();
+        if (!pushed) {
+          /* 401 — session is dead; expire and send to login. Local work is
+             preserved and the unsynced flag stays set for the next login.
+             Anything else (network, 5xx) — keep local and stop. Do NOT fall
+             through to the load: a successful load would overwrite work the
+             server has not yet seen. */
+          if (_scoutLastSaveStatus === 401) scoutSessionExpired();
+          return false;
+        }
+      } else {
+        scoutClearUnsynced();
+      }
+    }
+
     var res = await fetch(SCOUT_WORKER + '/data/load?type=scout_state', {
       method: 'GET',
       headers: { 'Authorization': 'Bearer ' + token }
     });
+    if (res.status === 401) { scoutSessionExpired(); return false; }
     if (!res.ok) return false;
     var json = await res.json();
     var blob = json && json.data ? json.data : null;

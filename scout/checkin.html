@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/scout-master-v1.js?v=19"></script>
 <script src="../assets/auth.js?v=16"></script>
-<script src="../assets/scout.js?v=23"></script>
+<script src="../assets/scout.js?v=24"></script>
 <script src="../assets/pipeline.js?v=16"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -812,14 +812,8 @@ function formatNum(n) {
    LOGOUT
 ═══════════════════════════════════════ */
 function handleLogout() {
-    /* Identity keys are raw; Scout data keys are firm-scoped */
+    scoutClearLocalState();
     ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){ localStorage.removeItem(k); });
-    ['scout_pending_result','scout_history','scout_week_number','scout_streak',
-     'scout_last_checkin_week','scout_health_score','scout_health_breakdown',
-     'scout_weekly_insight','scout_insight_week','scout_last_targets','scout_icp_names',
-     'scout_first_customer_celebrated','scout_week_checklist','scout_referral_chain',
-     'scout_pipeline'
-    ].forEach(function(base){ localStorage.removeItem(scoutKey(base)); });
     window.location.href = 'landing.html';
   }
 
