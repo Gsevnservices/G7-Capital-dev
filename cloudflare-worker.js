@@ -760,6 +760,23 @@ export default {
         return jsonResponse({ error: 'Unauthorized' }, 401);
       }
 
+      // Daily briefing cap — 50 per firm per UTC day
+      const BRIEFING_DAILY_LIMIT = 50;
+      const briefingKey = 'usage:briefing:' + session.firmCode + ':' + new Date().toISOString().slice(0, 10);
+      const briefingUsage = await env.G7_KV.get(briefingKey, 'json') || { count: 0 };
+
+      if (briefingUsage.count >= BRIEFING_DAILY_LIMIT) {
+        return jsonResponse({ error: 'Daily briefing limit reached' }, 429);
+      }
+
+      // Increment BEFORE the Anthropic call — a failed call still consumed
+      // the attempt, and this prevents a retry loop draining the key.
+      await env.G7_KV.put(briefingKey, JSON.stringify({
+        count:    briefingUsage.count + 1,
+        lastUsed: Date.now(),
+        firmCode: session.firmCode
+      }), { expirationTtl: 172800 });
+
       let body;
       try {
         body = await request.json();
