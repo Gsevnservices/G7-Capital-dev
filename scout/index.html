@@ -578,6 +578,13 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <div style="margin-top:20px">
         <button id="scoutAsk" style="padding:12px 24px;background:transparent;border:1px solid var(--amber);color:var(--amber);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">What's my update?</button>
       </div>
+      <div id="scoutListen" style="margin-top:14px">
+        <button id="scoutMic" style="padding:12px 24px;background:transparent;border:1px solid var(--border2);color:var(--grey1);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">Ask Scout</button>
+      </div>
+      <div id="scoutHeard" style="min-height:22px;margin-top:14px;font-size:15px;color:var(--white2);line-height:1.5"></div>
+      <div id="scoutTypeWrap" style="margin-top:12px">
+        <input id="scoutType" type="text" placeholder="Or type your question" style="width:100%;max-width:420px;padding:11px 14px;background:transparent;border:1px solid var(--border2);color:var(--white);font-family:inherit;font-size:14px;outline:none">
+      </div>
     </div>
 
     <div id="jarvisPinned" style="display:none;max-width:560px;margin:8px auto 24px"></div>
@@ -2091,6 +2098,104 @@ window.jarvisBriefing = jarvisBriefing;
     requestAnimationFrame(frame);
   }
   frame();
+})();
+
+/* ═══════════════════════════════════════════
+   SCOUT LISTEN — speech recognition with a visible transcript and a
+   typed fallback. Recognition is unreliable in noise and weakest on
+   Indian-accented English, so the transcript is always shown and the
+   text box is always available. Two empty results in a row and Scout
+   says so rather than failing silently.
+   This step echoes what it heard. No model call yet.
+═══════════════════════════════════════════ */
+(function(){
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var mic  = document.getElementById('scoutMic');
+  var box  = document.getElementById('scoutHeard');
+  var type = document.getElementById('scoutType');
+  if (!box) return;
+
+  var emptyRuns = 0;
+  var listening = false;
+  var rec = null;
+
+  function show(t, faded) {
+    box.textContent = t || '';
+    box.style.color = faded ? 'var(--grey1)' : 'var(--white2)';
+  }
+
+  /* Placeholder until F9 wires the model. */
+  function scoutHandleQuestion(q) {
+    show('Heard: ' + q);
+    console.log('[scout] question:', q);
+  }
+
+  if (!SR) {
+    if (mic) mic.style.display = 'none';
+    show('Voice input is not supported in this browser — type instead.', true);
+  } else if (mic) {
+    mic.addEventListener('click', function(){
+      if (listening) { if (rec) rec.stop(); return; }
+      rec = new SR();
+      rec.lang = 'en-IN';
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+      rec.continuous = false;
+
+      rec.onstart = function(){
+        listening = true;
+        mic.textContent = 'Listening — tap to stop';
+        show('', true);
+        if (window.scoutSphere) window.scoutSphere('listening');
+      };
+
+      rec.onresult = function(e){
+        var txt = '';
+        for (var i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
+        txt = txt.trim();
+        var final = e.results[e.results.length - 1].isFinal;
+        show(txt, !final);
+        if (final && txt) { emptyRuns = 0; scoutHandleQuestion(txt); }
+      };
+
+      rec.onerror = function(e){
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          show('Microphone access is blocked. Allow it in your browser settings, or type instead.', true);
+        } else if (e.error === 'no-speech') {
+          emptyRuns++;
+        } else {
+          show('Voice input failed. Type instead.', true);
+        }
+      };
+
+      rec.onend = function(){
+        listening = false;
+        mic.textContent = 'Ask Scout';
+        if (window.scoutSphere) window.scoutSphere('idle');
+        if (!box.textContent) emptyRuns++;
+        if (emptyRuns >= 2) {
+          show("I'm not catching that — type it instead.", true);
+          if (type) type.focus();
+          emptyRuns = 0;
+        }
+      };
+
+      try { rec.start(); } catch(err) { show('Could not start the microphone. Type instead.', true); }
+    });
+  }
+
+  if (type) {
+    type.addEventListener('keydown', function(e){
+      if (e.key !== 'Enter') return;
+      var q = type.value.trim();
+      if (!q) return;
+      type.value = '';
+      emptyRuns = 0;
+      scoutHandleQuestion(q);
+    });
+  }
+
+  window.scoutHandleQuestion = scoutHandleQuestion;
 })();
 </script>
 </body>
