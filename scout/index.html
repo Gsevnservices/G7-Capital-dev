@@ -576,7 +576,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div id="jarvisBlock" style="text-align:center;padding:8px 0">
       <canvas id="jarvisCanvas" width="260" height="260" style="max-width:100%;height:auto"></canvas>
       <div style="margin-top:20px">
-        <button id="jarvisAsk" style="padding:12px 24px;background:transparent;border:1px solid var(--amber);color:var(--amber);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">What's my update today?</button>
+        <button id="scoutAsk" style="padding:12px 24px;background:transparent;border:1px solid var(--amber);color:var(--amber);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">What's my update?</button>
       </div>
     </div>
 
@@ -1660,16 +1660,19 @@ function initCursor() {
         || v.find(function(x){ return x.lang === 'en-US'; })
         || null;
   }
-  var btn = document.getElementById('jarvisAsk');
+  var btn = document.getElementById('scoutAsk');
   if (!btn) return;
   btn.addEventListener('click', async function(){
     speechSynthesis.cancel();
+    if (window.scoutSphere) window.scoutSphere('thinking');
     var u = new SpeechSynthesisUtterance(await jarvisBriefing());
     var v = pickVoice();
     if (v) u.voice = v;
     u.rate = 0.95;
-    u.onboundary = function(){ if (window._jarvisPulse) window._jarvisPulse(1); };
-    u.onend = function(){ if (window._jarvisPulse) window._jarvisPulse(0); };
+    u.onboundary = function(){ if (window.scoutSpherePulse) window.scoutSpherePulse(1); };
+    u.onstart    = function(){ if (window.scoutSphere) window.scoutSphere('speaking'); };
+    u.onend      = function(){ if (window.scoutSphere) window.scoutSphere('idle'); };
+    u.onerror    = function(){ if (window.scoutSphere) window.scoutSphere('error'); };
     speechSynthesis.speak(u);
   });
 })();
@@ -2036,18 +2039,34 @@ window.jarvisBriefing = jarvisBriefing;
     pts.push({ x: Math.cos(theta)*rad, y: y, z: Math.sin(theta)*rad });
   }
   var rot = 0;
-  var pulse = 0;
-  var target = 0;
-  var hue = 33;
-  window._jarvisPulse = function(v){ target = v; };
+  var pulse = 0, target = 0, hue = 33;
+  var state = 'idle';
+  var rad = 1, radTo = 1;        /* radius multiplier, eased */
+  var dim = 1, dimTo = 1;        /* opacity multiplier, eased */
+  var breathe = 0;
+
+  /* idle | thinking | speaking | listening | error */
+  window.scoutSphere = function(next) {
+    if (next === state) return;
+    state = next;
+    if (state === 'idle')      { radTo = 1.00; dimTo = 1.00; target = 0; hue = 33; }
+    if (state === 'thinking')  { radTo = 0.92; dimTo = 0.60; target = 0; hue = 33; }
+    if (state === 'speaking')  { radTo = 1.13; dimTo = 1.00; }
+    if (state === 'listening') { radTo = 1.06; dimTo = 1.00; target = 0; hue = 210; }
+    if (state === 'error')     { radTo = 1.00; dimTo = 0.25;
+                                 setTimeout(function(){ window.scoutSphere('idle'); }, 400); }
+  };
+  window.scoutSpherePulse = function(v){ if (state === 'speaking') target = v; };
   function frame() {
     ctx.clearRect(0,0,W,H);
     pulse += (target - pulse) * 0.12;
     if (target > 0) target *= 0.88;
-    var speed = 0.0016 + pulse * 0.004;
+    rad += (radTo - rad) * 0.08;
+    dim += (dimTo - dim) * 0.08;
+    breathe = (state === 'listening') ? Math.sin(Date.now() / 400) * 0.02 : 0;
+    var speed = 0.0016 + (state === 'thinking' ? 0.0020 : 0) + pulse * 0.004;
     rot += speed;
-    hue += pulse * 0.55;
-    if (hue > 360) hue -= 360;
+    if (state === 'speaking') { hue += pulse * 0.55; if (hue > 360) hue -= 360; }
     var cos = Math.cos(rot), sin = Math.sin(rot);
     for (var i = 0; i < N; i++) {
       var p = pts[i];
@@ -2055,15 +2074,15 @@ window.jarvisBriefing = jarvisBriefing;
       var z = p.x*sin + p.z*cos;
       var persp = 1.9 / (1.9 - z);
       var depth = (z + 1) / 2;
-      var RR = R * (1 + pulse * 0.13);
+      var RR = R * rad * (1 + breathe);
       var px = CX + x * RR * persp;
       var py = CY + p.y * RR * persp;
       var size = 0.4 + depth * depth * 1.8;
       var alpha = 0.06 + Math.pow(depth, 2.2) * 0.85;
-      var h = pulse > 0.02 ? hue : 33;
-      var sat = 55 + pulse * 35;
+      var h = (state === 'speaking' && pulse > 0.02) ? hue : (state === 'listening' ? 210 : 33);
+      var sat = (state === 'listening' ? 45 : 55) + pulse * 35;
       var lig = 46 + pulse * 18;
-      var a = Math.min(1, alpha * (1 + pulse * 0.5));
+      var a = Math.min(1, alpha * (1 + pulse * 0.5)) * dim;
       ctx.fillStyle = 'hsla(' + h.toFixed(1) + ',' + sat.toFixed(0) + '%,' + lig.toFixed(0) + '%,' + a.toFixed(3) + ')';
       ctx.beginPath();
       ctx.arc(px, py, size, 0, Math.PI*2);
