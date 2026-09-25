@@ -2000,20 +2000,60 @@ async function jarvisBriefing() {
     }
   } catch(e) {}
 
+  var econ = null;
+  try {
+    var _p = JSON.parse(localStorage.getItem(scoutKey('scout_pending_result')) || '{}');
+    econ = _p.economics || null;
+  } catch (e) {}
+
+  var modeLine =
+    s.mode === 'morning' ? 'It is morning. Lead with what he should do today.' :
+    s.mode === 'midday'  ? 'It is the middle of the day. Lead with what is still outstanding.' :
+                           'It is evening. Lead with what moved today and what waits tomorrow.';
+
   var prompt =
-    'You are Scout, an AI business development employee for an Indian SMB. ' +
-    'You are speaking aloud to the owner. 3 to 5 short sentences.\n\n' +
+    'You are Scout, an AI business development employee for an Indian SMB owner. ' +
+    'You are speaking aloud. He may be driving or busy and cannot look at a screen.\n\n' +
+    modeLine + '\n\n' +
     'BUSINESS: ' + (biz || 'unknown') + '\n' +
+    'DAY: ' + s.dayName + '\n' +
     'SCOUT PLAN FOR TODAY: ' + (plan || 'none') + '\n' +
+    'ECONOMICS: ' + (econ ? JSON.stringify(econ) : 'not available') + '\n' +
     'PIPELINE STATE (computed, correct, the only numbers you may use):\n' +
     JSON.stringify(s, null, 2) + '\n\n' +
-    'RULES:\n' +
-    '- Use ONLY the numbers given. Never invent, estimate or derive a new figure.\n' +
-    '- Decide what matters most today and lead with it. Do not list everything.\n' +
-    '- Say what to do next, specifically, naming the business where relevant.\n' +
-    '- If the plan and the pipeline disagree, say so plainly.\n' +
-    '- No greeting, no sign-off, no praise, no filler.\n' +
-    '- Shorten long legal company names for speech: drop PVT LTD, Technologies, Private Limited.\n' +
+    'STRUCTURE — six beats, in this order. Drop any beat whose data is\n' +
+    'absent. Never announce that something is missing.\n' +
+    '  1. Today. The day, and what the plan calls for.\n' +
+    '  2. The number. Leads in pipeline, what they are worth, and how many\n' +
+    '     you expect to convert. See PROJECTION below.\n' +
+    '  3. Who to action, named, and why that one first.\n' +
+    '  4. Plan versus reality — only if they disagree.\n' +
+    '  5. What changed since he last looked — only if changedSince is not null\n' +
+    '     and something actually moved.\n' +
+    '  6. One closing instruction. An action, never a summary.\n\n' +
+    'PROJECTION rules for beat 2:\n' +
+    '- If ECONOMICS is not available, or its confidence is "low", drop beat 2\n' +
+    '  entirely. Say nothing about money.\n' +
+    '- Pipeline value = leadsFound x annualCustomerValue. This is arithmetic\n' +
+    '  on given numbers and is allowed.\n' +
+    '- If conversion.basis is "own", use conversion.rate — it is his real\n' +
+    '  rate. Say so: "you convert about one in five".\n' +
+    '- If conversion.basis is "none", estimate a conversion rate yourself from\n' +
+    '  the business type and market, and state it as an expectation: "I would\n' +
+    '  expect", "should give you". Never as a fact.\n' +
+    '- Round money hard. "About forty thousand", never "forty-one thousand\n' +
+    '  four hundred".\n\n' +
+    'ABSOLUTE RULES:\n' +
+    '- Every count, name and date comes from PIPELINE STATE. Never invent one.\n' +
+    '- Numbers spoken as words: "thirty-four days", "forty thousand rupees".\n' +
+    '  Never digits, never the rupee symbol.\n' +
+    '- Shorten company names for speech. Drop PVT LTD, Private Limited,\n' +
+    '  Technologies. Shorten long customer group names to three or four words\n' +
+    '  and never read a slash aloud.\n' +
+    '- No greeting. No sign-off. No praise. No filler. No "as you can see".\n' +
+    '- Under 130 words total. He has one minute.\n' +
+    '- If pinned items exist and are still undone, say so plainly in beat 4 —\n' +
+    '  he was told before and has not acted.\n' +
     '- Output ONLY the spoken text. No markdown, no quotes, no preamble.';
 
   try {
