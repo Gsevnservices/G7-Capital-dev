@@ -1982,6 +1982,43 @@ function jarvisState() {
 window.jarvisState = jarvisState;
 
 /* ═══════════════════════════════════════════
+   SPOKEN TEXT CLEANUP — deterministic, applied to every line Scout speaks.
+   The model is inconsistent about digits and greetings no matter how the
+   prompt is worded, so this is enforced in code rather than asked for.
+═══════════════════════════════════════════ */
+function scoutCleanSpoken(t) {
+  if (!t) return '';
+  var out = String(t).trim();
+
+  /* Strip a leading greeting, with or without following punctuation. */
+  out = out.replace(/^(good\s+(morning|afternoon|evening)|hello|hi|hey)\b[\s,.!—-]*/i, '');
+
+  /* Remove coaching phrasing the prompt keeps reintroducing. */
+  out = out.replace(/\blet'?s\s+/gi, '');
+  out = out.replace(/\blet us\s+/gi, '');
+
+  /* Every remaining number becomes words. Handles 1,20,000 and 40,000 by
+     stripping separators first. speakable() is the Indian-numbering
+     formatter from F1. */
+  out = out.replace(/\b\d[\d,]*\b/g, function(m) {
+    var n = parseInt(m.replace(/,/g, ''), 10);
+    if (!isFinite(n)) return m;
+    var w = (typeof speakable === 'function') ? speakable(n) : m;
+    return w || m;
+  });
+
+  /* Currency symbol read aloud is meaningless. */
+  out = out.replace(/₹\s*/g, '');
+  out = out.replace(/\bRs\.?\s*/gi, '');
+
+  /* Capitalise the first letter after any stripping. */
+  out = out.replace(/\s{2,}/g, ' ').trim();
+  if (out) out = out.charAt(0).toUpperCase() + out.slice(1);
+  return out;
+}
+window.scoutCleanSpoken = scoutCleanSpoken;
+
+/* ═══════════════════════════════════════════
    JARVIS BRIEFING — calls /scout/briefing to generate spoken text.
    Every number comes from jarvisState(). The model may only use those.
 ═══════════════════════════════════════════ */
@@ -2086,9 +2123,9 @@ async function jarvisBriefing() {
       body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] })
     });
     var data = await res.json();
-    if (data && data.text) return data.text.trim();
+    if (data && data.text) return scoutCleanSpoken(data.text);
   } catch(e) {}
-  return s.neverMessaged + ' of ' + s.leadsFound + ' businesses in your pipeline have never been messaged. Open your pipeline and start there.';
+  return scoutCleanSpoken(s.neverMessaged + ' of ' + s.leadsFound + ' businesses in your pipeline have never been messaged. Open your pipeline and start there.');
 }
 window.jarvisBriefing = jarvisBriefing;
 
