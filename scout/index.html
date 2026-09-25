@@ -2011,6 +2011,21 @@ function scoutCleanSpoken(t) {
   out = out.replace(/₹\s*/g, '');
   out = out.replace(/\bRs\.?\s*/gi, '');
 
+  /* Hard length ceiling. The prompt asks for under 130 words and is
+     inconsistent about it. Trim to whole sentences so the result never
+     ends mid-thought. */
+  var sentences = out.match(/[^.!?]+[.!?]+/g);
+  if (sentences) {
+    var kept = [], words = 0;
+    for (var si = 0; si < sentences.length; si++) {
+      var w = sentences[si].trim().split(/\s+/).length;
+      if (words + w > 130 && kept.length > 0) break;
+      kept.push(sentences[si].trim());
+      words += w;
+    }
+    out = kept.join(' ');
+  }
+
   /* Capitalise the first letter after any stripping. */
   out = out.replace(/\s{2,}/g, ' ').trim();
   if (out) out = out.charAt(0).toUpperCase() + out.slice(1);
