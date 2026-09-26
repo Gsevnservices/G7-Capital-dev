@@ -703,7 +703,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   await loadScoutStateFromServer();
   await repairOrphanedScoutResult(); // must run after server load, before first scoped read
   scoutWriteSnapshot();
-  scoutMigratePinKey();
+  await scoutMigratePinKey();
   scoutPinnedRender();
 
   /* Firm name in nav */
@@ -1804,20 +1804,28 @@ window.scoutConversion = scoutConversion;
 
 /* One-time migration: pins were stored under the previous key name before
    the rename. Must run AFTER loadScoutStateFromServer(), or the server blob
-   — which still carries the old key — overwrites the migrated value.
+   overwrites the migrated value.
+   The old key is removed ONLY after the server confirms the save. If the
+   save fails or the page closes mid-flight, the old key survives and the
+   migration simply runs again next load.
    Do NOT let a rename pass rewrite the literal below; it must stay as the
    OLD key name. */
-function scoutMigratePinKey() {
+async function scoutMigratePinKey() {
   try {
     var LEGACY_PIN_KEY = 'scout_' + 'jarvis' + '_pinned';
     var oldK = scoutKey(LEGACY_PIN_KEY);
     var newK = scoutKey('scout_pinned');
     var old = localStorage.getItem(oldK);
-    if (old !== null) {
-      if (localStorage.getItem(newK) === null) localStorage.setItem(newK, old);
-      localStorage.removeItem(oldK);
-      if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer();
+    if (old === null) return;
+
+    if (localStorage.getItem(newK) === null) localStorage.setItem(newK, old);
+
+    var saved = false;
+    if (typeof saveScoutStateToServer === 'function') {
+      saved = await saveScoutStateToServer();
     }
+    /* Only now is it safe to drop the source. */
+    if (saved) localStorage.removeItem(oldK);
   } catch (e) {}
 }
 
