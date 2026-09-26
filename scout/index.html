@@ -2034,6 +2034,54 @@ function scoutCleanSpoken(t) {
 window.scoutCleanSpoken = scoutCleanSpoken;
 
 /* ═══════════════════════════════════════════
+   SCOUT CONTEXT — the analysis compacted into something the voice agent
+   can carry into every conversation turn. Without this Scout can report
+   the pipeline but cannot advise on the business. Built once per page
+   load and reused.
+═══════════════════════════════════════════ */
+var _scoutCtx = null;
+function scoutContext() {
+  if (_scoutCtx !== null) return _scoutCtx;
+  var parts = [];
+  try {
+    var pend = JSON.parse(localStorage.getItem(scoutKey('scout_pending_result')) || '{}');
+    var bd = pend.businessData || {};
+    var a = {};
+    try { a = JSON.parse((pend.scoutOutput || '{}').replace(/^```json\s*/i,'').replace(/```\s*$/,'').trim()); } catch (e) {}
+
+    parts.push('BUSINESS: ' + [bd.businessName, bd.businessType, bd.location].filter(Boolean).join(' | '));
+    if (bd.whatYouSell)     parts.push('SELLS: ' + bd.whatYouSell);
+    if (bd.avgTransaction)  parts.push('TYPICAL SALE: ' + bd.avgTransaction);
+    if (bd.revenueModel)    parts.push('REVENUE MODEL: ' + bd.revenueModel + (bd.billingPeriod ? ' / ' + bd.billingPeriod : ''));
+    if (bd.currentCustomers) parts.push('CURRENT CUSTOMERS: ' + bd.currentCustomers);
+    if (bd.targetCustomers)  parts.push('12-MONTH TARGET: ' + bd.targetCustomers);
+    if (bd.bestCustomers)   parts.push('BEST EXISTING CUSTOMERS: ' + bd.bestCustomers);
+    if (bd.bestMonths)      parts.push('BEST MONTHS: ' + bd.bestMonths);
+    if (bd.worstMonths)     parts.push('WORST MONTHS: ' + bd.worstMonths);
+    if (bd.seasonalEvents)  parts.push('LOCAL EVENTS: ' + bd.seasonalEvents);
+    if (bd.whatWorked)      parts.push('WHAT HAS WORKED: ' + bd.whatWorked);
+    if (bd.whatFailed)      parts.push('WHAT HAS FAILED: ' + bd.whatFailed);
+    var comps = [bd.comp1name, bd.comp2name].filter(Boolean);
+    if (comps.length) parts.push('COMPETITORS: ' + comps.join(', ') +
+      (bd.comp1better ? ' | stronger than us at: ' + bd.comp1better : '') +
+      (bd.comp1worse  ? ' | weaker at: ' + bd.comp1worse : ''));
+
+    if (a.tab1 && a.tab1.groups) {
+      try {
+        parts.push('CUSTOMER GROUPS: ' + a.tab1.groups.map(function(g){
+          return (g.name || '') + ' — ' + (g.why || g.description || '');
+        }).join(' || '));
+      } catch (e) {}
+    }
+    if (a.headline && a.headline.momentumNote) parts.push('SCOUT ASSESSMENT: ' + a.headline.momentumNote);
+  } catch (e) {}
+  _scoutCtx = parts.join('\n');
+  if (_scoutCtx.length > 3500) _scoutCtx = _scoutCtx.slice(0, 3500);
+  return _scoutCtx;
+}
+window.scoutContext = scoutContext;
+
+/* ═══════════════════════════════════════════
    JARVIS BRIEFING — calls /scout/briefing to generate spoken text.
    Every number comes from jarvisState(). The model may only use those.
 ═══════════════════════════════════════════ */
@@ -2144,6 +2192,70 @@ async function jarvisBriefing() {
 }
 window.jarvisBriefing = jarvisBriefing;
 
+/* ═══════════════════════════════════════════
+   SCOUT ASK — answers a question from the owner. Carries the business
+   context, the live pipeline state and the conversation so far.
+   Speech recognition is unreliable on business vocabulary, so the model
+   is told the transcript may be misheard and instructed to say what it
+   understood when it is unclear.
+═══════════════════════════════════════════ */
+var _scoutTurns = [];
+var SCOUT_MAX_TURNS = 10;
+
+async function scoutAsk(question) {
+  if (!question) return '';
+  if (_scoutTurns.length >= SCOUT_MAX_TURNS * 2) {
+    return 'That is as much as I can cover by voice right now. Open the dashboard for the detail.';
+  }
+  var s = jarvisState();
+  var sys =
+    'You are Scout, an AI business development employee for an Indian SMB owner. ' +
+    'He is asking you a question out loud. Answer in two or three short sentences.\n\n' +
+    scoutContext() + '\n\n' +
+    'LIVE PIPELINE STATE (computed, correct, the only numbers you may use):\n' +
+    JSON.stringify(s) + '\n\n' +
+    'RULES:\n' +
+    '- The question came from speech recognition and may contain misheard\n' +
+    '  words. Business terms are often wrong: "leads" may appear as "minutes",\n' +
+    '  "needs" or "weeks". Read it for what he plainly meant.\n' +
+    '- If you cannot tell what he meant, say what you understood and ask him\n' +
+    '  to confirm. Never answer a question you are guessing at.\n' +
+    '- You may reason and advise freely from the business context. You may NOT\n' +
+    '  invent a count, date, name or figure — those come from the state only.\n' +
+    '- If neither the context nor the state answers it, say what you do know\n' +
+    '  and name the gap plainly.\n' +
+    '- No greeting, no praise, no filler. Plain spoken English.\n' +
+    '- Output ONLY the spoken answer.';
+
+  var msgs = [{ role: 'user', content: sys + '\n\nQUESTION: ' + question }];
+  for (var i = 0; i < _scoutTurns.length; i++) msgs.push(_scoutTurns[i]);
+  if (_scoutTurns.length) {
+    msgs = [{ role: 'user', content: sys }]
+      .concat(_scoutTurns)
+      .concat([{ role: 'user', content: question }]);
+  }
+
+  try {
+    var res = await fetch('https://g7-proxy.gsevnservices.workers.dev/scout/briefing', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '')
+      },
+      body: JSON.stringify({ messages: msgs })
+    });
+    var data = await res.json();
+    if (data && data.text) {
+      var answer = scoutCleanSpoken(data.text);
+      _scoutTurns.push({ role: 'user', content: question });
+      _scoutTurns.push({ role: 'assistant', content: answer });
+      return answer;
+    }
+  } catch (e) {}
+  return 'I could not reach my systems just now. Try again in a moment.';
+}
+window.scoutAskQuestion = scoutAsk;
+
 (function(){
   var cv = document.getElementById('jarvisCanvas');
   if (!cv) return;
@@ -2236,10 +2348,26 @@ window.jarvisBriefing = jarvisBriefing;
     box.style.color = faded ? 'var(--grey1)' : 'var(--white2)';
   }
 
-  /* Placeholder until F9 wires the model. */
   function scoutHandleQuestion(q) {
-    show('Heard: ' + q);
-    console.log('[scout] question:', q);
+    show('You asked: ' + q, true);
+    if (window.scoutSphere) window.scoutSphere('thinking');
+    scoutAsk(q).then(function(answer){
+      show(answer);
+      speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(answer);
+      var voices = speechSynthesis.getVoices();
+      var v = voices.find(function(x){ return x.name === 'Samantha'; })
+           || voices.find(function(x){ return x.lang === 'en-IN'; })
+           || voices.find(function(x){ return x.lang === 'en-US'; })
+           || null;
+      if (v) u.voice = v;
+      u.rate = 0.95;
+      u.onboundary = function(){ if (window.scoutSpherePulse) window.scoutSpherePulse(1); };
+      u.onstart = function(){ if (window.scoutSphere) window.scoutSphere('speaking'); };
+      u.onend   = function(){ if (window.scoutSphere) window.scoutSphere('idle'); };
+      u.onerror = function(){ if (window.scoutSphere) window.scoutSphere('error'); };
+      speechSynthesis.speak(u);
+    });
   }
 
   if (!SR) {
