@@ -49,7 +49,7 @@ var SCOUT_STATE_KEYS = [
   'scout_pipeline',
   'scout_onboard_draft',
   'scout_daily_snapshot',
-  'scout_jarvis_pinned'
+  'scout_pinned'
 ];
 
 /* ═══════════════════════════════════════════
