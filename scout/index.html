@@ -605,6 +605,22 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   .cc-core-name{font-size:36px}
   .cc-core-ask input{width:100%;max-width:392px}
 }
+
+/* ═══════════════════════════════════════════
+   LEGACY DASHBOARD — superseded by the command centre.
+   Their JS still runs and still sets display, so inline styles are not
+   enough. Hidden here until stage 4 removes the markup and the dead code.
+═══════════════════════════════════════════ */
+#todayList,
+#inboundCard,
+#momentumCard,
+#healthScoreCard,
+#streakBadge,
+#recentSection,
+#mondayCard,
+.metric-row,
+.actions-row { display: none !important }
+
 </style>
 </head>
 <body>
