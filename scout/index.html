@@ -664,27 +664,91 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <div class="greeting-week" id="greetingWeek">Week 1 of 12</div>
     </div>
 
-    <div id="scoutBlock" style="text-align:center;padding:8px 0">
-      <canvas id="scoutCanvas" width="260" height="260" style="max-width:100%;height:auto"></canvas>
-      <div style="margin-top:20px">
-        <button id="scoutAsk" style="padding:12px 24px;background:transparent;border:1px solid var(--amber);color:var(--amber);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">What's my update?</button>
-      </div>
-      <div id="scoutListen" style="margin-top:14px">
-        <button id="scoutMic" style="padding:12px 24px;background:transparent;border:1px solid var(--border2);color:var(--grey1);font-family:inherit;font-size:12px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer">Ask Scout</button>
-      </div>
-      <div id="scoutHeard" style="min-height:22px;margin-top:14px;font-size:15px;color:var(--white2);line-height:1.5"></div>
-      <div id="scoutTypeWrap" style="margin-top:12px">
-        <input id="scoutType" type="text" placeholder="Or type your question" style="width:100%;max-width:420px;padding:11px 14px;background:transparent;border:1px solid var(--border2);color:var(--white);font-family:inherit;font-size:14px;outline:none">
-      </div>
-    </div>
+    <div class="cc-wrap" id="ccWrap">
 
-    <div id="scoutPinnedList" style="display:none;max-width:560px;margin:8px auto 24px"></div>
+      <div class="cc-rail cc-rail-l">
+        <div class="cc-panel">
+          <div class="cc-label">Pipeline</div>
+          <div id="ccFunnel"></div>
+        </div>
+        <div class="cc-panel">
+          <div class="cc-label">Your customer groups</div>
+          <div id="ccGroups"></div>
+        </div>
+        <div class="cc-panel grow">
+          <div class="cc-label">Customer links</div>
+          <div id="ccLinks"></div>
+        </div>
+        <a href="result.html" class="cc-cta">
+          <b>Go to full analysis</b>
+          <span>Six tabs &middot; your whole plan</span>
+        </a>
+      </div>
+
+      <div class="cc-mid">
+        <div class="cc-metrics" id="ccMetrics"></div>
+
+        <div class="cc-core">
+          <div class="cc-core-tag l">Scout core</div>
+          <div class="cc-core-tag r" id="ccStatus">Ready</div>
+
+          <div class="cc-core-stage">
+            <canvas id="scoutCanvas" width="372" height="372"></canvas>
+            <div class="cc-core-text">
+              <div class="cc-core-name">Scout</div>
+              <div class="cc-core-sub">Core</div>
+              <div class="cc-core-week" id="ccWeek"></div>
+            </div>
+          </div>
+
+          <div class="cc-core-btns">
+            <button id="scoutAsk" class="cc-btn primary">What's my update?</button>
+            <button id="scoutMic" class="cc-btn">Ask Scout</button>
+          </div>
+
+          <div class="cc-heard" id="scoutHeard"></div>
+
+          <div class="cc-core-ask" id="scoutTypeWrap">
+            <label for="scoutType" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Ask Scout a question</label>
+            <input id="scoutType" type="text" placeholder="Or type your question">
+          </div>
+        </div>
+
+        <div class="cc-panel" id="ccPinnedPanel" style="display:none">
+          <div class="cc-label-row">
+            <div class="cc-label">Scout said</div>
+            <span class="cc-note" id="ccPinnedCount"></span>
+          </div>
+          <div class="cc-pins" id="scoutPinnedList"></div>
+        </div>
+      </div>
+
+      <div class="cc-rail cc-rail-r">
+        <div class="cc-panel hot">
+          <div class="cc-label-row">
+            <div class="cc-label" id="ccTodayLabel">Today</div>
+            <span class="cc-note" id="ccTodayCount"></span>
+          </div>
+          <div id="ccToday"></div>
+        </div>
+        <div class="cc-panel grow">
+          <div class="cc-label">What Scout sees</div>
+          <div id="ccFeed"></div>
+        </div>
+        <div class="cc-panel" id="ccSeasonPanel" style="display:none">
+          <div class="cc-label">This season</div>
+          <div class="cc-season" id="ccSeason"></div>
+          <div class="cc-season-sub" id="ccSeasonSub"></div>
+        </div>
+      </div>
+
+    </div>
 
     <!-- TODAY LIST — ordered task list: check-in, chase, leads, Scout's plan -->
     <div class="momentum-card" id="todayList" style="display:none"></div>
 
     <!-- FOUR METRIC CARDS -->
-    <div class="metric-row">
+    <div class="metric-row" style="display:none">
       <div class="metric-card">
         <div class="metric-card-label">Money Coming In</div>
         <div class="metric-card-value" id="dashRevenue">—</div>
@@ -708,7 +772,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
 
     <!-- MOMENTUM CARD (Progression System) -->
-    <div class="momentum-card" id="momentumCard">
+    <div class="momentum-card" id="momentumCard" style="display:none">
       <div class="momentum-card-top">
         <div class="momentum-label-block">
           <div class="momentum-eyebrow">Your Scout Score</div>
@@ -734,16 +798,16 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
 
     <!-- STREAK BADGE -->
-    <div class="streak-badge" id="streakBadge"></div>
+    <div class="streak-badge" id="streakBadge" style="display:none"></div>
 
     <!-- SCOUT BUSINESS HEALTH SCORE (Feature 5.2) -->
-    <div class="health-card" id="healthScoreCard">
+    <div class="health-card" id="healthScoreCard" style="display:none">
       <div class="health-eyebrow">What's Driving Your Score</div>
       <div class="health-empty">Your business health score appears after your first check-in.</div>
     </div>
 
     <!-- QUICK ACTIONS -->
-    <div class="actions-row">
+    <div class="actions-row" style="display:none">
       <a href="checkin.html" class="btn-action-primary">Weekly Check-In →</a>
       <a href="result.html" class="btn-action-outline">View My Full Plan →</a>
     </div>
@@ -752,7 +816,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div class="momentum-card" id="inboundCard" style="display:none"></div>
 
     <!-- RECENT HISTORY -->
-    <div class="recent-section" id="recentSection">
+    <div class="recent-section" id="recentSection" style="display:none">
       <div class="recent-header">
         <div class="recent-title">Recent Weeks</div>
         <a href="history.html" class="recent-view-all">View Full History →</a>
@@ -796,6 +860,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   scoutWriteSnapshot();
   await scoutMigratePinKey();
   scoutPinnedRender();
+  ccRender();
 
   /* Firm name in nav */
   var firmName = localStorage.getItem('g7_session_name') || '';
@@ -1991,7 +2056,7 @@ function scoutPinnedRender() {
   scoutPinnedPrune();
   var list = scoutPinnedLoad();
   if (!list.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  var html = '<div style="font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--amber);margin-bottom:12px">Scout said</div>';
+  var html = '';
   list.forEach(function(p) {
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;margin-bottom:8px;border-left:2px solid var(--amber);background:rgba(224,146,47,0.05)">' +
       '<span style="font-size:14px;color:var(--white);line-height:1.5">' + escHtml(p.text) + '</span>' +
@@ -2027,6 +2092,272 @@ function scoutMode() {
   return 'evening';
 }
 window.scoutMode = scoutMode;
+
+/* ═══════════════════════════════════════════
+   COMMAND CENTRE RENDERER — fills the three-column layout from
+   scoutState(), economics, and stored analysis data. Pure reads,
+   no model call. Called once in DOMContentLoaded after pinned render.
+═══════════════════════════════════════════ */
+function ccRender() {
+  var wrap = document.getElementById('ccWrap');
+  if (!wrap) return;
+
+  /* ── Data sources ── */
+  var s = scoutState();
+  var weekNum = parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '0', 10);
+  var pend = null, parsed = null, econ = null, bd = {};
+  try {
+    pend = JSON.parse(localStorage.getItem(scoutKey('scout_pending_result')) || '{}');
+    bd = pend.businessData || {};
+    econ = pend.economics || null;
+    var _raw = (pend.scoutOutput || '').replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/```\s*$/i,'').trim();
+    var _fb = _raw.indexOf('{');
+    if (_fb > 0) _raw = _raw.slice(_fb);
+    parsed = JSON.parse(_raw);
+  } catch(e) {}
+
+  /* ── Week indicator (centre core) ── */
+  var weekEl = document.getElementById('ccWeek');
+  if (weekEl) weekEl.textContent = weekNum > 0 ? 'Week ' + weekNum + ' of 12' : '';
+
+  /* ── 4 metric cards (centre top) ── */
+  var metricsEl = document.getElementById('ccMetrics');
+  if (metricsEl) {
+    var hist = [];
+    try { hist = JSON.parse(localStorage.getItem(scoutKey('scout_history')) || '[]'); } catch(e) {}
+    var ckins = hist.filter(isCheckinEntry);
+    var totalRev = 0;
+    ckins.forEach(function(c) { totalRev += parseFloat(c.revenueAdded) || 0; });
+
+    /* In play — real on day one. Leads times what one customer is worth.
+       Dropped entirely when economics is absent or its confidence is low,
+       because a money figure we are unsure of is worse than none. */
+    var acv = (econ && typeof econ.annualCustomerValue === 'number' && econ.confidence !== 'low')
+      ? econ.annualCustomerValue : null;
+    var inPlay = acv ? acv * s.leadsFound : null;
+
+    var cards = [
+      { label: 'In play',
+        value: inPlay ? '₹' + Math.round(inPlay).toLocaleString('en-IN') : '—',
+        cls:   inPlay ? ' gold' : ' dim',
+        sub:   inPlay ? s.leadsFound + ' leads at your customer value' : 'once Scout knows your customer value' },
+      { label: 'Money in',
+        value: totalRev > 0 ? '₹' + Math.round(totalRev).toLocaleString('en-IN') : '—',
+        cls:   totalRev > 0 ? '' : ' dim',
+        sub:   totalRev > 0 ? 'recorded in your check-ins' : 'once you record your first sale' },
+      { label: 'Customers won',
+        value: String(s.joined),
+        cls:   s.joined > 0 ? '' : ' dim',
+        sub:   s.joined > 0 ? 'since you started' : 'none yet' },
+      { label: '12-week goal',
+        value: (econ && econ.targetCustomerCount) ? String(econ.targetCustomerCount) : '—',
+        cls:   (econ && econ.targetCustomerCount) ? '' : ' dim',
+        sub:   (econ && econ.currentCustomerCount) ? 'from ' + econ.currentCustomerCount + ' today' : 'your target' }
+    ];
+
+    metricsEl.innerHTML = cards.map(function(c) {
+      return '<div class="cc-metric">' +
+        '<div class="cc-metric-label">' + escHtml(c.label) + '</div>' +
+        '<div class="cc-metric-value' + c.cls + '">' + escHtml(c.value) + '</div>' +
+        '<div class="cc-metric-sub">' + escHtml(c.sub) + '</div></div>';
+    }).join('');
+  }
+
+  /* ── Pipeline funnel (left rail) ── */
+  var funnelEl = document.getElementById('ccFunnel');
+  if (funnelEl) {
+    var stages = [
+      { label: 'Found',         n: s.leadsFound },
+      { label: 'Contacted',     n: s.contacted },
+      { label: 'Replied',       n: s.replied },
+      { label: 'Trial booked',  n: s.booked },
+      { label: 'Joined',        n: s.joined }
+    ];
+    var fh = '';
+    stages.forEach(function(st) {
+      fh += '<div class="cc-funnel-row">' +
+        '<span style="font-size:11px;color:var(--grey1);letter-spacing:.08em">' + st.label + '</span>' +
+        '<span class="cc-rule"></span>' +
+        '<span class="n">' + st.n + '</span></div>';
+    });
+    if (s.notInterested > 0) {
+      fh += '<div style="font-size:10px;color:var(--grey2);margin-top:8px;letter-spacing:.06em">Not interested: ' + s.notInterested + '</div>';
+    }
+    funnelEl.innerHTML = fh;
+  }
+
+  /* ── Customer groups (left rail) ── */
+  var groupsEl = document.getElementById('ccGroups');
+  if (groupsEl && parsed && parsed.tab1 && Array.isArray(parsed.tab1.groups)) {
+    var gh = '';
+    parsed.tab1.groups.forEach(function(g) {
+      /* Bar shows messages sent to this group relative to the busiest
+         group — real activity, not an estimate. Rate is shown only when
+         the sample is large enough for scoutConversion to have set it. */
+      var g2 = null;
+      if (s.conversion && s.conversion.groups) {
+        g2 = s.conversion.groups.filter(function(x){ return x.name === g.name; })[0] || null;
+      }
+      var maxSent = 0;
+      if (s.conversion && s.conversion.groups) {
+        s.conversion.groups.forEach(function(x){ if (x.sent > maxSent) maxSent = x.sent; });
+      }
+      var barW = (g2 && maxSent > 0) ? Math.round((g2.sent / maxSent) * 100) : 0;
+      var rateLabel = (g2 && g2.rate !== null && g2.rate !== undefined)
+        ? ' <span style="color:var(--gold)">' + Math.round(g2.rate * 100) + '%</span>' : '';
+      gh += '<div class="cc-group">' +
+        '<div class="cc-group-name">' + escHtml(g.name || '') + rateLabel + '</div>' +
+        '<div class="cc-group-bar"><div class="cc-group-fill" style="width:' + barW + '%"></div></div>' +
+        '</div>';
+    });
+    groupsEl.innerHTML = gh;
+  } else if (groupsEl) {
+    groupsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2);line-height:1.5">Groups appear after your first analysis.</div>';
+  }
+
+  /* ── Customer links (left rail) ── */
+  var linksEl = document.getElementById('ccLinks');
+  if (linksEl) {
+    var lh = '';
+    if (bd.businessPhone) {
+      var inboundStarter = (parsed && parsed.tab2 && parsed.tab2.inboundStarter) || '';
+      if (inboundStarter) {
+        var waLink = 'https://wa.me/' + waPhone(bd.businessPhone) + '?text=' + encodeURIComponent(inboundStarter);
+        lh += '<div class="cc-link-row"><span style="font-size:11px;color:var(--white)">WhatsApp link</span>' +
+          '<a href="' + waLink + '" target="_blank" rel="noopener" style="font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--amber);text-decoration:none">Open →</a></div>';
+      }
+    }
+    if (lh) { linksEl.innerHTML = lh; }
+    else { linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey2);line-height:1.5">Links appear after onboarding.</div>'; }
+  }
+
+  /* ── Today's tasks (right rail) ── */
+  var todayEl = document.getElementById('ccToday');
+  var todayCountEl = document.getElementById('ccTodayCount');
+  var todayLabelEl = document.getElementById('ccTodayLabel');
+  if (todayEl) {
+    var todayName = s.dayName;
+    if (todayLabelEl) todayLabelEl.textContent = todayName;
+
+    /* Reuse the same task array logic from the today list */
+    var _dow = new Date().getDay();
+    var _dueList = [];
+    try { _dueList = pipelineDue(); } catch(e) {}
+    var _allFound = [];
+    try {
+      var _st = pipelineLoad();
+      _allFound = (_st && _st.people || []).filter(function(p){ return p.status === 'found'; });
+    } catch(e) {}
+
+    var ccTasks = [];
+    /* Chase */
+    if (_dueList.length > 0) {
+      ccTasks.push({ title: 'Chase ' + _dueList.length + ' people', why: 'Haven\'t replied yet', link: 'pipeline.html' });
+    }
+    /* New leads */
+    if (_allFound.length > 0) {
+      ccTasks.push({ title: 'Message ' + _allFound.length + ' new leads', why: 'Found but not contacted', link: 'pipeline.html' });
+    }
+    /* Today's plan action */
+    try {
+      if (parsed && parsed.tab3 && Array.isArray(parsed.tab3.days)) {
+        var dn = todayName.toLowerCase();
+        var dayEntry = parsed.tab3.days.filter(function(d){ return d.day && d.day.toLowerCase() === dn; })[0];
+        if (dayEntry && dayEntry.action) {
+          var actionShort = dayEntry.action.length > 60 ? dayEntry.action.slice(0, 57) + '…' : dayEntry.action;
+          ccTasks.push({ title: actionShort, why: dayEntry.timeRequired || 'Scout\'s plan', link: 'result.html' });
+        }
+      }
+    } catch(e) {}
+    /* Check-in */
+    if (s.checkinCount > 0 && s.weeksSinceLastCheckin !== null && s.weeksSinceLastCheckin >= 1) {
+      ccTasks.push({ title: 'Weekly check-in', why: s.weeksSinceLastCheckin + ' week' + (s.weeksSinceLastCheckin !== 1 ? 's' : '') + ' ago', link: 'checkin.html' });
+    } else if (s.checkinCount === 0 && (_dow === 5 || _dow === 6 || _dow === 0)) {
+      ccTasks.push({ title: 'First check-in', why: 'End-of-week review', link: 'checkin.html' });
+    }
+
+    if (todayCountEl) todayCountEl.textContent = ccTasks.length > 0 ? ccTasks.length + ' tasks' : '';
+
+    if (ccTasks.length === 0) {
+      todayEl.innerHTML = '<div style="font-size:12px;color:var(--grey2);line-height:1.5">Nothing waiting today.</div>';
+    } else {
+      var th = '';
+      ccTasks.forEach(function(t) {
+        th += '<div class="cc-task">' +
+          '<div class="cc-task-title">' + escHtml(t.title) + '</div>' +
+          (t.why ? '<div class="cc-task-why">' + escHtml(t.why) + '</div>' : '') +
+          '<a href="' + t.link + '" class="cc-btn">Go →</a>' +
+          '</div>';
+      });
+      todayEl.innerHTML = th;
+    }
+  }
+
+  /* ── Activity feed (right rail) ── */
+  var feedEl = document.getElementById('ccFeed');
+  if (feedEl) {
+    var feedItems = [];
+
+    /* Recent pipeline activity */
+    try {
+      var store = pipelineLoad();
+      var ppl = (store && store.people) || [];
+      /* Sort by most recent status change */
+      var recent = ppl.filter(function(p){ return p.lastStatusAt; })
+        .sort(function(a,b){ return new Date(b.lastStatusAt) - new Date(a.lastStatusAt); })
+        .slice(0, 5);
+      recent.forEach(function(p) {
+        var verb = p.status === 'contacted' ? 'Messaged' :
+                   p.status === 'replied' ? 'Replied' :
+                   p.status === 'trial_booked' ? 'Trial booked' :
+                   p.status === 'joined' ? 'Joined' :
+                   p.status === 'not_interested' ? 'Not interested' : 'Updated';
+        var col = p.status === 'joined' ? '#5A9E6F' :
+                  p.status === 'replied' ? 'var(--amber)' :
+                  p.status === 'not_interested' ? '#C45A5A' : 'var(--grey2)';
+        var ago = pipelineDaysSince(p.lastStatusAt);
+        var agoStr = ago === 0 ? 'Today' : ago === 1 ? 'Yesterday' : ago + 'd ago';
+        feedItems.push('<div class="cc-feed">' +
+          '<div class="cc-feed-dot" style="background:' + col + '"></div>' +
+          '<div><div class="cc-feed-text">' + verb + ' — ' + escHtml(p.name || 'Unknown') + '</div>' +
+          '<div class="cc-feed-when">' + agoStr + '</div></div></div>');
+      });
+    } catch(e) {}
+
+    if (feedItems.length === 0) {
+      feedEl.innerHTML = '<div style="font-size:11px;color:var(--grey2);line-height:1.5">Activity appears as you use your pipeline.</div>';
+    } else {
+      feedEl.innerHTML = feedItems.join('');
+    }
+  }
+
+  /* ── Season panel (right rail) ── */
+  var seasonPanel = document.getElementById('ccSeasonPanel');
+  var seasonEl = document.getElementById('ccSeason');
+  var seasonSubEl = document.getElementById('ccSeasonSub');
+  if (seasonPanel && seasonEl) {
+    if (bd.bestMonths || bd.seasonalEvents) {
+      seasonPanel.style.display = '';
+      var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      var curMonth = monthNames[new Date().getMonth()];
+      var bestList = (bd.bestMonths || '').split(',').map(function(s){ return s.trim().toLowerCase(); });
+      var isBest = bestList.some(function(m){ return curMonth.toLowerCase().indexOf(m) >= 0 || m.indexOf(curMonth.toLowerCase()) >= 0; });
+      seasonEl.textContent = isBest ? 'Peak season' : curMonth;
+      if (seasonSubEl) seasonSubEl.textContent = bd.seasonalEvents || '';
+    }
+  }
+
+  /* ── Pinned panel visibility ── */
+  var pinnedPanel = document.getElementById('ccPinnedPanel');
+  var pinnedList = scoutPinnedLoad();
+  var pinnedCountEl = document.getElementById('ccPinnedCount');
+  if (pinnedPanel) {
+    pinnedPanel.style.display = pinnedList.length > 0 ? '' : 'none';
+  }
+  if (pinnedCountEl) {
+    pinnedCountEl.textContent = pinnedList.length > 0 ? pinnedList.length + ' pinned' : '';
+  }
+}
 
 /* ═══════════════════════════════════════════
    SCOUT STATE — pure arithmetic over pipeline + history.
