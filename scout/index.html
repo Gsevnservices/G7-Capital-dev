@@ -703,6 +703,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   await loadScoutStateFromServer();
   await repairOrphanedScoutResult(); // must run after server load, before first scoped read
   scoutWriteSnapshot();
+  scoutMigratePinKey();
   scoutPinnedRender();
 
   /* Firm name in nav */
@@ -1802,10 +1803,11 @@ function scoutConversion() {
 window.scoutConversion = scoutConversion;
 
 /* One-time migration: pins were stored under the previous key name before
-   the rename. Copy forward once so existing pins are not orphaned.
-   Do NOT let a rename pass rewrite the literal below — it must stay as the
+   the rename. Must run AFTER loadScoutStateFromServer(), or the server blob
+   — which still carries the old key — overwrites the migrated value.
+   Do NOT let a rename pass rewrite the literal below; it must stay as the
    OLD key name. */
-(function(){
+function scoutMigratePinKey() {
   try {
     var LEGACY_PIN_KEY = 'scout_' + 'jarvis' + '_pinned';
     var oldK = scoutKey(LEGACY_PIN_KEY);
@@ -1817,7 +1819,7 @@ window.scoutConversion = scoutConversion;
       if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer();
     }
   } catch (e) {}
-})();
+}
 
 /* ═══════════════════════════════════════════
    PINNED ACTIONS — what Scout told him to do, held until he does it.
