@@ -2204,9 +2204,9 @@ function ccRender() {
 
   /* ── Customer groups (left rail) ── */
   var groupsEl = document.getElementById('ccGroups');
-  if (groupsEl && parsed && parsed.tab1 && Array.isArray(parsed.tab1.groups)) {
+  if (groupsEl && parsed && parsed.tab1 && Array.isArray(parsed.tab1.icps)) {
     var gh = '';
-    parsed.tab1.groups.forEach(function(g) {
+    parsed.tab1.icps.forEach(function(g) {
       /* Bar shows messages sent to this group relative to the busiest
          group — real activity, not an estimate. Rate is shown only when
          the sample is large enough for scoutConversion to have set it. */
@@ -2231,20 +2231,42 @@ function ccRender() {
     groupsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2);line-height:1.5">Groups appear after your first analysis.</div>';
   }
 
-  /* ── Customer links (left rail) ── */
+  /* Customer links — the three tracked short links, with their tap counts.
+     Fetched async from the worker, so the panel fills after first paint.
+     Mirrors what initInboundCard already renders on the old card. */
   var linksEl = document.getElementById('ccLinks');
   if (linksEl) {
-    var lh = '';
-    if (bd.businessPhone) {
-      var inboundStarter = (parsed && parsed.tab2 && parsed.tab2.inboundStarter) || '';
-      if (inboundStarter) {
-        var waLink = 'https://wa.me/' + waPhone(bd.businessPhone) + '?text=' + encodeURIComponent(inboundStarter);
-        lh += '<div class="cc-link-row"><span style="font-size:11px;color:var(--white)">WhatsApp link</span>' +
-          '<a href="' + waLink + '" target="_blank" rel="noopener" style="font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--amber);text-decoration:none">Open →</a></div>';
+    linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Loading your links\u2026</div>';
+    var CC_LINK_SOURCES = [
+      { key: 'bio',    name: 'Bio link',    where: 'Instagram or Facebook bio' },
+      { key: 'google', name: 'Google link', where: 'Google Business listing' },
+      { key: 'status', name: 'Status link', where: 'WhatsApp status' }
+    ];
+    (async function(){
+      try {
+        var r = await fetch(SCOUT_WORKER + '/inbound/stats', {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
+        });
+        if (!r.ok) throw new Error('stats');
+        var j = await r.json();
+        var codes = (j && j.links) || {};
+        var clicks = (j && j.clicks) || {};
+        var rows = CC_LINK_SOURCES.filter(function(sr){ return codes[sr.key]; });
+        if (!rows.length) {
+          linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Create your customer links from your plan to start tracking taps.</div>';
+          return;
+        }
+        linksEl.innerHTML = rows.map(function(sr){
+          var n = clicks[sr.key] || 0;
+          return '<div class="cc-link-row">' +
+            '<div><div style="font-size:12px;color:var(--white)">' + escHtml(sr.name) + '</div>' +
+            '<div style="font-size:10px;color:var(--grey1);margin-top:2px">' + escHtml(sr.where) + '</div></div>' +
+            '<span class="taps">' + n + '</span></div>';
+        }).join('');
+      } catch (e) {
+        linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Your links are on your full plan.</div>';
       }
-    }
-    if (lh) { linksEl.innerHTML = lh; }
-    else { linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey2);line-height:1.5">Links appear after onboarding.</div>'; }
+    })();
   }
 
   /* ── Today's tasks (right rail) ── */
@@ -2532,10 +2554,10 @@ function scoutContext() {
       (bd.comp1better ? ' | stronger than us at: ' + bd.comp1better : '') +
       (bd.comp1worse  ? ' | weaker at: ' + bd.comp1worse : ''));
 
-    if (a.tab1 && a.tab1.groups) {
+    if (a.tab1 && Array.isArray(a.tab1.icps)) {
       try {
-        parts.push('CUSTOMER GROUPS: ' + a.tab1.groups.map(function(g){
-          return (g.name || '') + ' — ' + (g.why || g.description || '');
+        parts.push('CUSTOMER GROUPS: ' + a.tab1.icps.map(function(g){
+          return (g.name || '') + (g.why ? ' — ' + g.why : (g.description ? ' — ' + g.description : ''));
         }).join(' || '));
       } catch (e) {}
     }
