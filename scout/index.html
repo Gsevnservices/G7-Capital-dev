@@ -527,7 +527,11 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .cc-mid{flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:18px}
 
 .cc-panel{border:1px solid var(--border2);background:var(--black2);padding:18px}
-.cc-panel.grow{flex-grow:1;min-height:0}
+.cc-panel.grow{flex-grow:1;min-height:0;overflow:auto}
+/* Today is the panel he acts from — give it the room and let the
+   reference panels below take what is left. */
+.cc-rail-r > .cc-panel.hot{flex-grow:1.4;min-height:0}
+.cc-rail-r > #ccSeasonPanel{flex-shrink:1;max-height:280px;overflow:auto}
 .cc-panel.hot{border-color:rgba(224,146,47,0.22)}
 .cc-label{font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--amber);margin-bottom:15px}
 .cc-label-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
@@ -578,10 +582,11 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .cc-cta span{display:block;font-size:10px;letter-spacing:.06em;color:rgba(8,8,8,.62);margin-top:5px}
 
 .cc-task{border-left:1px solid rgba(224,146,47,.4);padding-left:13px}
-.cc-task+.cc-task{margin-top:13px}
+.cc-task+.cc-task{margin-top:18px}
 .cc-task-title{font-size:13px;color:var(--white);line-height:1.4}
-.cc-task-why{font-size:11px;color:var(--grey1);margin-top:4px;line-height:1.4}
-.cc-task .cc-btn{margin-top:9px;padding:8px 14px;font-size:9px;letter-spacing:.18em;border-color:rgba(224,146,47,.35);color:var(--amber)}
+.cc-task-why{font-size:11px;color:var(--grey1);margin-top:4px;line-height:1.4;text-decoration:none}
+.cc-task a{text-decoration:none}
+.cc-task .cc-btn{display:inline-block;margin-top:8px;padding:0;font-size:9px;letter-spacing:.18em;border:0;background:transparent;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,.4);padding-bottom:2px}
 
 .cc-feed{display:flex;gap:11px}
 .cc-feed+.cc-feed{margin-top:14px}
