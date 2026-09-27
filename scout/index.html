@@ -575,7 +575,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
 .cc-link-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .cc-link-row+.cc-link-row{margin-top:12px}
-.cc-link-row .taps{font-family:var(--serif,'Cormorant Garamond',serif);font-size:17px;color:var(--gold)}
+.cc-link-row .taps{font-family:var(--serif,'Cormorant Garamond',serif);font-size:17px;color:var(--gold);min-width:16px;text-align:right}
+.cc-link-row .taps:not(.hot){color:var(--grey2)}
 .cc-copy{background:transparent;border:1px solid rgba(224,146,47,.35);color:var(--amber);font-family:inherit;font-size:9px;letter-spacing:.18em;text-transform:uppercase;padding:6px 12px;cursor:pointer}
 .cc-copy.done{border-color:rgba(90,158,111,.5);color:#5A9E6F}
 
@@ -1436,7 +1437,7 @@ function ccRender() {
             '<div style="font-size:10px;color:var(--grey2);margin-top:4px;word-break:break-all;line-height:1.4">' + escHtml(url) + '</div>' +
             '</div>' +
             '<div style="flex-shrink:0;display:flex;align-items:center;gap:10px">' +
-            (n > 0 ? '<span class="taps">' + n + '</span>' : '') +
+            '<span class="taps' + (n > 0 ? ' hot' : '') + '" title="taps so far">' + n + '</span>' +
             '<button class="cc-copy" data-copy="' + escHtml(url) + '">Copy</button>' +
             '</div></div>';
         }).join('');
