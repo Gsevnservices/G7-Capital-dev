@@ -576,6 +576,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .cc-link-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .cc-link-row+.cc-link-row{margin-top:12px}
 .cc-link-row .taps{font-family:var(--serif,'Cormorant Garamond',serif);font-size:17px;color:var(--gold)}
+.cc-copy{background:transparent;border:1px solid rgba(224,146,47,.35);color:var(--amber);font-family:inherit;font-size:9px;letter-spacing:.18em;text-transform:uppercase;padding:6px 12px;cursor:pointer}
+.cc-copy.done{border-color:rgba(90,158,111,.5);color:#5A9E6F}
 
 .cc-cta{flex-shrink:0;display:block;background:var(--amber);border:1px solid var(--amber);box-shadow:0 0 26px rgba(224,146,47,.3);padding:16px 18px;text-align:center;text-decoration:none}
 .cc-cta b{display:block;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--black);font-weight:400}
@@ -1426,10 +1428,17 @@ function ccRender() {
         }
         linksEl.innerHTML = rows.map(function(sr){
           var n = clicks[sr.key] || 0;
-          return '<div class="cc-link-row">' +
-            '<div><div style="font-size:12px;color:var(--white)">' + escHtml(sr.name) + '</div>' +
-            '<div style="font-size:10px;color:var(--grey1);margin-top:2px">' + escHtml(sr.where) + '</div></div>' +
-            '<span class="taps">' + n + '</span></div>';
+          var url = 'https://g7-proxy.gsevnservices.workers.dev/i/' + codes[sr.key];
+          return '<div class="cc-link-row" style="align-items:flex-start">' +
+            '<div style="min-width:0;flex:1">' +
+            '<div style="font-size:12px;color:var(--white)">' + escHtml(sr.name) + '</div>' +
+            '<div style="font-size:10px;color:var(--grey1);margin-top:2px">' + escHtml(sr.where) + '</div>' +
+            '<div style="font-size:10px;color:var(--grey2);margin-top:4px;word-break:break-all;line-height:1.4">' + escHtml(url) + '</div>' +
+            '</div>' +
+            '<div style="flex-shrink:0;display:flex;align-items:center;gap:10px">' +
+            (n > 0 ? '<span class="taps">' + n + '</span>' : '') +
+            '<button class="cc-copy" data-copy="' + escHtml(url) + '">Copy</button>' +
+            '</div></div>';
         }).join('');
       } catch (e) {
         linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Could not load your links just now. They are on your full plan.</div>';
@@ -2183,6 +2192,34 @@ window.scoutAskQuestion = scoutAsk;
 
   window.scoutHandleQuestion = scoutHandleQuestion;
 })();
+
+/* Copy any customer link. Delegated, so it survives ccRender rewriting
+   the rail. Falls back to a textarea for non-https contexts. */
+document.addEventListener('click', function(e) {
+  var b = e.target.closest && e.target.closest('[data-copy]');
+  if (!b) return;
+  var text = b.getAttribute('data-copy');
+  var done = function() {
+    b.textContent = 'Copied';
+    b.classList.add('done');
+    setTimeout(function(){ b.textContent = 'Copy'; b.classList.remove('done'); }, 2000);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function(){
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (err) {}
+      document.body.removeChild(ta);
+    });
+  } else {
+    var ta2 = document.createElement('textarea');
+    ta2.value = text; ta2.style.position = 'fixed'; ta2.style.opacity = '0';
+    document.body.appendChild(ta2); ta2.select();
+    try { document.execCommand('copy'); done(); } catch (err) {}
+    document.body.removeChild(ta2);
+  }
+});
 </script>
 </body>
 </html>
