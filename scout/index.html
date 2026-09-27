@@ -2159,9 +2159,11 @@ function ccRender() {
 
     var cards = [
       { label: 'In play',
-        value: inPlay ? '₹' + Math.round(inPlay).toLocaleString('en-IN') : '—',
-        cls:   inPlay ? ' gold' : ' dim',
-        sub:   inPlay ? s.leadsFound + ' leads at your customer value' : 'once Scout knows your customer value' },
+        value: acv ? '\u20B9' + Math.round(acv * s.leadsFound).toLocaleString('en-IN') : '\u2014',
+        cls:   (acv && s.leadsFound > 0) ? ' gold' : ' dim',
+        sub:   !acv ? 'once Scout knows your customer value'
+             : s.leadsFound === 0 ? 'add leads and this fills up'
+             : s.leadsFound + ' leads at \u20B9' + Math.round(acv).toLocaleString('en-IN') + ' each' },
       { label: 'Money in',
         value: totalRev > 0 ? '₹' + Math.round(totalRev).toLocaleString('en-IN') : '—',
         cls:   totalRev > 0 ? '' : ' dim',
