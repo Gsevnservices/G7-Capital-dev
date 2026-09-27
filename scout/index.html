@@ -2262,7 +2262,10 @@ function ccRender() {
         var clicks = (j && j.clicks) || {};
         var rows = CC_LINK_SOURCES.filter(function(sr){ return codes[sr.key]; });
         if (!rows.length) {
-          linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Create your customer links from your plan to start tracking taps.</div>';
+          linksEl.innerHTML =
+            '<div style="font-size:12px;color:var(--white);line-height:1.5;margin-bottom:8px">Three links that bring customers to you.</div>' +
+            '<div style="font-size:11px;color:var(--grey1);line-height:1.5;margin-bottom:12px">One for your Instagram bio, one for your Google listing, one for WhatsApp status. Scout counts every tap.</div>' +
+            '<a href="result.html" style="font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,.4);padding-bottom:2px">Create them</a>';
           return;
         }
         linksEl.innerHTML = rows.map(function(sr){
@@ -2273,7 +2276,7 @@ function ccRender() {
             '<span class="taps">' + n + '</span></div>';
         }).join('');
       } catch (e) {
-        linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Your links are on your full plan.</div>';
+        linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Could not load your links just now. They are on your full plan.</div>';
       }
     })();
   }
@@ -2327,6 +2330,16 @@ function ccRender() {
       ccTasks.push({ title: 'First check-in', why: 'End-of-week review', link: 'checkin.html' });
     }
 
+    /* Week one — no leads at all. The plan is worth nothing until there is
+       someone in the pipeline, so that leads. */
+    if (s.leadsFound === 0) {
+      ccTasks.unshift({
+        title: 'Find your first customers',
+        why: 'Scout knows who to look for. Open your plan and run Customer Finder.',
+        link: 'result.html'
+      });
+    }
+
     if (todayCountEl) todayCountEl.textContent = ccTasks.length > 0
       ? ccTasks.length + (ccTasks.length === 1 ? ' task' : ' tasks') : '';
 
@@ -2378,7 +2391,23 @@ function ccRender() {
     } catch(e) {}
 
     if (feedItems.length === 0) {
-      feedEl.innerHTML = '<div style="font-size:11px;color:var(--grey2);line-height:1.5">Activity appears as you use your pipeline.</div>';
+      var wk1 = [];
+      if (econ && econ.annualCustomerValue) {
+        wk1.push({ t: 'One customer is worth about \u20B9' + Math.round(econ.annualCustomerValue).toLocaleString('en-IN') + ' to you', c: 'var(--gold)', w: 'From your analysis' });
+      }
+      var icpCount = (parsed && parsed.tab1 && Array.isArray(parsed.tab1.icps)) ? parsed.tab1.icps.length : 0;
+      if (icpCount) {
+        wk1.push({ t: 'Scout has picked ' + icpCount + ' customer groups to go after', c: 'var(--amber)', w: 'Your plan' });
+      }
+      if (econ && econ.targetCustomerCount && econ.currentCustomerCount) {
+        wk1.push({ t: 'Your goal is ' + econ.targetCustomerCount + ' customers, up from ' + econ.currentCustomerCount, c: '#5A9E6F', w: 'Twelve weeks' });
+      }
+      wk1.push({ t: 'Nothing in your pipeline yet \u2014 that is the first thing to change', c: 'var(--grey1)', w: 'Week one' });
+      feedEl.innerHTML = wk1.map(function(f) {
+        return '<div class="cc-feed"><div class="cc-feed-dot" style="background:' + f.c + '"></div>' +
+          '<div><div class="cc-feed-text">' + escHtml(f.t) + '</div>' +
+          '<div class="cc-feed-when">' + escHtml(f.w) + '</div></div></div>';
+      }).join('');
     } else {
       feedEl.innerHTML = feedItems.join('');
     }
