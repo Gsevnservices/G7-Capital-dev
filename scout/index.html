@@ -2327,7 +2327,8 @@ function ccRender() {
       ccTasks.push({ title: 'First check-in', why: 'End-of-week review', link: 'checkin.html' });
     }
 
-    if (todayCountEl) todayCountEl.textContent = ccTasks.length > 0 ? ccTasks.length + ' tasks' : '';
+    if (todayCountEl) todayCountEl.textContent = ccTasks.length > 0
+      ? ccTasks.length + (ccTasks.length === 1 ? ' task' : ' tasks') : '';
 
     if (ccTasks.length === 0) {
       todayEl.innerHTML = '<div style="font-size:12px;color:var(--grey2);line-height:1.5">Nothing waiting today.</div>';
@@ -2392,10 +2393,20 @@ function ccRender() {
       seasonPanel.style.display = '';
       var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
       var curMonth = monthNames[new Date().getMonth()];
-      var bestList = (bd.bestMonths || '').split(',').map(function(s){ return s.trim().toLowerCase(); });
-      var isBest = bestList.some(function(m){ return curMonth.toLowerCase().indexOf(m) >= 0 || m.indexOf(curMonth.toLowerCase()) >= 0; });
-      seasonEl.textContent = isBest ? 'Peak season' : curMonth;
-      if (seasonSubEl) seasonSubEl.textContent = bd.seasonalEvents || '';
+      var bestList = (bd.bestMonths || '').split(',').map(function(x){ return x.trim().toLowerCase(); }).filter(Boolean);
+      var isBest = bestList.some(function(m){ return m && curMonth.toLowerCase().indexOf(m) >= 0; });
+      seasonEl.textContent = isBest
+        ? curMonth + ' \u2014 one of your strongest months'
+        : (bd.bestMonths ? curMonth + '. Your strongest are ' + bd.bestMonths + '.' : curMonth);
+      /* First sentence only — the stored value is whatever the owner typed
+         during onboarding and can run to a full paragraph. */
+      if (seasonSubEl) {
+        var ev = (bd.seasonalEvents || '').trim();
+        var firstStop = ev.indexOf('. ');
+        if (firstStop > 30) ev = ev.slice(0, firstStop + 1);
+        if (ev.length > 180) ev = ev.slice(0, 177).replace(/\s+\S*$/, '') + '\u2026';
+        seasonSubEl.textContent = ev;
+      }
     }
   }
 
