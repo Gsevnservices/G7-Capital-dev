@@ -611,21 +611,6 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   .cc-core-ask input{width:100%;max-width:392px}
 }
 
-/* ═══════════════════════════════════════════
-   LEGACY DASHBOARD — superseded by the command centre.
-   Their JS still runs and still sets display, so inline styles are not
-   enough. Hidden here until stage 4 removes the markup and the dead code.
-═══════════════════════════════════════════ */
-#todayList,
-#inboundCard,
-#momentumCard,
-#healthScoreCard,
-#streakBadge,
-#recentSection,
-#mondayCard,
-.metric-row,
-.actions-row { display: none !important }
-
 </style>
 </head>
 <body>
@@ -765,98 +750,6 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
     </div>
 
-    <!-- TODAY LIST — ordered task list: check-in, chase, leads, Scout's plan -->
-    <div class="momentum-card" id="todayList" style="display:none"></div>
-
-    <!-- FOUR METRIC CARDS -->
-    <div class="metric-row" style="display:none">
-      <div class="metric-card">
-        <div class="metric-card-label">Money Coming In</div>
-        <div class="metric-card-value" id="dashRevenue">—</div>
-        <div class="metric-card-sub" id="dashRevenueSub">once you record your first sale</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-card-label">Messages Per Customer</div>
-        <div class="metric-card-value" id="dashAcq">—</div>
-        <div class="metric-card-sub" id="dashAcqSub">after your first check-in</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-card-label">New Customers</div>
-        <div class="metric-card-value" id="dashCustomers">—</div>
-        <div class="metric-card-sub" id="dashCustomersSub">after your first check-in</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-card-label">Total New Business</div>
-        <div class="metric-card-value" id="dashTotalRevenue">₹0</div>
-        <div class="metric-card-sub" id="dashTotalRevenueSub">earned since you started — your journey begins now</div>
-      </div>
-    </div>
-
-    <!-- MOMENTUM CARD (Progression System) -->
-    <div class="momentum-card" id="momentumCard" style="display:none">
-      <div class="momentum-card-top">
-        <div class="momentum-label-block">
-          <div class="momentum-eyebrow">Your Scout Score</div>
-          <div class="momentum-level-name" id="dashLevelName">Getting Started</div>
-          <div class="momentum-score-display">
-            <div class="momentum-big" id="dashMomentumScore">0</div>
-            <div class="momentum-denom">/100</div>
-          </div>
-        </div>
-        <div class="momentum-trend" id="dashMomentumTrend"></div>
-      </div>
-      <div class="momentum-bar-wrap">
-        <div class="momentum-bar-fill" id="dashMomentumBar"></div>
-      </div>
-      <button class="score-detail-toggle" id="scoreDetailToggle" onclick="toggleScoreDetail()">Why this score ▾</button>
-      <div class="score-detail" id="scoreDetail">
-        <div class="momentum-level-desc" id="dashLevelDesc">Scout is learning your market and you're taking your first steps. Every message you send this week builds momentum.</div>
-        <div class="momentum-next-level" id="dashNextLevel"></div>
-        <div class="momentum-note" id="dashMomentumNote">
-          Your score starts at zero and grows every week you use Scout. This is week one — you're right on track.
-        </div>
-      </div>
-    </div>
-
-    <!-- STREAK BADGE -->
-    <div class="streak-badge" id="streakBadge" style="display:none"></div>
-
-    <!-- SCOUT BUSINESS HEALTH SCORE (Feature 5.2) -->
-    <div class="health-card" id="healthScoreCard" style="display:none">
-      <div class="health-eyebrow">What's Driving Your Score</div>
-      <div class="health-empty">Your business health score appears after your first check-in.</div>
-    </div>
-
-    <!-- QUICK ACTIONS -->
-    <div class="actions-row" style="display:none">
-      <a href="checkin.html" class="btn-action-primary">Weekly Check-In →</a>
-      <a href="result.html" class="btn-action-outline">View My Full Plan →</a>
-    </div>
-
-    <!-- INBOUND LINKS CARD — shown only when businessPhone is set -->
-    <div class="momentum-card" id="inboundCard" style="display:none"></div>
-
-    <!-- RECENT HISTORY -->
-    <div class="recent-section" id="recentSection" style="display:none">
-      <div class="recent-header">
-        <div class="recent-title">Recent Weeks</div>
-        <a href="history.html" class="recent-view-all">View Full History →</a>
-      </div>
-      <div id="recentRows">
-        <!-- Rendered by JS -->
-      </div>
-    </div>
-
-    <!-- MONDAY BRIEFING CARD (shown only on Mondays with prior history) -->
-    <div class="monday-card" id="mondayCard" style="display:none">
-      <button class="monday-card-close" onclick="dismissMonday()" aria-label="Dismiss">✕</button>
-      <div class="monday-eyebrow">Monday Briefing</div>
-      <div class="monday-heading" id="mondayHeading">Week begins.</div>
-      <div class="monday-row" id="mondayLastWeek"></div>
-      <div class="monday-row" id="mondayTargets"></div>
-      <div class="monday-action" id="mondayAction"></div>
-    </div>
-
   </div>
 </div>
 
@@ -913,26 +806,6 @@ function showWelcome() {
   document.getElementById('stateWelcome').classList.add('active');
 }
 
-/* ═══════════════════════════════════════════
-   MOMENTUM LEVEL SYSTEM
-   Returns level data for a given score 0-100.
-═══════════════════════════════════════════ */
-/* Health score bands — 5 dimensions × 20 pts each.
-   90/100 = near-perfect across winning customers, revenue, retention,
-   reply rate and festival readiness. Bands reflect realistic weekly progress. */
-function getMomentumLevel(score) {
-  var levels = [
-    { min: 0,  max: 30,  name: 'Getting Started',   desc: 'Scout is learning your market. Every message you send builds momentum.',                    next: 31  },
-    { min: 31, max: 50,  name: 'Finding Your Feet',  desc: 'You\'re starting to see what works. Keep going.',                                           next: 51  },
-    { min: 51, max: 70,  name: 'Working Well',       desc: 'Your system is bringing in customers steadily.',                                             next: 71  },
-    { min: 71, max: 85,  name: 'Strong',             desc: 'You have a repeatable way of winning customers.',                                             next: 86  },
-    { min: 86, max: 100, name: 'Outstanding',        desc: 'You\'re running one of the best customer systems in your area.',                              next: null }
-  ];
-  for (var i = 0; i < levels.length; i++) {
-    if (score <= levels[i].max) return levels[i];
-  }
-  return levels[levels.length - 1];
-}
 
 /* ═══════════════════════════════════════════
    SHOW DASHBOARD STATE
@@ -968,483 +841,10 @@ function showDashboard(history, weekNum, firmName) {
   document.getElementById('greetingHello').textContent = greeting + (businessName ? ', ' + businessName + '.' : '.');
   /* greetingWeek is owned by renderTransformationArc() — written there, not here */
 
-  /* ── Filter to check-in entries only for all metric displays ── */
-  var checkins = history.filter(isCheckinEntry);
-  var last = checkins[checkins.length - 1] || {};
-  var prev = checkins.length > 1 ? checkins[checkins.length - 2] : null;
-
-  /* ── MOMENTUM PROGRESSION ── */
-  var score;
-  if (checkins.length === 0) {
-    score = null;
-  } else if (last.healthScore !== undefined) {
-    score = last.healthScore;
-  } else {
-    var _hsRaw = parseInt(localStorage.getItem(scoutKey('scout_health_score')), 10);
-    score = isNaN(_hsRaw) ? null : _hsRaw;
-  }
-  var prevScore = prev
-    ? (prev.healthScore !== undefined ? prev.healthScore : null)
-    : null;
-  var level     = getMomentumLevel(score !== null ? score : 0);
-  var prevLevel = prevScore !== null ? getMomentumLevel(prevScore) : null;
-
-  if (score === null) {
-    document.getElementById('dashMomentumScore').textContent = '—';
-    document.getElementById('dashLevelName').textContent     = '';
-    document.getElementById('dashLevelDesc').textContent     = 'Complete your first Friday check-in to see your progress score.';
-    document.getElementById('dashNextLevel').textContent     = '';
-  } else {
-    document.getElementById('dashMomentumScore').textContent = score;
-    document.getElementById('dashLevelName').textContent     = level.name;
-    document.getElementById('dashLevelDesc').textContent     = level.desc;
-    document.getElementById('dashNextLevel').textContent     = level.next
-      ? 'Next level at ' + level.next + ' points.'
-      : '';
-  }
-
-  /* Mastery glow — Outstanding band starts at 86 */
-  var card = document.getElementById('momentumCard');
-  if (score !== null && score >= 86) { card.classList.add('mastery'); }
-
-  /* Level-up celebration flash */
-  if (score !== null && prevLevel && level.name !== prevLevel.name) {
-    card.classList.add('level-up');
-    setTimeout(function() { card.classList.remove('level-up'); }, 900);
-  }
-
-  /* Animate bar — only when there is a real score */
-  if (score !== null) {
-    setTimeout(function() {
-      document.getElementById('dashMomentumBar').style.width = Math.min(score, 100) + '%';
-    }, 300);
-  }
-
-  /* Trend indicator — only when there are at least 2 check-ins */
-  if (prevScore !== null) {
-    var diff = score - prevScore;
-    var trendEl = document.getElementById('dashMomentumTrend');
-    if (diff > 0) {
-      trendEl.textContent = '↑ up from last week';
-      trendEl.classList.add('up');
-    } else if (diff < 0) {
-      trendEl.textContent = '↓ down from last week';
-      trendEl.classList.add('down');
-    } else {
-      trendEl.textContent = 'same as last week';
-    }
-  }
-
-  /* Momentum note */
-  if (score === null) {
-    document.getElementById('dashMomentumNote').textContent = '';
-  } else if (score === 0) {
-    document.getElementById('dashMomentumNote').textContent =
-      'Your score starts at zero and grows every week you use Scout. This is week one — you\'re right on track.';
-  } else if (last.scoutOutput) {
-    var learnedMatch = last.scoutOutput.match(/WHAT\s+SCOUT\s+LEARNED[\s\S]{0,20}?\n([^\n]+)/i);
-    if (learnedMatch) {
-      document.getElementById('dashMomentumNote').textContent = plainLang(learnedMatch[1].trim());
-    }
-  }
-
-  /* ── STREAK BADGE (Feature 3.3) ── */
-  var streak = parseInt(localStorage.getItem(scoutKey('scout_streak')) || '0', 10);
-  if (streak >= 2) {
-    var sb = document.getElementById('streakBadge');
-    sb.classList.add('visible');
-    if (streak >= 8) {
-      sb.classList.add('master');
-      sb.textContent = '🔥 ' + streak + ' weeks in a row — you\'re on fire';
-    } else {
-      sb.textContent = '🔥 Week ' + streak + ' streak — keep going';
-    }
-  }
-
-  /* ── METRIC CARDS ── */
-  var custNew = checkins.length > 0 ? (last.totalCustomers || '—') : '—';
-
-  /* Card 1: Money Coming In — computed from check-in revenueAdded fields */
-  var revenue    = '—';
-  var revenueSub = 'once you record your first sale';
-  if (checkins.length > 0) {
-    var totalRev = checkins.reduce(function(s, e) { return s + (parseFloat(e.revenueAdded) || 0); }, 0);
-    if (totalRev > 0) {
-      var avgWeekly = totalRev / checkins.length;
-      if (checkins.length >= 3) {
-        revenue    = '₹' + Math.round(avgWeekly * 4.33).toLocaleString('en-IN') + '/month';
-        revenueSub = 'average, based on your last ' + checkins.length + ' weeks';
-      } else {
-        revenue    = '₹' + Math.round(avgWeekly).toLocaleString('en-IN') + '/week';
-        revenueSub = 'your weekly average so far';
-      }
-    }
-  }
-
-  /* Card 2: Messages Per Customer — cumulative sent vs conversions */
-  var acq    = '—';
-  var acqSub = 'after your first check-in';
-  if (checkins.length > 0) {
-    var totalSentAll = checkins.reduce(function(s, e) {
-      return s + (parseInt(e.icp1_sent, 10) || 0)
-               + (parseInt(e.icp2_sent, 10) || 0)
-               + (parseInt(e.icp3_sent, 10) || 0);
-    }, 0);
-    var totalWonAll = checkins.reduce(function(s, e) {
-      return s + (parseInt(e.icp1_conv, 10) || 0)
-               + (parseInt(e.icp2_conv, 10) || 0)
-               + (parseInt(e.icp3_conv, 10) || 0);
-    }, 0);
-    if (totalWonAll > 0) {
-      acq    = String(Math.round(totalSentAll / totalWonAll));
-      acqSub = 'messages to win one customer';
-    } else if (totalSentAll > 0) {
-      acqSub = totalSentAll + ' messages sent, no customers yet';
-    } else {
-      acqSub = 'after your first check-in';
-    }
-  }
-
-  document.getElementById('dashRevenue').textContent   = revenue;
-  document.getElementById('dashAcq').textContent       = acq;
-  document.getElementById('dashCustomers').textContent = custNew;
-  document.getElementById('dashRevenueSub').textContent   = revenueSub;
-  document.getElementById('dashAcqSub').textContent       = acqSub;
-  document.getElementById('dashCustomersSub').textContent =
-    checkins.length === 0 ? 'after your first check-in' : (custNew !== '—' ? 'won this week' : '');
-
-  /* ── TOTAL REVENUE COUNTER (Feature 3.5) ── */
-  var totalRevenue = checkins.reduce(function(sum, entry) {
-    return sum + (parseFloat(entry.revenueAdded) || 0);
-  }, 0);
-  document.getElementById('dashTotalRevenue').textContent =
-    checkins.length === 0 ? '—' : (totalRevenue > 0 ? '₹' + totalRevenue.toLocaleString('en-IN') : '₹0');
-  if (checkins.length === 0) {
-    document.getElementById('dashTotalRevenueSub').textContent = 'after your first check-in';
-  } else if (totalRevenue > 0) {
-    document.getElementById('dashTotalRevenueSub').textContent = 'earned since you started Scout';
-  }
-
-  /* ── TODAY LIST — ordered task list replacing todayCard / leadsCard / chaseCard ──
-     Tasks A–D are collected into an array, sorted by day-of-week priority, then
-     rendered as a numbered list.  One delegated listener handles lead WA promotion.
-
-     Priority by day:
-       start (Mon, Tue)       → D=1, C=2, B=3, A=4
-       mid   (Wed, Thu)       → B=1, D=2, C=3, A=4
-       end   (Fri, Sat, Sun)  → A=1, B=2, C=3, D=4
-     A forces position 0 (overrides day) when 10+ days since the last check-in
-     and at least one check-in has been recorded. */
-  var _tlEl = document.getElementById('todayList');
-  if (_tlEl) {
-    var todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
-    var _dow = new Date().getDay();
-
-    /* ── Check-in condition ──
-       last.submittedAt is the ISO timestamp on the most recent isCheckinEntry row.
-       Absent (new user, no check-ins ever) → neverCheckedIn = true.
-       daysSinceCheckin is only computed when a real timestamp exists — this prevents
-       "never checked in" from being treated as "infinitely overdue".
-
-       Rule 1 — Never checked in (week-1 user): task appears ONLY on Fri/Sat/Sun
-                 (the end-of-week group). Mon–Thu it must not appear at all.
-       Rule 2 — Has checked in: task appears whenever daysSinceCheckin >= 5,
-                 and forces position 0 (override) when >= 10 days (not 7),
-                 so a Saturday check-in does not immediately read as "late". */
-    var _neverCheckedIn   = !last.submittedAt;
-    var daysSinceCheckin  = _neverCheckedIn
-      ? null
-      : Math.floor((Date.now() - new Date(last.submittedAt).getTime()) / 86400000);
-    var _isEndOfWeek      = (_dow === 5 || _dow === 6 || _dow === 0); /* Fri=5, Sat=6, Sun=0 */
-    var _checkinDue       = _neverCheckedIn
-      ? _isEndOfWeek                              /* new user: Fri/Sat/Sun only */
-      : daysSinceCheckin >= 5;                   /* returning user: 5+ days since last */
-    var _checkinForce1st  = !_neverCheckedIn && daysSinceCheckin >= 10; /* override: 10+ days, only when has history */
-
-    /* Day-of-week priority map */
-    var _tlGrp = (_dow === 1 || _dow === 2) ? 'start' : (_dow === 3 || _dow === 4) ? 'mid' : 'end';
-    var _tlPri = _tlGrp === 'start' ? { A: 4, B: 3, C: 2, D: 1 }
-               : _tlGrp === 'mid'   ? { A: 4, B: 1, C: 3, D: 2 }
-               :                      { A: 1, B: 2, C: 3, D: 4 };
-
-    var _tasks = [];
-
-    /* ── A: Check-in ── */
-    if (_checkinDue) {
-      _tasks.push({
-        type: 'A',
-        priority: _checkinForce1st ? 0 : _tlPri.A,
-        label: 'Do your weekly check-in',
-        html: '<a href="checkin.html" class="tc-btn">Start Check-In \u2192</a>'
-      });
-    }
-
-    /* ── B: Chase — people who need follow-up today ── */
-    var _dueList = [];
-    try { _dueList = pipelineDue(); } catch(_ce) {}
-    if (_dueList.length > 0) {
-      var _chaseRows = _dueList.slice(0, 3).map(function(item) {
-        var _cp = waPhone(item.person.phone);
-        var _cb = '';
-        if (_cp && item.msg) {
-          _cb = '<a href="https://wa.me/' + _cp + '?text=' + encodeURIComponent(item.msg) +
-            '" target="_blank" rel="noopener" class="tc-btn" style="flex-shrink:0">WhatsApp \u2192</a>';
-        }
-        return '<div class="chase-item">' +
-          '<div style="flex:1;min-width:0">' +
-          '<div class="chase-name">' + escHtml(item.person.name) + '</div>' +
-          '<div class="chase-reason">' + escHtml(item.reason) + '</div>' +
-          '</div>' + _cb + '</div>';
-      }).join('');
-      _tasks.push({
-        type: 'B',
-        priority: _tlPri.B,
-        label: 'Chase ' + _dueList.length + (_dueList.length === 1 ? ' person' : ' people') + ' who haven\u2019t replied',
-        html: '<div class="chase-list">' + _chaseRows + '</div>' +
-          (_dueList.length > 3 ? '<a href="pipeline.html" class="tc-btn" style="margin-right:20px">See all \u2192</a>' : '') +
-          '<a href="pipeline.html" class="tc-btn">Open Pipeline \u2192</a>'
-      });
-    }
-
-    /* ── C: Leads — 'found' businesses not yet messaged ── */
-    var _allFound = [];
-    try {
-      var _store = pipelineLoad();
-      _allFound = _store.people
-        .filter(function(p) { return p.status === 'found'; })
-        .sort(function(a, b) {
-          /* Most recently added first — lastContactedAt is set to addedAt on creation */
-          var ta = a.lastContactedAt ? new Date(a.lastContactedAt).getTime() : 0;
-          var tb = b.lastContactedAt ? new Date(b.lastContactedAt).getTime() : 0;
-          return tb - ta;
-        });
-    } catch(_le) {}
-    /* Keep module var in sync — read by the delegated listener below */
-    _foundLeads = _allFound;
-    if (_allFound.length > 0) {
-      /* ICP → message lookup from tab2.messages — same logic as original leadsCard */
-      var _normStr = function(s) { return (s || '').trim().toLowerCase(); };
-      var _msgMap  = {};
-      try {
-        var _msgs = (pendingParsed && pendingParsed.tab2 && Array.isArray(pendingParsed.tab2.messages))
-          ? pendingParsed.tab2.messages : [];
-        _msgs.forEach(function(m) {
-          var _k = _normStr(m.icp);
-          if (!_k) return;
-          /* Keep primary if available; otherwise keep first seen.
-             Schema field is versionA; fall back to text for older outputs. */
-          if (!_msgMap[_k] || m.type === 'primary') _msgMap[_k] = m.versionA || m.text || '';
-        });
-      } catch(_me) {}
-      var _showLeads  = _allFound.slice(0, 3);
-      var _extraCount = _allFound.length - _showLeads.length;
-      var _leadRows = _showLeads.map(function(p, i) {
-        var _lp   = waPhone(p.phone);
-        var _lm   = _msgMap[_normStr(p.icp)] || '';
-        var _addr = p.address ? escHtml(p.address) : '';
-        var _lb   = '';
-        if (_lp) {
-          var _lu = 'https://wa.me/' + _lp + (_lm ? '?text=' + encodeURIComponent(_lm) : '');
-          _lb = '<a href="' + _lu + '" target="_blank" rel="noopener"' +
-            ' class="tc-btn" style="flex-shrink:0"' +
-            ' data-lead-idx="' + i + '">WhatsApp \u2192</a>';
-        }
-        return '<div class="chase-item">' +
-          '<div style="flex:1;min-width:0;overflow:hidden">' +
-          '<div class="chase-name">' + escHtml(p.name) + '</div>' +
-          (_addr ? '<div class="chase-reason" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _addr + '</div>' : '') +
-          '</div>' + _lb + '</div>';
-      }).join('');
-      _tasks.push({
-        type: 'C',
-        priority: _tlPri.C,
-        label: 'Message ' + _allFound.length + (_allFound.length === 1 ? ' business' : ' businesses') + ' you found',
-        html: '<div class="chase-list">' + _leadRows + '</div>' +
-          (_extraCount > 0 ? '<a href="pipeline.html" class="tc-btn" style="margin-right:20px">See all \u2192</a>' : '') +
-          '<a href="pipeline.html" class="tc-btn">Open Pipeline \u2192</a>'
-      });
-    }
-
-    /* ── D: Scout's plan — today's tab3.days entry ── */
-    try {
-      if (pendingParsed && pendingParsed.tab3 && Array.isArray(pendingParsed.tab3.days)) {
-        var _dayEntry = null;
-        for (var _di = 0; _di < pendingParsed.tab3.days.length; _di++) {
-          var _dd = pendingParsed.tab3.days[_di];
-          if (_dd.day && _dd.day.toLowerCase() === todayName.toLowerCase()) {
-            _dayEntry = _dd; break;
-          }
-        }
-        if (_dayEntry) {
-          var _timeLine = _dayEntry.timeRequired || '';
-          if (_dayEntry.target) _timeLine += (_timeLine ? ' \u00b7 ' : '') + _dayEntry.target;
-          /* Split action on first sentence boundary — first sentence becomes heading,
-             remainder becomes body text so the heading never runs past two lines */
-          var _actionFull = _dayEntry.action || 'Scout\u2019s plan for ' + todayName;
-          var _actionSplit = _actionFull.match(/^(.+?\.)\s+([A-Z][\s\S]*)$/);
-          var _actionHead = _actionSplit ? _actionSplit[1] : _actionFull;
-          var _actionBody = _actionSplit ? _actionSplit[2] : '';
-          _tasks.push({
-            type: 'D',
-            priority: _tlPri.D,
-            label: _actionHead,
-            subtext: _actionBody,
-            html: (_timeLine ? '<div class="tc-text">' + escHtml(_timeLine) + '</div>' : '') +
-              (_dayEntry.messageToUse
-                ? '<div class="tc-use"><span style="color:var(--white2)">Use:</span> ' + escHtml(_dayEntry.messageToUse) + '</div>'
-                : '') +
-              '<a href="result.html" class="tc-btn">Open my plan \u2192</a>'
-          });
-        }
-      }
-    } catch(_te) {}
-
-    /* ── Sort ascending by priority number ── */
-    _tasks.sort(function(a, b) { return a.priority - b.priority; });
-
-    /* ── Render ── */
-    var _tn = _tasks.length;
-    var _thead = '<div class="tc-eyebrow">TODAY \u2014 ' + todayName.toUpperCase() + '</div>' +
-      '<div style="font-size:12px;color:var(--grey2);letter-spacing:.06em;margin-bottom:20px">' +
-      _tn + (_tn === 1 ? ' thing to do' : ' things to do') + '</div>';
-
-    if (_tn === 0) {
-      _tlEl.innerHTML = _thead +
-        '<div class="tc-text" style="color:var(--grey2);margin-bottom:0">Nothing waiting on you today.</div>';
-      _tlEl.style.display = 'block';
-    } else {
-      var _tbody = _tasks.map(function(task, idx) {
-        var _sep = idx < _tn - 1
-          ? '<div style="height:1px;background:var(--border2);margin:12px 0 18px"></div>'
-          : '';
-        /* Number sits inline to the left of the heading on the same baseline */
-        return '<div>' +
-          '<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">' +
-          '<span style="font-size:11px;font-family:\'Tenor Sans\',sans-serif;' +
-          'color:var(--amber);letter-spacing:.05em;flex-shrink:0">' + (idx + 1) + '</span>' +
-          '<div class="tc-heading">' + escHtml(task.label) + '</div>' +
-          '</div>' +
-          (task.subtext ? '<div class="tc-text" style="margin-top:0;margin-bottom:12px">' + escHtml(task.subtext) + '</div>' : '') +
-          task.html +
-          '</div>' + _sep;
-      }).join('');
-      _tlEl.innerHTML = _thead + _tbody;
-      _tlEl.style.display = 'block';
-    }
-
-    /* ── One delegated listener on todayList — handles lead WA tap → 'contacted' promotion ──
-       Chase rows are plain anchors; only lead rows carry data-lead-idx and need promotion. */
-    _tlEl.addEventListener('click', function(e) {
-      var _a = e.target.closest('[data-lead-idx]');
-      if (!_a) return;
-      var _i = parseInt(_a.getAttribute('data-lead-idx'), 10);
-      var _p = _foundLeads[_i];
-      if (!_p) return;
-      /* Promote to 'contacted' — person now enters normal chase flow */
-      try { pipelineSetStatus(_p.id, 'contacted', weekNum); } catch(_pe) {}
-    });
-  }
-
-  /* ── INBOUND LINKS CARD ── */
-  initInboundCard(pendingData, pendingParsed);
-
-  /* ── MONDAY BRIEFING (Feature 3.1) ── */
-  var dayOfWeek = new Date().getDay(); /* 1 = Monday */
-  var dismissed = sessionStorage.getItem('scout_monday_dismissed') === 'true';
-  if (dayOfWeek === 1 && !dismissed && history.length > 0) {
-    renderMondayBriefing(last, weekNum);
-  }
-
-  /* ── BUSINESS HEALTH SCORE (Feature 5.2) ── */
-  if (checkins.length === 0) {
-    /* No check-in entries yet — render placeholder with dash score, no bars */
-    var healthEl = document.getElementById('healthScoreCard');
-    if (healthEl) {
-      healthEl.innerHTML =
-        '<div class="health-eyebrow">What\'s Driving Your Score</div>' +
-        '<div class="health-empty">Your business health score appears after your first check-in.</div>';
-    }
-  } else {
-    renderHealthScore();
-  }
-
   /* ── 12-WEEK ARC (Feature 3.7) ── */
   renderTransformationArc(weekNum);
-
-  /* ── RECENT HISTORY ROWS ── */
-  renderRecentRows(history);
 }
 
-/* ═══════════════════════════════════════════
-   MONDAY BRIEFING (Feature 3.1)
-═══════════════════════════════════════════ */
-function renderMondayBriefing(last, weekNum) {
-  var card = document.getElementById('mondayCard');
-
-  /* Heading */
-  document.getElementById('mondayHeading').textContent =
-    'Monday Briefing — Week ' + weekNum;
-
-  /* Last week summary */
-  var contacts = (parseInt(last.icp1_sent, 10) || 0) +
-                 (parseInt(last.icp2_sent, 10) || 0) +
-                 (parseInt(last.icp3_sent, 10) || 0);
-  var replies  = (parseInt(last.icp1_replies, 10) || 0) +
-                 (parseInt(last.icp2_replies, 10) || 0) +
-                 (parseInt(last.icp3_replies, 10) || 0);
-  var custs    = parseInt(last.totalCustomers, 10) || 0;
-  var rev      = parseFloat(last.revenueAdded) || 0;
-
-  if (contacts === 0 && custs === 0) {
-    /* Zero-state: brand-new user, first Monday — show encouragement, not zeros */
-    document.getElementById('mondayLastWeek').innerHTML =
-      'This is your starting line. Your plan is ready — this week is about taking the ' +
-      'first steps. Send your first messages and log what happens on Friday.';
-    document.getElementById('mondayTargets').innerHTML = '';
-  } else {
-    /* Returning user: show real numbers in plain language */
-    document.getElementById('mondayLastWeek').innerHTML =
-      'Last week you reached <strong>' + contacts + ' people</strong>, ' +
-      'heard back from <strong>' + replies + '</strong>, and gained ' +
-      '<strong>' + custs + ' new customer' + (custs !== 1 ? 's' : '') + '</strong> — ' +
-      '₹' + rev.toLocaleString('en-IN') + ' in new business.';
-
-    /* This week's targets */
-    var targets = {};
-    try { targets = JSON.parse(localStorage.getItem(scoutKey('scout_last_targets')) || '{}'); } catch(e) {}
-    if (targets.contacts || targets.responses || targets.customers) {
-      document.getElementById('mondayTargets').innerHTML =
-        "This week: reach <strong>" + (targets.contacts || '—') + ' people</strong> → ' +
-        'get <strong>' + (targets.responses || '—') + ' replies</strong> → ' +
-        'win <strong>' + (targets.customers || '—') + ' new customer' +
-        ((parseInt(targets.customers, 10) !== 1) ? 's' : '') + '</strong>.';
-    }
-  }
-
-  /* First Monday action — extract from last output */
-  var action = '';
-  if (last.scoutOutput) {
-    var mondayMatch = last.scoutOutput.match(/MONDAY[^:\n]*[:–—]\s*([^\n]+)/i);
-    if (mondayMatch) action = mondayMatch[1].replace(/━+/g,'').trim();
-    if (!action) {
-      var doMoreMatch = last.scoutOutput.match(/DO\s+MORE\s+OF\s*[:\n]\s*([^\n]+)/i);
-      if (doMoreMatch) action = doMoreMatch[1].trim();
-    }
-  }
-  if (action) {
-    document.getElementById('mondayAction').innerHTML =
-      'Start today: <strong>' + escHtml(action) + '</strong>';
-  } else {
-    document.getElementById('mondayAction').style.display = 'none';
-  }
-
-  card.style.display = 'block';
-}
-
-function dismissMonday() {
-  sessionStorage.setItem('scout_monday_dismissed', 'true');
-  document.getElementById('mondayCard').style.display = 'none';
-}
 
 /* ═══════════════════════════════════════════
    12-WEEK TRANSFORMATION ARC (Feature 3.7)
@@ -1473,117 +873,7 @@ function renderTransformationArc(weekNum) {
   }
 }
 
-/* ═══════════════════════════════════════════
-   BUSINESS HEALTH SCORE (Feature 5.2)
-   Reads scout_health_score and
-   scout_health_breakdown from localStorage
-   and renders the 5-dimension health card.
-═══════════════════════════════════════════ */
-function renderHealthScore() {
-  var el = document.getElementById('healthScoreCard');
-  if (!el) return;
 
-  var scoreRaw    = localStorage.getItem(scoutKey('scout_health_score'));
-  var breakdownRaw = localStorage.getItem(scoutKey('scout_health_breakdown'));
-
-  if (!scoreRaw || !breakdownRaw) {
-    /* No check-in data yet — show default message */
-    return;
-  }
-
-  var breakdown;
-  try { breakdown = JSON.parse(breakdownRaw); } catch(e) { return; }
-
-  /* Ordered dimension list — use label stored by calculateHealthScore(), key as fallback */
-  var dimKeys = ['acquisition', 'revenue', 'retention', 'competitive', 'seasonal'];
-  var dims = dimKeys.map(function(k) {
-    var d = breakdown[k];
-    if (!d) return null;
-    return { key: k, score: d.score, label: d.label || k };
-  }).filter(Boolean);
-
-  /* Find lowest-scoring dimension for focus area */
-  var lowest = dims.reduce(function(a, b) {
-    return (a && a.score <= b.score) ? a : b;
-  }, null);
-
-  var html = '';
-  html += '<div class="health-eyebrow">What\'s Driving Your Score</div>';
-
-  /* Dimension bars */
-  html += '<div class="health-bars">';
-  dims.forEach(function(dim) {
-    var pct = Math.round((dim.score / 20) * 100);
-    html += '<div class="health-dim">';
-    html += '<div class="health-dim-row">';
-    html += '<span class="health-dim-label">' + escHtml(dim.label) + '</span>';
-    html += '<span class="health-dim-score">' + dim.score + '/20</span>';
-    html += '</div>';
-    html += '<div class="health-bar-wrap"><div class="health-bar-fill" style="width:0%" data-pct="' + pct + '"></div></div>';
-    html += '</div>';
-  });
-  html += '</div>';
-
-  /* Focus area */
-  if (lowest) {
-    html += '<div class="health-focus">Where to focus this week: <strong>' + escHtml(lowest.label) + '</strong></div>';
-  }
-
-  el.innerHTML = html;
-
-  /* Animate bars after render */
-  setTimeout(function() {
-    el.querySelectorAll('.health-bar-fill').forEach(function(bar) {
-      bar.style.width = (bar.getAttribute('data-pct') || '0') + '%';
-    });
-  }, 300);
-}
-
-/* ═══════════════════════════════════════════
-   RENDER RECENT HISTORY ROWS (last 3 weeks)
-═══════════════════════════════════════════ */
-function renderRecentRows(history) {
-  var container = document.getElementById('recentRows');
-
-  /* Pair each check-in entry with its original index in the full history array.
-     viewWeek(idx) re-reads scout_history from localStorage and uses history[idx],
-     so origIdx must refer to the position in the unfiltered array. */
-  var checkinWithIdx = [];
-  for (var j = 0; j < history.length; j++) {
-    if (isCheckinEntry(history[j])) checkinWithIdx.push({ entry: history[j], origIdx: j });
-  }
-
-  if (checkinWithIdx.length === 0) {
-    document.getElementById('recentSection').style.display = 'none';
-    return;
-  }
-
-  /* Newest first, max 3 */
-  var recent = checkinWithIdx.slice().reverse().slice(0, 3);
-  var html   = '';
-
-  recent.forEach(function(item) {
-    var week    = item.entry;
-    var origIdx = item.origIdx;
-    var date    = formatDate(week.date);
-    var custNew = week.totalCustomers || '0';
-    var revenue = week.revenueAdded   || '0';
-    var score   = week.healthScore !== undefined ? week.healthScore : '—';
-
-    html += '<div class="history-row">';
-    html += '<div class="hr-cell">';
-    html += '<div class="hr-week">Week ' + week.week + '</div>';
-    html += '<div class="hr-week-sub">' + date + '</div>';
-    html += '</div>';
-    html += '<div class="hr-cell"><div class="hr-val">' + escHtml(custNew) + '</div><div class="hr-lbl">New Customers</div></div>';
-    html += '<div class="hr-cell"><div class="hr-val">₹' + escHtml(revenue) + '</div><div class="hr-lbl">New Business (₹)</div></div>';
-    html += '<div class="hr-cell"><div class="hr-val">' + escHtml(String(score)) + (score !== '—' ? '/100' : '') + '</div><div class="hr-lbl">Score</div></div>';
-    html += '<div class="hr-cell"><a href="#" class="hr-link" onclick="viewWeek(' + origIdx + ');return false;">View →</a></div>';
-    html += '</div>';
-  });
-
-  container.innerHTML = html;
-}
 
 /* ═══════════════════════════════════════════
    VIEW A PAST WEEK'S PLAYBOOK
@@ -1620,173 +910,6 @@ function plainLang(str) {
     .replace(/\bconversion\s+rate\b/gi, 'how many became customers');
 }
 
-/* todayList — found leads stored for delegated WA tap → 'contacted' promotion */
-var _foundLeads = [];
-
-/* ═══════════════════════════════════════════
-   INBOUND LINKS CARD
-   Shows three copyable short links (bio / google / status) that
-   redirect customers to the owner's WhatsApp with a pre-filled
-   message. Requires businessPhone in businessData.
-═══════════════════════════════════════════ */
-
-/* Copy a URL string to clipboard — matches refCopy() pattern from result.html.
-   Takes the text directly (not an element id) because the URL is never
-   rendered as a DOM text node we could read. */
-function copyInboundLink(text, btn) {
-  navigator.clipboard.writeText(text).then(function() {
-    var orig = btn.textContent;
-    btn.textContent = 'Copied';
-    btn.classList.add('copied');
-    setTimeout(function() {
-      btn.textContent = orig;
-      btn.classList.remove('copied');
-    }, 2000);
-  }).catch(function() {
-    /* Fallback for older / non-https contexts */
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity  = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    btn.textContent = 'Copied';
-    btn.classList.add('copied');
-    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-  });
-}
-
-/* Render the card into its "links exist" state.
-   links  = { bio, google, status }  (codes, not full URLs)
-   clicks = { bio, google, status }  (integers) */
-function renderInboundLinksState(card, links, clicks) {
-  var BASE    = 'https://g7-proxy.gsevnservices.workers.dev/i/';
-  var SOURCES = [
-    { key: 'bio',    label: 'Bio Link',    where: 'Instagram or Facebook bio' },
-    { key: 'google', label: 'Google Link', where: 'Your Google Business listing' },
-    { key: 'status', label: 'Status Link', where: 'WhatsApp status or broadcast' }
-  ];
-
-  var totalClicks = (clicks.bio || 0) + (clicks.google || 0) + (clicks.status || 0);
-
-  var rows = SOURCES.map(function(s) {
-    var url   = BASE + escHtml(links[s.key]);
-    var count = clicks[s.key] || 0;
-    return '<div class="chase-item" style="flex-direction:column;align-items:flex-start;gap:6px;padding-bottom:14px;border-bottom:1px solid var(--border2);margin-bottom:14px">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;width:100%;gap:8px">' +
-        '<div>' +
-          '<div class="chase-name" style="font-size:12px">' + escHtml(s.label) + '</div>' +
-          '<div class="chase-reason" style="font-size:10px">' + escHtml(s.where) + '</div>' +
-        '</div>' +
-        '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
-          (count > 0 ? '<span style="font-size:10px;color:var(--amber);letter-spacing:.05em">' + count + ' tap' + (count !== 1 ? 's' : '') + '</span>' : '') +
-          '<button class="tc-btn" style="padding:6px 14px;font-size:10px" data-inbound-copy="' + url + '">Copy</button>' +
-        '</div>' +
-      '</div>' +
-      '<div style="font-size:10px;color:var(--grey1);word-break:break-all;line-height:1.5">' + url + '</div>' +
-    '</div>';
-  }).join('');
-
-  card.innerHTML =
-    '<div class="tc-eyebrow">Your Customer Links' +
-      (totalClicks > 0 ? ' — ' + totalClicks + ' tap' + (totalClicks !== 1 ? 's' : '') + ' so far' : '') +
-    '</div>' +
-    '<div style="margin-top:12px">' + rows + '</div>';
-
-  card.style.display = 'block';
-}
-
-/* Init: fetch existing stats, then set up the card and delegated listener.
-   Guard: if businessPhone is absent, do nothing — card stays hidden. */
-async function initInboundCard(pendingData, pendingParsed) {
-  var card = document.getElementById('inboundCard');
-  if (!card) return;
-
-  /* Read token here — same pattern as scout.js line 104 and result.html line 3363.
-     token is declared inside DOMContentLoaded and is not in showDashboard's scope. */
-  var token = localStorage.getItem('g7_session_token') || '';
-  if (!token) return;
-
-  /* Require businessPhone — if absent, leave card hidden, fire no fetch */
-  var businessPhone = (pendingData && pendingData.businessData && pendingData.businessData.businessPhone) || '';
-  if (!businessPhone) return;
-
-  /* inboundStarter from latest analysis, with fallback */
-  var inboundStarter = (pendingParsed && pendingParsed.tab2 && pendingParsed.tab2.inboundStarter)
-    ? pendingParsed.tab2.inboundStarter
-    : "Hi, I'd like to know more.";
-
-  /* Delegated click handler — handles both Copy and Create buttons.
-     Uses data attributes so URLs with special characters are never
-     embedded in onclick strings (avoids the Customer Finder breakage pattern). */
-  card.addEventListener('click', function(e) {
-    /* Copy button */
-    var copyBtn = e.target.closest('[data-inbound-copy]');
-    if (copyBtn) {
-      copyInboundLink(copyBtn.getAttribute('data-inbound-copy'), copyBtn);
-      return;
-    }
-
-    /* Create button */
-    var createBtn = e.target.closest('[data-inbound-create]');
-    if (!createBtn || createBtn.disabled) return;
-
-    createBtn.disabled    = true;
-    createBtn.textContent = 'Creating…';
-
-    var errEl = card.querySelector('.inbound-err');
-    if (errEl) errEl.textContent = '';
-
-    fetch(SCOUT_WORKER + '/inbound/create', {
-      method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': 'Bearer ' + token
-      },
-      body: JSON.stringify({ waNumber: businessPhone, message: inboundStarter })
-    })
-    .then(function(res) { return res.json(); })
-    .then(function(json) {
-      if (!json.links) throw new Error('no links in response');
-      renderInboundLinksState(card, json.links, json.clicks || { bio: 0, google: 0, status: 0 });
-    })
-    .catch(function() {
-      createBtn.disabled    = false;
-      createBtn.textContent = 'Create my links';
-      var e2 = card.querySelector('.inbound-err');
-      if (e2) e2.textContent = 'Could not create links — please try again.';
-    });
-  });
-
-  /* Fetch current stats — if links already exist, render them directly */
-  try {
-    var res  = await fetch(SCOUT_WORKER + '/inbound/stats', {
-      method:  'GET',
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    if (res.ok) {
-      var json = await res.json();
-      if (json.links) {
-        renderInboundLinksState(card, json.links, json.clicks || { bio: 0, google: 0, status: 0 });
-        return; /* done — already in links state */
-      }
-    }
-  } catch(_e) {
-    /* Network failure — stay hidden. A failed fetch must not show a broken card. */
-    return;
-  }
-
-  /* No links yet — show the "create" prompt */
-  card.innerHTML =
-    '<div class="tc-eyebrow">Your Customer Links</div>' +
-    '<div class="tc-text" style="margin:10px 0 14px">Get three links — for your bio, Google listing and WhatsApp status. ' +
-    'When a customer taps one, WhatsApp opens with a message already typed and ready to send.</div>' +
-    '<button class="tc-btn" data-inbound-create="1">Create my links</button>' +
-    '<div class="inbound-err" style="margin-top:8px;font-size:10px;color:#C45A5A"></div>';
-  card.style.display = 'block';
-}
 
 function escHtml(str) {
   if (!str) return '';
@@ -1800,13 +923,6 @@ function formatDate(iso) {
   } catch(e) { return iso.slice(0, 10); }
 }
 
-function toggleScoreDetail() {
-  var detail = document.getElementById('scoreDetail');
-  var btn    = document.getElementById('scoreDetailToggle');
-  if (!detail || !btn) return;
-  var isOpen = detail.classList.toggle('open');
-  btn.textContent = isOpen ? 'Why this score ▴' : 'Why this score ▾';
-}
 
 /* ═══════════════════════════════════════════
    LOGOUT
@@ -2119,6 +1235,44 @@ window.scoutMode = scoutMode;
    scoutState(), economics, and stored analysis data. Pure reads,
    no model call. Called once in DOMContentLoaded after pinned render.
 ═══════════════════════════════════════════ */
+/* Creates the three tracked inbound links. Needs the owner's WhatsApp
+   number and the opening message Scout wrote for inbound enquiries.
+   Idempotent on the worker side — calling twice returns the same codes. */
+async function ccCreateLinks() {
+  var linksEl = document.getElementById('ccLinks');
+  var wa = '', msg = '';
+  try {
+    var pend = JSON.parse(localStorage.getItem(scoutKey('scout_pending_result')) || '{}');
+    wa = (pend.businessData && pend.businessData.businessPhone) || '';
+    var a = JSON.parse((pend.scoutOutput || '{}').replace(/^```json\s*/i,'').replace(/```\s*$/,'').trim());
+    msg = (a && a.tab2 && a.tab2.inboundStarter) || '';
+  } catch (e) {}
+
+  if (!wa) {
+    if (linksEl) linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Scout needs your WhatsApp number first. Add it in a new analysis.</div>';
+    return;
+  }
+  if (!msg) msg = 'Hi, I saw your listing and wanted to know more.';
+
+  if (linksEl) linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Creating your links\u2026</div>';
+
+  try {
+    var r = await fetch(SCOUT_WORKER + '/inbound/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '')
+      },
+      body: JSON.stringify({ waNumber: waPhone(wa), message: msg })
+    });
+    if (!r.ok) throw new Error('create');
+    ccRender();
+  } catch (e) {
+    if (linksEl) linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Could not create your links just now. Try again in a moment.</div>';
+  }
+}
+window.ccCreateLinks = ccCreateLinks;
+
 function ccRender() {
   var wrap = document.getElementById('ccWrap');
   if (!wrap) return;
@@ -2242,7 +1396,7 @@ function ccRender() {
 
   /* Customer links — the three tracked short links, with their tap counts.
      Fetched async from the worker, so the panel fills after first paint.
-     Mirrors what initInboundCard already renders on the old card. */
+     Uses ccCreateLinks() to create them when none exist yet. */
   var linksEl = document.getElementById('ccLinks');
   if (linksEl) {
     linksEl.innerHTML = '<div style="font-size:11px;color:var(--grey1);line-height:1.5">Loading your links\u2026</div>';
@@ -2265,7 +1419,9 @@ function ccRender() {
           linksEl.innerHTML =
             '<div style="font-size:12px;color:var(--white);line-height:1.5;margin-bottom:8px">Three links that bring customers to you.</div>' +
             '<div style="font-size:11px;color:var(--grey1);line-height:1.5;margin-bottom:12px">One for your Instagram bio, one for your Google listing, one for WhatsApp status. Scout counts every tap.</div>' +
-            '<a href="result.html" style="font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,.4);padding-bottom:2px">Create them</a>';
+            '<button id="ccMakeLinks" style="background:transparent;border:0;padding:0;font-family:inherit;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);cursor:pointer;border-bottom:1px solid rgba(224,146,47,.4);padding-bottom:2px">Create them</button>';
+          var mk = document.getElementById('ccMakeLinks');
+          if (mk) mk.addEventListener('click', function(){ ccCreateLinks(); });
           return;
         }
         linksEl.innerHTML = rows.map(function(sr){
