@@ -707,6 +707,92 @@ var BT_OPTIONS = [
   'Travel Agency / Tour Operator','Security Agency / Manpower Supply','Other'
 ];
 
+/* ═══════════════════════════════════════════
+   PLACEHOLDER BUCKETS — the examples that read wrong for the wrong trade.
+   Five buckets cover all 41 business types. Fields not listed here are
+   trade-agnostic and keep their markup placeholder.
+═══════════════════════════════════════════ */
+var BT_BUCKET = {
+  retail:   ['Grocery / Supermart','Wholesale / Distribution','Pharmacy / Medical Store','Stationery / Gift Shop','Clothing / Apparel Store','Jewellery Store','Furniture / Home Decor','Electronics / Appliance Store','Hardware / Building Materials','Sweet Shop / Mithai Store','D2C Brand / Online Store'],
+  food:     ['Restaurant / Dhaba / Cafe','Catering Business','Cloud Kitchen'],
+  personal: ['Gym / Fitness Centre','Salon / Spa / Beauty Parlour','Medical Clinic / Doctor','Ayurvedic Clinic / Wellness Centre','Diagnostic Lab / Pathology','Coaching Centre / Tuition','Driving School','Tailoring / Garment Stitching'],
+  trade:    ['Interior Designer / Architect','Real Estate / Property Broker','Mobile / Electronics Repair','Automobile Workshop / Garage','Courier / Logistics','Printing / Packaging','Event Management','Photography / Videography','Travel Agency / Tour Operator','Security Agency / Manpower Supply'],
+  pro:      ['Training / Corporate Learning','Digital Marketing Agency','CA / Accounting Firm','Legal Firm / Lawyer','IT Services / Software Company','SaaS / Software Product','Consulting / Advisory Firm','B2B Services','Recruitment / Staffing Firm']
+};
+
+var BT_PLACEHOLDERS = {
+  retail: {
+    businessName:    'e.g. Sharma Supermart',
+    whatYouSell:     'e.g. daily groceries, average basket ₹600, plus monthly household packs',
+    avgTransaction:  'e.g. ₹600 per basket',
+    currentCustomers:'e.g. 400 regular households',
+    targetCustomers: 'e.g. 700 regular households',
+    bestCustomers:   'e.g. Meena, 42, homemaker two lanes away, shops twice a week',
+    comp1name:       'e.g. Reliance Smart, the kirana on the main road',
+    whatWorked:      'e.g. Free home delivery above ₹500 brought 30 new households'
+  },
+  food: {
+    businessName:    'e.g. Anand Dhaba',
+    whatYouSell:     'e.g. North Indian thali at ₹180, party orders from ₹8,000',
+    avgTransaction:  'e.g. ₹350 per table',
+    currentCustomers:'e.g. 60 covers a day',
+    targetCustomers: 'e.g. 110 covers a day',
+    bestCustomers:   'e.g. Office group from the IT park, lunch four days a week',
+    comp1name:       'e.g. Barbeque Nation, the cafe across the road',
+    whatWorked:      'e.g. Weekday lunch combo posted on WhatsApp status filled the 1pm slot'
+  },
+  personal: {
+    businessName:    'e.g. FitZone Gym',
+    whatYouSell:     'e.g. memberships at ₹2,500/month, personal training at ₹800/session',
+    avgTransaction:  'e.g. ₹2,500 per month',
+    currentCustomers:'e.g. 180 active members',
+    targetCustomers: 'e.g. 350 active members',
+    bestCustomers:   'e.g. Ananya, 28, product manager nearby, comes four times a week',
+    comp1name:       "e.g. Gold's Gym, the studio in the next block",
+    whatWorked:      'e.g. Free trial week posted in the colony group brought 12 sign-ups'
+  },
+  trade: {
+    businessName:    'e.g. BuildCraft Interiors',
+    whatYouSell:     'e.g. full home interiors from ₹8 lakh, modular kitchens from ₹1.5 lakh',
+    avgTransaction:  'e.g. ₹8 lakh per project',
+    currentCustomers:'e.g. 18 projects a year',
+    targetCustomers: 'e.g. 28 projects a year',
+    bestCustomers:   'e.g. Couple building their first house in a new layout',
+    comp1name:       'e.g. the established firm on the main road',
+    whatWorked:      'e.g. Referrals from two architects brought four projects'
+  },
+  pro: {
+    businessName:    'e.g. Verma & Associates',
+    whatYouSell:     'e.g. monthly compliance retainer at ₹15,000, one-off filings from ₹5,000',
+    avgTransaction:  'e.g. ₹15,000 per month per client',
+    currentCustomers:'e.g. 40 retainer clients',
+    targetCustomers: 'e.g. 70 retainer clients',
+    bestCustomers:   'e.g. A 30-person manufacturing firm, retainer for three years',
+    comp1name:       'e.g. the larger firm in the same market',
+    whatWorked:      'e.g. LinkedIn posts on GST changes brought six enquiries'
+  }
+};
+
+function btBucketFor(type) {
+  for (var k in BT_BUCKET) {
+    if (BT_BUCKET[k].indexOf(type) !== -1) return k;
+  }
+  return null;
+}
+
+/* Applies the bucket's examples. Never overwrites a field the user has
+   already typed into — placeholders only. */
+function applyBusinessTypePlaceholders(type) {
+  var bucket = btBucketFor(type);
+  if (!bucket || !BT_PLACEHOLDERS[bucket]) return;
+  var map = BT_PLACEHOLDERS[bucket];
+  for (var id in map) {
+    var el = document.getElementById(id);
+    if (el) el.placeholder = map[id];
+  }
+}
+window.applyBusinessTypePlaceholders = applyBusinessTypePlaceholders;
+
 function initBusinessTypeWidget() {
   var inp  = document.getElementById('businessTypeInput');
   var hid  = document.getElementById('businessType');
@@ -747,6 +833,7 @@ function initBusinessTypeWidget() {
     inp.value  = value;
     hid.value  = value;
     inp.classList.remove('error');
+    applyBusinessTypePlaceholders(value);
     _close();
   }
 
@@ -799,10 +886,13 @@ function initBusinessTypeWidget() {
     if (!wrap.contains(e.target)) {
       if (inp.value.trim() && !hid.value) {
         hid.value = 'Other';
+        applyBusinessTypePlaceholders(hid.value);
       }
       _close();
     }
   });
+
+  if (hid.value) applyBusinessTypePlaceholders(hid.value);
 }
 
 /* Show/hide purchaseFrequency and billingPeriod based on revenueModel value */
