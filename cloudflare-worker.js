@@ -82,12 +82,61 @@ function jsonResponse(body, status = 200) {
 // SHA-256 hashes a plain-text password and returns a hex string.
 // Used during firm creation and login verification.
 // ─────────────────────────────────────────────────────────────────────────────
+/* Password hashing — PBKDF2-SHA256, 100k iterations, 16-byte random salt.
+   Stored as "pbkdf2$<iterations>$<saltHex>$<hashHex>".
+   Single-round SHA-256 was used previously and is effectively reversible;
+   verifyPassword below still accepts those hashes so existing accounts
+   keep working, and upgrades them on next successful login. */
+const PBKDF2_ITERATIONS = 100000;
+
 async function hashPassword(password) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    key, 256
+  );
+  const toHex = function(buf) {
+    return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  };
+  return 'pbkdf2$' + PBKDF2_ITERATIONS + '$' + toHex(salt) + '$' + toHex(bits);
+}
+
+/* Legacy SHA-256, kept only so old hashes can still be verified. */
+async function legacyHash(password) {
+  const data = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+
+/* Returns { ok, needsUpgrade }. needsUpgrade is true when the stored hash
+   was the old format and should be rewritten after a successful login. */
+async function verifyPassword(password, stored) {
+  if (!stored) return { ok: false, needsUpgrade: false };
+  if (stored.indexOf('pbkdf2$') !== 0) {
+    const legacy = await legacyHash(password);
+    return { ok: legacy === stored, needsUpgrade: legacy === stored };
+  }
+  const parts = stored.split('$');
+  if (parts.length !== 4) return { ok: false, needsUpgrade: false };
+  const iterations = parseInt(parts[1], 10);
+  const saltHex = parts[2];
+  const salt = new Uint8Array(saltHex.match(/.{2}/g).map(function(h){ return parseInt(h, 16); }));
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256' },
+    key, 256
+  );
+  const hex = Array.from(new Uint8Array(bits)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  /* Constant-time comparison — a plain === leaks timing information. */
+  if (hex.length !== parts[3].length) return { ok: false, needsUpgrade: false };
+  var diff = 0;
+  for (var i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ parts[3].charCodeAt(i);
+  return { ok: diff === 0, needsUpgrade: false };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,10 +330,20 @@ export default {
         return jsonResponse({ error: 'Invalid credentials' }, 401);
       }
 
-      // Hash the submitted password and compare to stored hash
-      const submittedHash = await hashPassword(password);
-      if (submittedHash !== user.passwordHash) {
+      // Verify the submitted password against stored hash (PBKDF2 or legacy SHA-256)
+      const check = await verifyPassword(password, user.passwordHash);
+      if (!check.ok) {
         return jsonResponse({ error: 'Invalid credentials' }, 401);
+      }
+
+      /* Old-format hash verified — rewrite it as PBKDF2 now. */
+      if (check.needsUpgrade) {
+        try {
+          const upgraded = await hashPassword(password);
+          await env.G7_KV.put('auth:users:' + normalizedCode, JSON.stringify(
+            Object.assign({}, user, { passwordHash: upgraded, hashUpgradedAt: Date.now() })
+          ));
+        } catch (e) { /* non-blocking — login proceeds either way */ }
       }
 
       // Generate a session token — two UUIDs joined for extra length
