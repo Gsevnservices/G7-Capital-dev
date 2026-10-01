@@ -93,8 +93,22 @@ async function g7Login(firmCode, password) {
   });
 
   if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(errBody || 'Login failed');
+    /* The worker returns { error: "..." }. Throwing the raw body put the
+       JSON on screen. Parse it, and fall back to a readable sentence for
+       anything unexpected. */
+    var msg = '';
+    try {
+      var errJson = await response.json();
+      msg = (errJson && errJson.error) || '';
+    } catch (e) {}
+    if (response.status === 401) {
+      msg = 'Wrong firm code or password. Check both and try again.';
+    } else if (response.status === 400 && !msg) {
+      msg = 'Please enter both your firm code and password.';
+    } else if (!msg) {
+      msg = 'Could not sign in just now. Please try again in a moment.';
+    }
+    throw new Error(msg);
   }
 
   const data = await response.json();
