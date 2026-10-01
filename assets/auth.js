@@ -26,6 +26,31 @@
 // ─────────────────────────────────────────────────────────────
 const G7_WORKER = 'https://g7-proxy.gsevnservices.workers.dev';
 
+/* ═══════════════════════════════════════════
+   PASSWORD-CHANGE GUARD
+   Runs on every page that loads auth.js. While an account still carries an
+   administrator-set password, every page redirects to change-password.html.
+   Paths are relative because dev is served from a subpath and prod from the
+   domain root — an absolute path works on one and breaks on the other.
+   This is a browser-side guard: it protects the user from forgetting, not
+   the system from a determined user. The only account it could expose is
+   their own.
+═══════════════════════════════════════════ */
+(function () {
+  try {
+    if (localStorage.getItem('g7_must_change') !== '1') return;
+    if (!localStorage.getItem('g7_session_token')) return;
+    var path = window.location.pathname;
+    if (/change-password\.html$/.test(path) || /login\.html$/.test(path)) return;
+    var nested = /\/(scout|workspace)\//.test(path);
+    var here = nested ? path.split('/').slice(-2).join('/') : path.split('/').pop();
+    if (!localStorage.getItem('g7_after_change')) {
+      localStorage.setItem('g7_after_change', here || 'login.html');
+    }
+    window.location.replace((nested ? '../' : '') + 'change-password.html');
+  } catch (e) {}
+})();
+
 /* Resolves a path relative to the site root, working both at the domain
    root (prod) and under a subpath like /G7-Capital-dev/ (dev). */
 function g7SiteRoot() {
@@ -117,6 +142,15 @@ async function g7Login(firmCode, password) {
   setToken(data.token);
   localStorage.setItem('g7_session_firm', data.firmCode);
   localStorage.setItem('g7_session_name', data.firmName);
+
+  /* Password set by an administrator — the user must choose their own
+     before using anything. Set or cleared on every login so a flag from a
+     previous firm on this device never lingers. */
+  if (data.mustChangePassword) {
+    localStorage.setItem('g7_must_change', '1');
+  } else {
+    localStorage.removeItem('g7_must_change');
+  }
 
   return data;
 }
