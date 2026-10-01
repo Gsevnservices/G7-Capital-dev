@@ -366,8 +366,55 @@ export default {
       return jsonResponse({
         token,
         firmCode: normalizedCode,
-        firmName: user.firmName
+        firmName: user.firmName,
+        mustChangePassword: !user.passwordSetByUser
       });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /auth/change-password
+    // Session-protected. The user replaces an admin-set password with
+    // their own, and optionally records a recovery email.
+    // Body: { currentPassword, newPassword, recoveryEmail? }
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/auth/change-password') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'Your session has expired. Please sign in again.' }, 401);
+
+      let body;
+      try { body = await request.json(); }
+      catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+
+      const currentPassword = body.currentPassword || '';
+      const newPassword     = body.newPassword || '';
+      const recoveryEmail   = (body.recoveryEmail || '').trim().toLowerCase();
+
+      if (newPassword.length < 8) {
+        return jsonResponse({ error: 'Your new password must be at least 8 characters.' }, 400);
+      }
+      if (newPassword === currentPassword) {
+        return jsonResponse({ error: 'Choose a password different from the one you were given.' }, 400);
+      }
+      if (recoveryEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recoveryEmail)) {
+        return jsonResponse({ error: 'That email address does not look right.' }, 400);
+      }
+
+      const key = 'auth:users:' + session.firmCode;
+      const user = await env.G7_KV.get(key, 'json');
+      if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
+
+      const check = await verifyPassword(currentPassword, user.passwordHash);
+      if (!check.ok) return jsonResponse({ error: 'Your current password is not correct.' }, 401);
+
+      const updated = Object.assign({}, user, {
+        passwordHash: await hashPassword(newPassword),
+        passwordSetByUser: true,
+        passwordChangedAt: Date.now()
+      });
+      if (recoveryEmail) updated.recoveryEmail = recoveryEmail;
+
+      await env.G7_KV.put(key, JSON.stringify(updated));
+      return jsonResponse({ success: true });
     }
 
     // =========================================================================
@@ -614,7 +661,8 @@ export default {
       await env.G7_KV.put('auth:users:' + normalizedCode, JSON.stringify({
         ...user,
         passwordHash: newHash,
-        passwordResetAt: Date.now()
+        passwordResetAt: Date.now(),
+        passwordSetByUser: false
       }));
 
       return jsonResponse({ success: true, firmCode: normalizedCode });
