@@ -1037,6 +1037,148 @@ export default {
       return jsonResponse({ text: text });
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/market
+    // Daily market brief: up to three things that changed in this
+    // business's market, each with why it matters and what to do.
+    // Body: { context, city }
+    //   context — the compact business summary from scoutContext()
+    //   city    — the business's city, for search location
+    // Cached per firm per IST day. Every item must cite a URL that
+    // web search actually returned; anything else is dropped.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/market') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+
+      /* IST date — the brief belongs to the owner's day, not UTC's. */
+      const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const day = ist.toISOString().slice(0, 10);
+      const cacheKey = 'market:' + session.firmCode + ':' + day;
+
+      const cached = await env.G7_KV.get(cacheKey, 'json');
+      if (cached) return jsonResponse(cached);
+
+      /* Three generation attempts per firm per day. A failure writes no
+         cache, so without this a broken call would retry on every load. */
+      const attemptKey = 'market:attempts:' + session.firmCode + ':' + day;
+      const attempts = parseInt((await env.G7_KV.get(attemptKey)) || '0', 10);
+      if (attempts >= 3) return jsonResponse({ items: [], date: day, limited: true });
+      await env.G7_KV.put(attemptKey, String(attempts + 1), { expirationTtl: 172800 });
+
+      let body;
+      try { body = await request.json(); }
+      catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      const context = String(body.context || '').slice(0, 4000);
+      const city = String(body.city || '').slice(0, 80);
+      if (!context) return jsonResponse({ items: [], date: day });
+
+      const system =
+        'You are Scout, the business-development employee for one Indian small business. ' +
+        'Today is ' + day + ' (India). Your job: find what changed in THIS business\'s market ' +
+        'in the last 7 days, or is coming in the next 6 weeks, that changes who it can win or how.\n\n' +
+        'SEARCH FOR, in this order:\n' +
+        '1. Local developments near the business: new offices, IT parks, residential projects, ' +
+        'colleges, hospitals, malls, metro or road work — anything that brings or removes customers.\n' +
+        '2. Competitors: openings, closures, price changes, offers, in this city and area.\n' +
+        '3. Local events and festivals in the next 6 weeks that this trade can use.\n' +
+        '4. Rule, licence or tax changes that specifically affect this trade.\n' +
+        '5. Price moves in this trade\'s main inputs.\n\n' +
+        'IGNORE: national or global general news, stock markets, politics, celebrity news, and ' +
+        'anything without a concrete link to this business\'s city or trade.\n\n' +
+        'RULES:\n' +
+        '- Every item must come from a page you actually found with web search. Never invent ' +
+        'a development, a competitor, a date or a number.\n' +
+        '- Return between 0 and 3 items. If nothing material changed, return zero items. ' +
+        'An empty brief is correct on a quiet day; filler is a failure.\n' +
+        '- whatToDo must be one concrete action this week, tied to one of the business\'s ' +
+        'customer groups by name where possible.\n' +
+        '- Plain English. No jargon. Indian context.\n\n' +
+        'After searching, reply with ONLY this JSON and nothing else:\n' +
+        '{"items":[{"headline":"under 12 words","whatHappened":"one sentence",' +
+        '"whyItMatters":"one sentence, specific to this business",' +
+        '"whatToDo":"one concrete action this week",' +
+        '"urgency":"today | this_week | watch",' +
+        '"sourceTitle":"page title","sourceUrl":"exact URL from your search results"}]}';
+
+      const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 4 };
+      if (city) {
+        tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
+      }
+
+      let data;
+      try {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 2000,
+            system: system,
+            tools: [tool],
+            messages: [{ role: 'user', content: 'THE BUSINESS:\n' + context }]
+          })
+        });
+        if (!r.ok) {
+          const errText = await r.text();
+          return jsonResponse({ error: 'market_failed', status: r.status, detail: errText.slice(0, 500) }, 502);
+        }
+        data = await r.json();
+      } catch (e) {
+        return jsonResponse({ error: 'market_failed' }, 502);
+      }
+
+      /* Collect every URL web search actually returned. */
+      const seen = new Set();
+      (data.content || []).forEach(function(b) {
+        if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+          b.content.forEach(function(res) { if (res && res.url) seen.add(res.url); });
+        }
+      });
+
+      /* The final answer can be split across several text blocks when the
+         model cites sources. Join them, then take the outermost JSON object. */
+      const text = (data.content || [])
+        .filter(function(b){ return b.type === 'text'; })
+        .map(function(b){ return b.text; }).join('');
+      let parsed = { items: [] };
+      try {
+        const a = text.indexOf('{'), z = text.lastIndexOf('}');
+        if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+      } catch (e) {}
+
+      /* Integrity gate: an item survives only if its source URL is one web
+         search really returned. This is what stops invented news. */
+      const items = (Array.isArray(parsed.items) ? parsed.items : [])
+        .filter(function(it) {
+          return it && it.headline && it.whatToDo && it.sourceUrl && seen.has(it.sourceUrl);
+        })
+        .slice(0, 3)
+        .map(function(it) {
+          return {
+            headline: String(it.headline).slice(0, 120),
+            whatHappened: String(it.whatHappened || '').slice(0, 300),
+            whyItMatters: String(it.whyItMatters || '').slice(0, 300),
+            whatToDo: String(it.whatToDo).slice(0, 300),
+            urgency: ['today','this_week','watch'].indexOf(it.urgency) !== -1 ? it.urgency : 'watch',
+            sourceTitle: String(it.sourceTitle || '').slice(0, 160),
+            sourceUrl: it.sourceUrl
+          };
+        });
+
+      const result = {
+        items: items,
+        date: day,
+        dropped: (Array.isArray(parsed.items) ? parsed.items.length : 0) - items.length
+      };
+      await env.G7_KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
+      return jsonResponse(result);
+    }
+
     // =========================================================================
     // ROUTE 14 — POST /scout/checkin
     // Scout weekly check-in. Session-protected.
