@@ -534,7 +534,7 @@ export default {
         passwordChangedAt: Date.now()
       })));
 
-      return jsonResponse({ success: true, firmCode: rec.firmCode });
+      return jsonResponse({ success: true, firmCode: rec.firmCode, product: user.product || '' });
     }
 
     // =========================================================================

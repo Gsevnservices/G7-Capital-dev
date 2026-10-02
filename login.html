@@ -358,9 +358,15 @@ body::before{
     var el = document.getElementById('loginSuccess');
     el.textContent = 'Password updated. Sign in with your new password.';
     el.classList.add('visible');
-    // Clean the URL so refreshing does not re-show the notice
-    history.replaceState(null, '', window.location.pathname);
+    // Remove only the reset flag — keep other params like product
+    params.delete('reset');
+    var qs = params.toString();
+    history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
   }
+
+  // Carry current query string into the forgot-password link
+  var fl = document.querySelector('.forgot-link a');
+  if (fl) fl.href = 'forgot-password.html' + window.location.search;
 })();
 
 // ─────────────────────────────────────────────────────────────
