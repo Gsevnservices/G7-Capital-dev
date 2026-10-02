@@ -139,6 +139,40 @@ async function verifyPassword(password, stored) {
   return { ok: diff === 0, needsUpgrade: false };
 }
 
+/* Sends an email through Resend. Returns true on success. Never throws —
+   a failed send must not change the response the caller sees. */
+async function sendEmail(env, to, subject, text, html) {
+  if (!env.RESEND_API_KEY) return false;
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + env.RESEND_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'G7 Capital <no-reply@mail.gsevnservices.in>',
+        to: [to],
+        subject: subject,
+        text: text,
+        html: html
+      })
+    });
+    return r.ok;
+  } catch (e) { return false; }
+}
+
+/* Where reset links may point. Built from the request's Origin, but only
+   ever one of these — never a caller-supplied host, which would let an
+   attacker email a user a link to a site they control. */
+function resetBaseUrl(request) {
+  const origin = request.headers.get('Origin') || '';
+  if (origin === 'https://gsevnservices.github.io') {
+    return 'https://gsevnservices.github.io/G7-Capital-dev';
+  }
+  return 'https://gsevnservices.in';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: GENERATE INBOUND LINK CODE
 // Produces a 6-character lowercase base36 code (0-9, a-z).
@@ -415,6 +449,92 @@ export default {
 
       await env.G7_KV.put(key, JSON.stringify(updated));
       return jsonResponse({ success: true });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /auth/forgot-password
+    // Body: { firmCode }
+    // Always returns the same response, whether or not the firm exists
+    // or has a recovery email — anything else confirms which codes exist.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/auth/forgot-password') {
+      const generic = jsonResponse({ success: true });
+      let body;
+      try { body = await request.json(); } catch { return generic; }
+      const code = (body.firmCode || '').toUpperCase().trim();
+      if (!code) return generic;
+
+      /* Three requests per firm per hour. Stops inbox flooding and quota burn. */
+      const rlKey = 'auth:reset-rl:' + code;
+      const rlCount = parseInt((await env.G7_KV.get(rlKey)) || '0', 10);
+      if (rlCount >= 3) return generic;
+      await env.G7_KV.put(rlKey, String(rlCount + 1), { expirationTtl: 3600 });
+
+      const user = await env.G7_KV.get('auth:users:' + code, 'json');
+      if (!user || !user.recoveryEmail) return generic;
+
+      const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+      const token = Array.from(tokenBytes).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+      await env.G7_KV.put('auth:reset:' + token,
+        JSON.stringify({ firmCode: code, createdAt: Date.now() }),
+        { expirationTtl: 1800 });
+
+      const link = resetBaseUrl(request) + '/reset-password.html#t=' + token;
+      const name = user.firmName || code;
+      const text =
+        'Hi ' + name + ',\n\n' +
+        'Someone asked to reset the password for your G7 account (' + code + ').\n\n' +
+        'Reset it here — this link works once and expires in 30 minutes:\n' + link + '\n\n' +
+        'If this was not you, ignore this email. Your password has not changed.\n\n' +
+        '— G7 Capital';
+      const html =
+        '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;color:#222;line-height:1.6">' +
+        '<p>Hi ' + name.replace(/</g,'&lt;') + ',</p>' +
+        '<p>Someone asked to reset the password for your G7 account (<b>' + code + '</b>).</p>' +
+        '<p><a href="' + link + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;letter-spacing:.08em">Reset my password</a></p>' +
+        '<p style="font-size:13px;color:#666">This link works once and expires in 30 minutes. If this was not you, ignore this email — your password has not changed.</p>' +
+        '<p style="font-size:13px;color:#666">— G7 Capital</p></div>';
+
+      await sendEmail(env, user.recoveryEmail, 'Reset your G7 password', text, html);
+      return generic;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /auth/reset-password
+    // Body: { token, newPassword }
+    // One-time: the token is deleted the moment it is used.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/auth/reset-password') {
+      let body;
+      try { body = await request.json(); }
+      catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+
+      const token = (body.token || '').trim();
+      const newPassword = body.newPassword || '';
+      if (!token) return jsonResponse({ error: 'This reset link is not valid.' }, 400);
+      if (newPassword.length < 8) {
+        return jsonResponse({ error: 'Your new password must be at least 8 characters.' }, 400);
+      }
+
+      const rec = await env.G7_KV.get('auth:reset:' + token, 'json');
+      if (!rec) {
+        return jsonResponse({ error: 'This link has expired or has already been used. Request a new one.' }, 400);
+      }
+
+      /* Burn the token before anything else, so it cannot be replayed. */
+      await env.G7_KV.delete('auth:reset:' + token);
+
+      const key = 'auth:users:' + rec.firmCode;
+      const user = await env.G7_KV.get(key, 'json');
+      if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
+
+      await env.G7_KV.put(key, JSON.stringify(Object.assign({}, user, {
+        passwordHash: await hashPassword(newPassword),
+        passwordSetByUser: true,
+        passwordChangedAt: Date.now()
+      })));
+
+      return jsonResponse({ success: true, firmCode: rec.firmCode });
     }
 
     // =========================================================================
