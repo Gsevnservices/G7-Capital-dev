@@ -141,22 +141,24 @@ async function verifyPassword(password, stored) {
 
 /* Sends an email through Resend. Returns true on success. Never throws —
    a failed send must not change the response the caller sees. */
-async function sendEmail(env, to, subject, text, html) {
+async function sendEmail(env, to, subject, text, html, headers) {
   if (!env.RESEND_API_KEY) return false;
   try {
+    const payload = {
+      from: 'G7 Capital <no-reply@mail.gsevnservices.in>',
+      to: [to],
+      subject: subject,
+      text: text,
+      html: html
+    };
+    if (headers) payload.headers = headers;
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + env.RESEND_API_KEY,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        from: 'G7 Capital <no-reply@mail.gsevnservices.in>',
-        to: [to],
-        subject: subject,
-        text: text,
-        html: html
-      })
+      body: JSON.stringify(payload)
     });
     return r.ok;
   } catch (e) { return false; }
@@ -348,6 +350,98 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
   await env.G7_KV.put(histKey, JSON.stringify(nextHist));
 
   return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MORNING EMAIL HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/* Escape anything from the web before it goes into email HTML. */
+function escEmail(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* Creates a permanent unsubscribe token for a firm, or returns its
+   existing one. Stored both ways so the link never changes. */
+async function unsubToken(env, firmCode) {
+  const existing = await env.G7_KV.get('unsub:firm:' + firmCode);
+  if (existing) return existing;
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  const t = Array.from(bytes).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  await env.G7_KV.put('unsub:firm:' + firmCode, t);
+  await env.G7_KV.put('unsub:' + t, firmCode);
+  return t;
+}
+
+/* Sends one firm its morning brief, at most once per IST day.
+   Skips silently when: not opted in, no email, nothing to say, or
+   already sent today. Returns a short status string for the admin route. */
+async function sendMorningEmail(env, firmCode, day, brief) {
+  const sentKey = 'market:emailed:' + firmCode + ':' + day;
+  if (await env.G7_KV.get(sentKey)) return 'already_sent';
+  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+  if (!user || !user.briefEmail) return 'not_opted_in';
+  if (!user.recoveryEmail) return 'no_email';
+  const items = (brief && Array.isArray(brief.items)) ? brief.items : [];
+  if (!items.length) return 'quiet_day';
+
+  const appUrl = 'https://gsevnservices.in/login.html?product=scout';
+  const token = await unsubToken(env, firmCode);
+  const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token;
+  const name = user.firmName || firmCode;
+  const n = items.length;
+  const subject = 'Scout · ' + n + (n === 1 ? ' thing' : ' things') + ' in your market today';
+
+  const blocks = items.map(function(it) {
+    const url = /^https?:\/\//i.test(it.sourceUrl || '') ? it.sourceUrl : '';
+    return '<tr><td style="padding:18px 0;border-top:1px solid #e6e2d8">' +
+      '<div style="font-size:16px;color:#111;font-weight:600;line-height:1.4">' + escEmail(it.headline) + '</div>' +
+      (it.whyItMatters ? '<div style="font-size:14px;color:#555;line-height:1.6;margin-top:6px">' + escEmail(it.whyItMatters) + '</div>' : '') +
+      '<div style="font-size:14px;color:#111;line-height:1.6;margin-top:8px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo) + '</div>' +
+      (url ? '<div style="margin-top:8px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>' : '') +
+      '</td></tr>';
+  }).join('');
+
+  const html =
+    '<div style="background:#f6f4ef;padding:24px 12px">' +
+    '<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#fff;font-family:Arial,sans-serif" cellpadding="0" cellspacing="0">' +
+    '<tr><td style="padding:28px 28px 8px">' +
+    '<div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">Scout · Your market today</div>' +
+    '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
+    '</td></tr>' +
+    '<tr><td style="padding:0 28px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + blocks + '</table></td></tr>' +
+    '<tr><td style="padding:20px 28px 28px">' +
+    '<a href="' + appUrl + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;font-size:13px;letter-spacing:.08em">Open Scout</a>' +
+    '</td></tr></table>' +
+    '<div style="max-width:560px;margin:14px auto 0;font-family:Arial,sans-serif;font-size:11px;color:#999;text-align:center;line-height:1.6">' +
+    'You get this because you switched on Scout\'s morning email. ' +
+    '<a href="' + unsubUrl + '" style="color:#999">Stop these emails</a></div></div>';
+
+  const text = 'Good morning, ' + name + '.\n\n' +
+    items.map(function(it) {
+      return it.headline + '\n' + (it.whyItMatters ? it.whyItMatters + '\n' : '') +
+        'Do this: ' + it.whatToDo + (it.sourceUrl ? '\nSource: ' + it.sourceUrl : '');
+    }).join('\n\n') +
+    '\n\nOpen Scout: ' + appUrl + '\n\nStop these emails: ' + unsubUrl;
+
+  const ok = await sendEmail(env, user.recoveryEmail, subject, text, html, {
+    'List-Unsubscribe': '<' + unsubUrl + '>',
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+  });
+  if (ok) await env.G7_KV.put(sentKey, '1', { expirationTtl: 172800 });
+  return ok ? 'sent' : 'send_failed';
+}
+
+/* The whole morning job for one firm: brief (cached or fresh), then email. */
+async function runMorningForFirm(env, firmCode, day) {
+  let brief = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
+  if (!brief) {
+    const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+    if (!saved || !saved.context) return 'no_context';
+    brief = await generateMarketBrief(env, firmCode, day, saved.context, saved.city || '');
+  }
+  return await sendMorningEmail(env, firmCode, day, brief);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -973,6 +1067,28 @@ export default {
       await env.G7_KV.delete('usage:' + normalizedCode + ':deals');
 
       return jsonResponse({ success: true, firmCode: normalizedCode });
+    }
+
+    // ── POST /admin/run-morning ──────────────────────────────────────────────
+    // Runs the morning job for one firm now. For testing without waiting
+    // for 06:00. Same code path as the scheduled job.
+    // Body: { adminPassword, firmCode }
+    if (request.method === 'POST' && path === '/admin/run-morning') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      const firmCode = String(body.firmCode || '').toUpperCase().trim();
+      if (!firmCode) return jsonResponse({ error: 'firmCode required' }, 400);
+      const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const day = ist.toISOString().slice(0, 10);
+      try {
+        const status = await runMorningForFirm(env, firmCode, day);
+        return jsonResponse({ firmCode: firmCode, day: day, status: status });
+      } catch (e) {
+        return jsonResponse({ error: 'run_failed', detail: String(e.message || '').slice(0, 300) }, 500);
+      }
     }
 
     // ── ROUTE 12 — POST /email/send-founder-questions ────────────────────────
@@ -1692,6 +1808,59 @@ export default {
       });
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // GET /scout/brief-email — current setting for the dashboard toggle.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/brief-email') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      return jsonResponse({ on: !!user.briefEmail, hasEmail: !!user.recoveryEmail });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/brief-email — { on, email? }
+    // email is accepted ONLY when the account has no recovery email yet.
+    // Changing an existing one needs the current password and is not done here.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/brief-email') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      const key = 'auth:users:' + session.firmCode;
+      const user = await env.G7_KV.get(key, 'json');
+      if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!user.recoveryEmail) {
+        if (!email) return jsonResponse({ error: 'Add an email address to get the morning brief.' }, 400);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonResponse({ error: 'That email address does not look right.' }, 400);
+        user.recoveryEmail = email;
+      }
+      user.briefEmail = !!body.on;
+      await env.G7_KV.put(key, JSON.stringify(user));
+      return jsonResponse({ on: user.briefEmail, hasEmail: true });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /unsub?t=<token> and POST /unsub (Gmail one-click) — no session.
+    // ─────────────────────────────────────────────────────────────
+    if ((request.method === 'GET' || request.method === 'POST') && path === '/unsub') {
+      const t = url.searchParams.get('t') || '';
+      const firmCode = t ? await env.G7_KV.get('unsub:' + t) : null;
+      if (firmCode) {
+        const key = 'auth:users:' + firmCode;
+        const user = await env.G7_KV.get(key, 'json');
+        if (user) { user.briefEmail = false; await env.G7_KV.put(key, JSON.stringify(user)); }
+      }
+      return new Response(
+        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<div style="font-family:Arial,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#222;line-height:1.6">' +
+        '<h2 style="font-weight:400">You\'re unsubscribed.</h2>' +
+        '<p>Scout won\'t send you the morning email any more. You can switch it back on from your dashboard.</p></div>',
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+
     // =========================================================================
     // ROUTE A — POST /inbound/create
     // Creates three inbound short links for the firm: bio, google, status.
@@ -1885,10 +2054,7 @@ export default {
       for (const k of page.keys) {
         const firmCode = k.name.slice('market:ctx:'.length);
         try {
-          if (await env.G7_KV.get('market:' + firmCode + ':' + day)) continue;
-          const saved = await env.G7_KV.get(k.name, 'json');
-          if (!saved || !saved.context) continue;
-          await generateMarketBrief(env, firmCode, day, saved.context, saved.city || '');
+          await runMorningForFirm(env, firmCode, day);
         } catch (e) {
           /* One firm failing must not stop the rest. */
         }
