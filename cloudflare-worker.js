@@ -211,6 +211,146 @@ async function validateSession(request, env) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MARKET BRIEF GENERATOR — used by both the HTTP route and the scheduled job.
+// ─────────────────────────────────────────────────────────────────────────────
+async function generateMarketBrief(env, firmCode, day, context, city) {
+  /* History — what Scout already told this owner in the last two weeks. */
+  const histKey = 'market:history:' + firmCode;
+  const history = (await env.G7_KV.get(histKey, 'json')) || [];
+  const told = history.map(function(h){ return '- ' + h.headline + ' (' + h.sourceUrl + ')'; }).join('\n');
+
+  const system =
+    'You are Scout, the business-development employee for one Indian small business. ' +
+    'Today is ' + day + ' (India). Your job: find what changed in THIS business\'s market ' +
+    'in the last 7 days, or is coming in the next 6 weeks, that changes who it can win or how.\n\n' +
+    'SEARCH FOR, in this order:\n' +
+    '1. Local developments near the business: new offices, IT parks, residential projects, ' +
+    'colleges, hospitals, malls, metro or road work — anything that brings or removes customers.\n' +
+    '2. Competitors: openings, closures, price changes, offers, in this city and area.\n' +
+    '3. Local events and festivals in the next 6 weeks that this trade can use.\n' +
+    '4. Rule, licence or tax changes that specifically affect this trade.\n' +
+    '5. Price moves in this trade\'s main inputs.\n\n' +
+    'IGNORE: national or global general news, stock markets, politics, celebrity news, and ' +
+    'anything without a concrete link to this business\'s city or trade.\n\n' +
+    'NOT NEWS: something that already existed. A competitor simply having ' +
+    'a shop, or a festival that happens every year, is not a change. A festival ' +
+    'counts only if it is within the next 3 weeks and you give its exact date.\n\n' +
+    'RULES:\n' +
+    '- Every item must come from a page you actually found with web search. Never invent ' +
+    'a development, a competitor, a date or a number.\n' +
+    '- Return between 0 and 3 items. If nothing material changed, return zero items. ' +
+    'An empty brief is correct on a quiet day; filler is a failure.\n' +
+    '- whatToDo must be one concrete action this week, tied to one of the business\'s ' +
+    'customer groups by name where possible.\n' +
+    '- Never write labels like "Customer 1", "Customer 2" or "ICP 1". Use the ' +
+    'customer group names given in the business context.\n' +
+    '- sourceUrl must be the page that actually states the fact in whatHappened, ' +
+    'not a general listing or directory page.\n' +
+    '- Plain English. No jargon. Indian context.\n\n' +
+    'After searching, reply with ONLY this JSON and nothing else:\n' +
+    '{"items":[{"headline":"under 10 words","whatHappened":"one sentence, under 30 words",' +
+    '"whyItMatters":"one sentence, under 30 words, specific to this business",' +
+    '"whatToDo":"one sentence, under 30 words, one action this week",' +
+    '"urgency":"today | this_week | watch",' +
+    '"sourceTitle":"page title","sourceUrl":"exact URL from your search results"}]}';
+
+  const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 4 };
+  if (city) {
+    tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
+  }
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
+      system: system,
+      tools: [tool],
+      messages: [{ role: 'user', content: 'THE BUSINESS:\n' + context +
+        (told ? '\n\nALREADY TOLD THE OWNER IN THE LAST TWO WEEKS — do not repeat these, ' +
+                'or anything on the same topic, unless something genuinely new has happened:\n' + told : '') }]
+    })
+  });
+  if (!r.ok) {
+    const errText = await r.text();
+    throw new Error('Anthropic ' + r.status + ': ' + errText.slice(0, 500));
+  }
+  const data = await r.json();
+
+  /* Collect every URL web search actually returned. */
+  const seen = new Set();
+  (data.content || []).forEach(function(b) {
+    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+      b.content.forEach(function(res) { if (res && res.url) seen.add(res.url); });
+    }
+  });
+
+  /* The final answer can be split across several text blocks when the
+     model cites sources. Join them, then take the outermost JSON object. */
+  const text = (data.content || [])
+    .filter(function(b){ return b.type === 'text'; })
+    .map(function(b){ return b.text; }).join('');
+  let parsed = { items: [] };
+  try {
+    const a = text.indexOf('{'), z = text.lastIndexOf('}');
+    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+  } catch (e) {}
+
+  /* Hard gate: drop items whose sourceUrl was already told in history. */
+  const toldUrls = new Set(history.map(function(h){ return h.sourceUrl; }));
+
+  /* Sentence-boundary trimmer for prose fields. */
+  function clip(s, n) {
+    s = String(s || '').trim();
+    if (s.length <= n) return s;
+    var cut = s.slice(0, n);
+    var stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+    if (stop > n * 0.5) return cut.slice(0, stop + 1);
+    return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:\s—-]+$/, '') + '…';
+  }
+
+  /* Integrity gate: an item survives only if its source URL is one web
+     search really returned AND it was not already told. */
+  const items = (Array.isArray(parsed.items) ? parsed.items : [])
+    .filter(function(it) {
+      return it && it.headline && it.whatToDo && it.sourceUrl && seen.has(it.sourceUrl) && !toldUrls.has(it.sourceUrl);
+    })
+    .slice(0, 3)
+    .map(function(it) {
+      return {
+        headline: String(it.headline).slice(0, 120),
+        whatHappened: clip(it.whatHappened, 400),
+        whyItMatters: clip(it.whyItMatters, 400),
+        whatToDo: clip(it.whatToDo, 400),
+        urgency: ['today','this_week','watch'].indexOf(it.urgency) !== -1 ? it.urgency : 'watch',
+        sourceTitle: String(it.sourceTitle || '').slice(0, 160),
+        sourceUrl: it.sourceUrl
+      };
+    });
+
+  const result = {
+    items: items,
+    date: day,
+    dropped: (Array.isArray(parsed.items) ? parsed.items.length : 0) - items.length
+  };
+  const cacheKey = 'market:' + firmCode + ':' + day;
+  await env.G7_KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
+
+  /* Append today's items to history, keep last 15. */
+  const nextHist = history.concat(items.map(function(it){
+    return { headline: it.headline, sourceUrl: it.sourceUrl, date: day };
+  })).slice(-15);
+  await env.G7_KV.put(histKey, JSON.stringify(nextHist));
+
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 export default {
@@ -1051,6 +1191,22 @@ export default {
       const session = await validateSession(request, env);
       if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
 
+      /* Parse body BEFORE cache check so we can save the context for the
+         morning scheduled job. */
+      let body;
+      try { body = await request.json(); }
+      catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      const context = String(body.context || '').slice(0, 4000);
+      const city = String(body.city || '').slice(0, 80);
+
+      /* Save the latest context so the 06:00 IST cron can generate without
+         a browser open. 7-day expiry: inactive firms drop out on their own. */
+      if (context) {
+        await env.G7_KV.put('market:ctx:' + session.firmCode,
+          JSON.stringify({ context: context, city: city }),
+          { expirationTtl: 7 * 86400 });
+      }
+
       /* IST date — the brief belongs to the owner's day, not UTC's. */
       const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
       const day = ist.toISOString().slice(0, 10);
@@ -1058,6 +1214,8 @@ export default {
 
       const cached = await env.G7_KV.get(cacheKey, 'json');
       if (cached) return jsonResponse(cached);
+
+      if (!context) return jsonResponse({ items: [], date: day });
 
       /* Concurrency lock — prevents duplicate generation if two tabs load
          at the same time. Auto-expires after 120 s as a safety net. */
@@ -1075,160 +1233,14 @@ export default {
       }
       await env.G7_KV.put(attemptKey, String(attempts + 1), { expirationTtl: 172800 });
 
-      /* History — what Scout already told this owner in the last two weeks. */
-      const histKey = 'market:history:' + session.firmCode;
-      const history = (await env.G7_KV.get(histKey, 'json')) || [];
-      const told = history.map(function(h){ return '- ' + h.headline + ' (' + h.sourceUrl + ')'; }).join('\n');
-
-      let body;
-      try { body = await request.json(); }
-      catch {
-        await env.G7_KV.delete(lockKey);
-        return jsonResponse({ error: 'Invalid request.' }, 400);
-      }
-      const context = String(body.context || '').slice(0, 4000);
-      const city = String(body.city || '').slice(0, 80);
-      if (!context) {
-        await env.G7_KV.delete(lockKey);
-        return jsonResponse({ items: [], date: day });
-      }
-
-      const system =
-        'You are Scout, the business-development employee for one Indian small business. ' +
-        'Today is ' + day + ' (India). Your job: find what changed in THIS business\'s market ' +
-        'in the last 7 days, or is coming in the next 6 weeks, that changes who it can win or how.\n\n' +
-        'SEARCH FOR, in this order:\n' +
-        '1. Local developments near the business: new offices, IT parks, residential projects, ' +
-        'colleges, hospitals, malls, metro or road work — anything that brings or removes customers.\n' +
-        '2. Competitors: openings, closures, price changes, offers, in this city and area.\n' +
-        '3. Local events and festivals in the next 6 weeks that this trade can use.\n' +
-        '4. Rule, licence or tax changes that specifically affect this trade.\n' +
-        '5. Price moves in this trade\'s main inputs.\n\n' +
-        'IGNORE: national or global general news, stock markets, politics, celebrity news, and ' +
-        'anything without a concrete link to this business\'s city or trade.\n\n' +
-        'NOT NEWS: something that already existed. A competitor simply having ' +
-        'a shop, or a festival that happens every year, is not a change. A festival ' +
-        'counts only if it is within the next 3 weeks and you give its exact date.\n\n' +
-        'RULES:\n' +
-        '- Every item must come from a page you actually found with web search. Never invent ' +
-        'a development, a competitor, a date or a number.\n' +
-        '- Return between 0 and 3 items. If nothing material changed, return zero items. ' +
-        'An empty brief is correct on a quiet day; filler is a failure.\n' +
-        '- whatToDo must be one concrete action this week, tied to one of the business\'s ' +
-        'customer groups by name where possible.\n' +
-        '- Never write labels like "Customer 1", "Customer 2" or "ICP 1". Use the ' +
-        'customer group names given in the business context.\n' +
-        '- sourceUrl must be the page that actually states the fact in whatHappened, ' +
-        'not a general listing or directory page.\n' +
-        '- Plain English. No jargon. Indian context.\n\n' +
-        'After searching, reply with ONLY this JSON and nothing else:\n' +
-        '{"items":[{"headline":"under 10 words","whatHappened":"one sentence, under 30 words",' +
-        '"whyItMatters":"one sentence, under 30 words, specific to this business",' +
-        '"whatToDo":"one sentence, under 30 words, one action this week",' +
-        '"urgency":"today | this_week | watch",' +
-        '"sourceTitle":"page title","sourceUrl":"exact URL from your search results"}]}';
-
-      const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 4 };
-      if (city) {
-        tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
-      }
-
-      let data;
       try {
-        const r = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': env.ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01'
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 2000,
-            system: system,
-            tools: [tool],
-            messages: [{ role: 'user', content: 'THE BUSINESS:\n' + context +
-              (told ? '\n\nALREADY TOLD THE OWNER IN THE LAST TWO WEEKS — do not repeat these, ' +
-                      'or anything on the same topic, unless something genuinely new has happened:\n' + told : '') }]
-          })
-        });
-        if (!r.ok) {
-          const errText = await r.text();
-          await env.G7_KV.delete(lockKey);
-          return jsonResponse({ error: 'market_failed', status: r.status, detail: errText.slice(0, 500) }, 502);
-        }
-        data = await r.json();
+        const result = await generateMarketBrief(env, session.firmCode, day, context, city);
+        await env.G7_KV.delete(lockKey);
+        return jsonResponse(result);
       } catch (e) {
         await env.G7_KV.delete(lockKey);
-        return jsonResponse({ error: 'market_failed' }, 502);
+        return jsonResponse({ error: 'market_failed', detail: String(e.message || '').slice(0, 500) }, 502);
       }
-
-      /* Collect every URL web search actually returned. */
-      const seen = new Set();
-      (data.content || []).forEach(function(b) {
-        if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
-          b.content.forEach(function(res) { if (res && res.url) seen.add(res.url); });
-        }
-      });
-
-      /* The final answer can be split across several text blocks when the
-         model cites sources. Join them, then take the outermost JSON object. */
-      const text = (data.content || [])
-        .filter(function(b){ return b.type === 'text'; })
-        .map(function(b){ return b.text; }).join('');
-      let parsed = { items: [] };
-      try {
-        const a = text.indexOf('{'), z = text.lastIndexOf('}');
-        if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
-      } catch (e) {}
-
-      /* Hard gate: drop items whose sourceUrl was already told in history. */
-      const toldUrls = new Set(history.map(function(h){ return h.sourceUrl; }));
-
-      /* Sentence-boundary trimmer for prose fields. */
-      function clip(s, n) {
-        s = String(s || '').trim();
-        if (s.length <= n) return s;
-        var cut = s.slice(0, n);
-        var stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
-        if (stop > n * 0.5) return cut.slice(0, stop + 1);
-        return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:\s—-]+$/, '') + '…';
-      }
-
-      /* Integrity gate: an item survives only if its source URL is one web
-         search really returned AND it was not already told. */
-      const items = (Array.isArray(parsed.items) ? parsed.items : [])
-        .filter(function(it) {
-          return it && it.headline && it.whatToDo && it.sourceUrl && seen.has(it.sourceUrl) && !toldUrls.has(it.sourceUrl);
-        })
-        .slice(0, 3)
-        .map(function(it) {
-          return {
-            headline: String(it.headline).slice(0, 120),
-            whatHappened: clip(it.whatHappened, 400),
-            whyItMatters: clip(it.whyItMatters, 400),
-            whatToDo: clip(it.whatToDo, 400),
-            urgency: ['today','this_week','watch'].indexOf(it.urgency) !== -1 ? it.urgency : 'watch',
-            sourceTitle: String(it.sourceTitle || '').slice(0, 160),
-            sourceUrl: it.sourceUrl
-          };
-        });
-
-      const result = {
-        items: items,
-        date: day,
-        dropped: (Array.isArray(parsed.items) ? parsed.items.length : 0) - items.length
-      };
-      await env.G7_KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
-
-      /* Append today's items to history, keep last 15. */
-      const nextHist = history.concat(items.map(function(it){
-        return { headline: it.headline, sourceUrl: it.sourceUrl, date: day };
-      })).slice(-15);
-      await env.G7_KV.put(histKey, JSON.stringify(nextHist));
-
-      await env.G7_KV.delete(lockKey);
-      return jsonResponse(result);
     }
 
     // =========================================================================
@@ -1858,5 +1870,30 @@ export default {
 
     // ── Catch-all 404 ─────────────────────────────────────────────────────────
     return jsonResponse({ error: 'Not found' }, 404);
+  },
+
+  async scheduled(event, env, ctx) {
+    /* 06:00 IST: prepare today's market brief for every firm that has
+       opened Scout in the last 7 days, so the dashboard is instant and
+       the morning email has something to send. Sequential on purpose —
+       each call takes ~20 s and parallel bursts invite rate limits. */
+    const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const day = ist.toISOString().slice(0, 10);
+    let cursor;
+    do {
+      const page = await env.G7_KV.list({ prefix: 'market:ctx:', cursor: cursor });
+      for (const k of page.keys) {
+        const firmCode = k.name.slice('market:ctx:'.length);
+        try {
+          if (await env.G7_KV.get('market:' + firmCode + ':' + day)) continue;
+          const saved = await env.G7_KV.get(k.name, 'json');
+          if (!saved || !saved.context) continue;
+          await generateMarketBrief(env, firmCode, day, saved.context, saved.city || '');
+        } catch (e) {
+          /* One firm failing must not stop the rest. */
+        }
+      }
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
   }
 };

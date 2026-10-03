@@ -754,7 +754,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
             <div class="cc-label">Your market today</div>
             <span class="cc-note" id="ccMarketNote"></span>
           </div>
-          <div id="ccMarket"><div class="cc-task-why">Scout is reading today's news for your area\u2026</div></div>
+          <div id="ccMarket"><div class="cc-task-why">Scout is reading today's news for your area&hellip;</div></div>
         </div>
         <div class="cc-panel grow">
           <div class="cc-label">What Scout sees</div>
@@ -1823,6 +1823,12 @@ function scoutCleanSpoken(t) {
   /* Remove coaching phrasing the prompt keeps reintroducing. */
   out = out.replace(/\blet'?s\s+/gi, '');
   out = out.replace(/\blet us\s+/gi, '');
+
+  /* Ranges and percentages must be spoken, not printed: "3–6%" reads
+     as "three to six percent", never "three—six%". */
+  out = out.replace(/(\d+(?:\.\d+)?)\s*[–—-]\s*(\d+(?:\.\d+)?)/g, '$1 to $2');
+  out = out.replace(/(\d)\s*%/g, '$1 percent');
+  out = out.replace(/%/g, ' percent');
 
   /* Every remaining number becomes words. Handles 1,20,000 and 40,000 by
      stripping separators first. speakable() is the Indian-numbering
