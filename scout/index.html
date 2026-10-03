@@ -604,6 +604,15 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .cc-season{font-size:12px;color:var(--white);line-height:1.5}
 .cc-season-sub{font-size:11px;color:var(--grey1);line-height:1.5;margin-top:7px}
 
+.cc-mk+.cc-mk{margin-top:16px;padding-top:16px;border-top:1px solid var(--border2)}
+.cc-mk-head{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:var(--white);line-height:1.4}
+.cc-mk-head .cc-feed-dot{margin-top:6px}
+.cc-mk-why{font-size:11px;color:var(--grey1);line-height:1.5;margin:6px 0 0 14px}
+.cc-mk-do{font-size:11px;color:var(--white2);line-height:1.5;margin:6px 0 0 14px}
+.cc-mk-do b{font-weight:400;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-right:6px}
+.cc-mk-src{display:inline-block;margin:7px 0 0 14px;font-size:10px;color:var(--grey2);text-decoration:none;border-bottom:1px solid var(--border2)}
+.cc-mk-src:hover{color:var(--grey1)}
+
 @media(max-width:1200px){
   .cc-wrap{flex-direction:column}
   .cc-rail-l,.cc-rail-r{width:100%}
@@ -740,6 +749,13 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
           </div>
           <div id="ccToday"></div>
         </div>
+        <div class="cc-panel">
+          <div class="cc-label-row">
+            <div class="cc-label">Your market today</div>
+            <span class="cc-note" id="ccMarketNote"></span>
+          </div>
+          <div id="ccMarket"><div class="cc-task-why">Scout is reading today's news for your area\u2026</div></div>
+        </div>
         <div class="cc-panel grow">
           <div class="cc-label">What Scout sees</div>
           <div id="ccFeed"></div>
@@ -778,6 +794,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   await scoutMigratePinKey();
   scoutPinnedRender();
   ccRender();
+  scoutMarketLoad().then(scoutMarketRender);
 
   /* Firm name in nav */
   var firmName = localStorage.getItem('g7_session_name') || '';
@@ -1275,6 +1292,108 @@ async function ccCreateLinks() {
   }
 }
 window.ccCreateLinks = ccCreateLinks;
+
+/* ═══════════════════════════════════════════
+   MARKET BRIEF — today's changes in this business's market.
+   Asked for once per page and reused. The worker caches per day, and a
+   localStorage copy makes repeat visits instant. The single in-flight
+   promise matters: the worker cannot lock reliably, so two simultaneous
+   calls would both pay for a full generation.
+═══════════════════════════════════════════ */
+var _marketPromise = null;
+var _marketItems = null;
+
+function scoutMarketDay() {
+  var ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+  return ist.toISOString().slice(0, 10);
+}
+
+function scoutMarketLoad() {
+  if (_marketPromise) return _marketPromise;
+  var day = scoutMarketDay();
+  var localKey = scoutKey('scout_market_' + day);
+  try {
+    var hit = JSON.parse(localStorage.getItem(localKey) || 'null');
+    if (hit && Array.isArray(hit.items)) {
+      _marketItems = hit.items;
+      _marketPromise = Promise.resolve(hit.items);
+      return _marketPromise;
+    }
+  } catch (e) {}
+
+  _marketPromise = (async function() {
+    var pend = {};
+    try { pend = JSON.parse(localStorage.getItem(scoutKey('scout_pending_result')) || '{}'); } catch (e) {}
+    var city = (pend.businessData && pend.businessData.location) || '';
+    var ctx = '';
+    try { ctx = scoutContext(); } catch (e) {}
+    if (!ctx) return [];
+
+    async function ask() {
+      var r = await fetch(SCOUT_WORKER + '/scout/market', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') },
+        body: JSON.stringify({ context: ctx, city: city })
+      });
+      if (!r.ok) return null;
+      return await r.json();
+    }
+
+    try {
+      var j = await ask();
+      /* Another tab is generating — wait once, then ask again. */
+      if (j && j.pending) {
+        await new Promise(function(res){ setTimeout(res, 25000); });
+        j = await ask();
+      }
+      var items = (j && Array.isArray(j.items)) ? j.items : [];
+      if (j && !j.pending) {
+        try {
+          localStorage.setItem(localKey, JSON.stringify({ items: items }));
+          /* Drop older days so this never accumulates. */
+          for (var i = localStorage.length - 1; i >= 0; i--) {
+            var k = localStorage.key(i);
+            if (k && k.indexOf('scout_market_') !== -1 && k.indexOf(day) === -1) localStorage.removeItem(k);
+          }
+        } catch (e) {}
+      }
+      _marketItems = items;
+      return items;
+    } catch (e) {
+      _marketItems = [];
+      return [];
+    }
+  })();
+  return _marketPromise;
+}
+window.scoutMarketLoad = scoutMarketLoad;
+
+/* Only http(s) links reach an href — never javascript: or data: URLs. */
+function scoutSafeUrl(u) {
+  return /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+}
+
+function scoutMarketRender(items) {
+  var el = document.getElementById('ccMarket');
+  if (!el) return;
+  if (!items || !items.length) {
+    el.innerHTML = '<div class="cc-task-why">Nothing has changed in your market today that needs you. Scout checks again tomorrow.</div>';
+    return;
+  }
+  var dot = { today: '#E0922F', this_week: 'var(--gold)', watch: 'var(--grey2)' };
+  el.innerHTML = items.map(function(it) {
+    var url = scoutSafeUrl(it.sourceUrl);
+    return '<div class="cc-mk">' +
+      '<div class="cc-mk-head"><span class="cc-feed-dot" style="background:' + (dot[it.urgency] || dot.watch) + '"></span>' +
+      '<span>' + escHtml(it.headline) + '</span></div>' +
+      (it.whyItMatters ? '<div class="cc-mk-why">' + escHtml(it.whyItMatters) + '</div>' : '') +
+      '<div class="cc-mk-do"><b>Do this</b> ' + escHtml(it.whatToDo) + '</div>' +
+      (url ? '<a class="cc-mk-src" href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' +
+             escHtml(it.sourceTitle || 'Source') + ' \u2197</a>' : '') +
+      '</div>';
+  }).join('');
+}
 
 function ccRender() {
   var wrap = document.getElementById('ccWrap');
@@ -1794,6 +1913,13 @@ window.scoutContext = scoutContext;
    Every number comes from scoutState(). The model may only use those.
 ═══════════════════════════════════════════ */
 async function scoutBriefing() {
+  /* Race the market brief — 3 s cap so the voice never stalls on a slow first generation. */
+  var mk = [];
+  try { mk = await Promise.race([
+    scoutMarketLoad(),
+    new Promise(function(res){ setTimeout(function(){ res(_marketItems || []); }, 3000); })
+  ]); } catch (e) {}
+
   var s = scoutState();
   var biz = '', plan = '';
   try {
@@ -1884,6 +2010,14 @@ async function scoutBriefing() {
     '   sentence as a direct instruction: "let\'s get those out" becomes\n' +
     '   "get those out".';
 
+  if (mk.length > 0) {
+    prompt += '\n\n' +
+      'MARKET TODAY (from today\'s news):\n' +
+      mk.map(function(it){ return '- ' + it.headline + ' -> ' + it.whatToDo; }).join('\n') +
+      '\nMention the single most urgent market item in one sentence, as part of ' +
+      'what changed. Do not read out sources or URLs.';
+  }
+
   try {
     var res = await fetch('https://g7-proxy.gsevnservices.workers.dev/scout/briefing', {
       method: 'POST',
@@ -1934,6 +2068,12 @@ async function scoutAsk(question) {
     '  and name the gap plainly.\n' +
     '- No greeting, no praise, no filler. Plain spoken English.\n' +
     '- Output ONLY the spoken answer.';
+
+  if (_marketItems && _marketItems.length > 0) {
+    sys += '\n\n' +
+      'MARKET TODAY (from today\'s news):\n' +
+      _marketItems.map(function(it){ return '- ' + it.headline + ' -> ' + it.whatToDo; }).join('\n');
+  }
 
   var msgs = [{ role: 'user', content: sys + '\n\nQUESTION: ' + question }];
   for (var i = 0; i < _scoutTurns.length; i++) msgs.push(_scoutTurns[i]);
