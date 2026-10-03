@@ -356,6 +356,13 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
 // MORNING EMAIL HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+/* Firm names are stored with the product appended ("Agarwal Plywood — Scout").
+   That suffix is an admin label, never something a customer should read. */
+function displayName(user, fallback) {
+  return String((user && user.firmName) || fallback || '')
+    .replace(/\s*[—–-]\s*(Scout|Alex)\s*$/i, '').trim() || fallback || '';
+}
+
 /* Escape anything from the web before it goes into email HTML. */
 function escEmail(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -389,7 +396,7 @@ async function sendMorningEmail(env, firmCode, day, brief) {
   const appUrl = 'https://gsevnservices.in/login.html?product=scout';
   const token = await unsubToken(env, firmCode);
   const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token;
-  const name = user.firmName || firmCode;
+  const name = displayName(user, firmCode);
   const n = items.length;
   const subject = 'Scout · ' + n + (n === 1 ? ' thing' : ' things') + ' in your market today';
 
@@ -714,7 +721,7 @@ export default {
         { expirationTtl: 1800 });
 
       const link = resetBaseUrl(request) + '/reset-password.html#t=' + token;
-      const name = user.firmName || code;
+      const name = displayName(user, code);
       const text =
         'Hi ' + name + ',\n\n' +
         'Someone asked to reset the password for your G7 account (' + code + ').\n\n' +

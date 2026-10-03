@@ -613,6 +613,10 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .cc-mk-src{display:inline-block;margin:7px 0 0 14px;font-size:10px;color:var(--grey2);text-decoration:none;border-bottom:1px solid var(--border2)}
 .cc-mk-src:hover{color:var(--grey1)}
 
+.cc-mk-mail{margin-top:16px;padding-top:14px;border-top:1px solid var(--border2);font-size:11px;color:var(--grey1);line-height:1.5}
+.cc-mk-mail button{background:transparent;border:0;padding:0;font-family:inherit;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);cursor:pointer;border-bottom:1px solid rgba(224,146,47,.4);padding-bottom:2px;margin-left:8px}
+.cc-mk-mail input{width:100%;margin:8px 0;background:transparent;border:1px solid var(--border2);color:var(--white);font-family:inherit;font-size:12px;padding:8px 10px;outline:none;box-sizing:border-box}
+
 @media(max-width:1200px){
   .cc-wrap{flex-direction:column}
   .cc-rail-l,.cc-rail-r{width:100%}
@@ -755,6 +759,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
             <span class="cc-note" id="ccMarketNote"></span>
           </div>
           <div id="ccMarket"><div class="cc-task-why">Scout is reading today's news for your area&hellip;</div></div>
+          <div class="cc-mk-mail" id="ccMarketMail"></div>
         </div>
         <div class="cc-panel grow">
           <div class="cc-label">What Scout sees</div>
@@ -795,6 +800,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   scoutPinnedRender();
   ccRender();
   scoutMarketLoad().then(scoutMarketRender);
+  scoutMailRender();
 
   /* Firm name in nav */
   var firmName = localStorage.getItem('g7_session_name') || '';
@@ -1393,6 +1399,56 @@ function scoutMarketRender(items) {
              escHtml(it.sourceTitle || 'Source') + ' \u2197</a>' : '') +
       '</div>';
   }).join('');
+}
+
+/* Morning email toggle. Three states: on, off, or no email on the account
+   yet — in which case it asks for one, since the worker only accepts an
+   email when none exists. */
+async function scoutMailRender() {
+  var el = document.getElementById('ccMarketMail');
+  if (!el) return;
+  var auth = { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') };
+  var st = { on: false, hasEmail: false };
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/brief-email', { headers: auth });
+    if (r.ok) st = await r.json();
+  } catch (e) { el.innerHTML = ''; return; }
+
+  async function save(on, email) {
+    el.innerHTML = 'Saving\u2026';
+    try {
+      var r2 = await fetch(SCOUT_WORKER + '/scout/brief-email', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
+        body: JSON.stringify(email ? { on: on, email: email } : { on: on })
+      });
+      var j = {};
+      try { j = await r2.json(); } catch (e) {}
+      if (!r2.ok) {
+        el.innerHTML = escHtml(j.error || 'Could not save that just now.');
+        setTimeout(scoutMailRender, 2500);
+        return;
+      }
+    } catch (e) {}
+    scoutMailRender();
+  }
+
+  if (st.on) {
+    el.innerHTML = 'Scout emails you this every morning at 6.<button id="ccMailOff">Turn off</button>';
+    document.getElementById('ccMailOff').onclick = function(){ save(false); };
+  } else if (st.hasEmail) {
+    el.innerHTML = 'Get this in your inbox at 6 every morning.<button id="ccMailOn">Turn on</button>';
+    document.getElementById('ccMailOn').onclick = function(){ save(true); };
+  } else {
+    el.innerHTML = 'Get this in your inbox at 6 every morning.' +
+      '<input id="ccMailAddr" type="email" placeholder="you@example.com" aria-label="Email address">' +
+      '<button id="ccMailSet" style="margin-left:0">Email me daily</button>';
+    document.getElementById('ccMailSet').onclick = function(){
+      var v = (document.getElementById('ccMailAddr').value || '').trim();
+      if (!v) return;
+      save(true, v);
+    };
+  }
 }
 
 function ccRender() {
