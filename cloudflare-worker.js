@@ -224,7 +224,7 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
   const system =
     'You are Scout, the business-development employee for one Indian small business. ' +
     'Today is ' + day + ' (India). Your job: find what changed in THIS business\'s market ' +
-    'in the last 7 days, or is coming in the next 6 weeks, that changes who it can win or how.\n\n' +
+    'in the last 7 days (an older event counts only if its consequences are new this week), or is coming in the next 6 weeks, that changes who it can win or how.\n\n' +
     'SEARCH FOR, in this order:\n' +
     '1. Local developments near the business: new offices, IT parks, residential projects, ' +
     'colleges, hospitals, malls, metro or road work — anything that brings or removes customers.\n' +
@@ -316,11 +316,19 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
     return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:\s—-]+$/, '') + '…';
   }
 
+  /* A bare domain or a home page cannot be the source of a specific fact. */
+  function isHomePage(u) {
+    try {
+      var p = new URL(u).pathname.replace(/\/+$/, '');
+      return p === '' || /^\/(index|home|default)(\.[a-z]+)?$/i.test(p);
+    } catch (e) { return true; }
+  }
+
   /* Integrity gate: an item survives only if its source URL is one web
-     search really returned AND it was not already told. */
+     search really returned, was not already told, and is not a home page. */
   const items = (Array.isArray(parsed.items) ? parsed.items : [])
     .filter(function(it) {
-      return it && it.headline && it.whatToDo && it.sourceUrl && seen.has(it.sourceUrl) && !toldUrls.has(it.sourceUrl);
+      return it && it.headline && it.whatToDo && it.sourceUrl && seen.has(it.sourceUrl) && !toldUrls.has(it.sourceUrl) && !isHomePage(it.sourceUrl);
     })
     .slice(0, 3)
     .map(function(it) {
