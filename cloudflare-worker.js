@@ -456,6 +456,7 @@ async function runMorningForFirm(env, firmCode, day) {
     if (!saved || !saved.context) return 'no_context';
     brief = await generateMarketBrief(env, firmCode, day, saved.context, saved.city || '');
   }
+  if (!brief || !Array.isArray(brief.items)) return 'no_brief';
   return await sendMorningEmail(env, firmCode, day, brief);
 }
 
@@ -1237,6 +1238,17 @@ export default {
       } catch (e) {
         return jsonResponse({ error: 'run_failed', detail: String(e.message || '').slice(0, 300) }, 500);
       }
+    }
+
+    // POST /admin/cron-status — { adminPassword } → the last 06:00 report
+    if (request.method === 'POST' && path === '/admin/cron-status') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      const last = await env.G7_KV.get('cron:last', 'json');
+      return jsonResponse(last || { none: true });
     }
 
     // ── ROUTE 12 — POST /email/send-founder-questions ────────────────────────
@@ -2151,24 +2163,27 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    /* 06:00 IST: prepare today's market brief for every firm that has
-       opened Scout in the last 7 days, so the dashboard is instant and
-       the morning email has something to send. Sequential on purpose —
-       each call takes ~20 s and parallel bursts invite rate limits. */
     const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
     const day = ist.toISOString().slice(0, 10);
+    const report = { day: day, startedAt: new Date().toISOString(), firms: [] };
     let cursor;
     do {
       const page = await env.G7_KV.list({ prefix: 'market:ctx:', cursor: cursor });
       for (const k of page.keys) {
         const firmCode = k.name.slice('market:ctx:'.length);
+        const t0 = Date.now();
         try {
-          await runMorningForFirm(env, firmCode, day);
+          const status = await runMorningForFirm(env, firmCode, day);
+          report.firms.push({ firm: firmCode, status: status, ms: Date.now() - t0 });
         } catch (e) {
-          /* One firm failing must not stop the rest. */
+          report.firms.push({ firm: firmCode, status: 'error',
+            error: String((e && e.message) || e).slice(0, 300), ms: Date.now() - t0 });
         }
       }
       cursor = page.list_complete ? undefined : page.cursor;
     } while (cursor);
+    report.finishedAt = new Date().toISOString();
+    console.log(JSON.stringify({ cron: report }));
+    await env.G7_KV.put('cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
   }
 };
