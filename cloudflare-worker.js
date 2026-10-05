@@ -2166,22 +2166,30 @@ export default {
     const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
     const day = ist.toISOString().slice(0, 10);
     const report = { day: day, startedAt: new Date().toISOString(), firms: [] };
+    report.state = 'running';
+    await env.G7_KV.put('cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
     let cursor;
     do {
       const page = await env.G7_KV.list({ prefix: 'market:ctx:', cursor: cursor });
       for (const k of page.keys) {
         const firmCode = k.name.slice('market:ctx:'.length);
+        report.current = firmCode;
+        await env.G7_KV.put('cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
         const t0 = Date.now();
         try {
           const status = await runMorningForFirm(env, firmCode, day);
           report.firms.push({ firm: firmCode, status: status, ms: Date.now() - t0 });
+          await env.G7_KV.put('cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
         } catch (e) {
           report.firms.push({ firm: firmCode, status: 'error',
             error: String((e && e.message) || e).slice(0, 300), ms: Date.now() - t0 });
+          await env.G7_KV.put('cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
         }
       }
       cursor = page.list_complete ? undefined : page.cursor;
     } while (cursor);
+    report.state = 'done';
+    delete report.current;
     report.finishedAt = new Date().toISOString();
     console.log(JSON.stringify({ cron: report }));
     await env.G7_KV.put('cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
