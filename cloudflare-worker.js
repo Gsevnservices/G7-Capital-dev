@@ -459,6 +459,118 @@ async function runMorningForFirm(env, firmCode, day) {
   return await sendMorningEmail(env, firmCode, day, brief);
 }
 
+/* ═══════════════════════════════════════════
+   LEAD FINDER — real businesses from the open web, not a maps API.
+   One API call: web search finds candidate pages, web fetch reads them.
+   Integrity gate: a phone number is kept only if its digits appear in
+   text Scout actually read — a fetched page or a cited search passage.
+   A business with no verifiable phone is kept with phone empty, never
+   with a guessed one.
+═══════════════════════════════════════════ */
+async function findBusinesses(env, query, cap) {
+  const want = Math.max(1, Math.min(cap || 10, 15));
+  const system =
+    'You find real businesses in India for a small-business owner to contact. ' +
+    'Search the web, then fetch the most useful pages to read full listings.\n\n' +
+    'BEST SOURCES, in order: the businesses\' own websites (contact pages), ' +
+    'official registries and association member lists, then directories such as ' +
+    'IndiaMART, Sulekha, TradeIndia and JustDial.\n\n' +
+    'RULES:\n' +
+    '- Only businesses that actually appear on pages you read. Never invent one.\n' +
+    '- phone must be copied exactly as printed on the page. If no number is printed, ' +
+    'leave phone empty. Never guess, complete or reformat a number from memory.\n' +
+    '- Prefer mobile numbers. Skip numbers labelled as toll-free.\n' +
+    '- Every business must match the request\'s trade and city.\n' +
+    '- Return up to ' + want + ' businesses. Fewer real ones beat more doubtful ones.\n\n' +
+    'Reply with ONLY this JSON:\n' +
+    '{"businesses":[{"name":"","address":"area and city","phone":"exactly as printed",' +
+    '"website":"","sourceUrl":"the page you read it on"}]}';
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 3000,
+      system: system,
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search', max_uses: 5,
+          user_location: { type: 'approximate', country: 'IN', timezone: 'Asia/Kolkata' } },
+        { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 4, max_content_tokens: 6000 }
+      ],
+      messages: [{ role: 'user', content: 'Find: ' + query }]
+    })
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error('finder ' + r.status + ': ' + t.slice(0, 400));
+  }
+  const data = await r.json();
+
+  /* Everything Scout actually read: fetched page text and cited passages. */
+  let corpus = '';
+  const readUrls = new Set();
+  (data.content || []).forEach(function(b) {
+    if (b.type === 'web_fetch_tool_result' && b.content && b.content.type === 'web_fetch_result') {
+      if (b.content.url) readUrls.add(b.content.url);
+      const src = b.content.content && b.content.content.source;
+      if (src && typeof src.data === 'string' && src.type !== 'base64') corpus += ' ' + src.data;
+    }
+    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+      b.content.forEach(function(x){ if (x && x.url) readUrls.add(x.url); });
+    }
+    if (b.type === 'text' && Array.isArray(b.citations)) {
+      b.citations.forEach(function(c){ if (c && c.cited_text) corpus += ' ' + c.cited_text; });
+    }
+  });
+  const corpusDigits = corpus.replace(/\D/g, '');
+
+  /* The answer is split across several text blocks wherever the model
+     cites a source. Join them all, then take the outermost JSON object. */
+  const text = (data.content || []).filter(function(b){ return b.type === 'text'; })
+    .map(function(b){ return b.text; }).join('');
+  let parsed = { businesses: [] };
+  try {
+    const a = text.indexOf('{'), z = text.lastIndexOf('}');
+    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+  } catch (e) {}
+
+  /* Last 10 digits must appear in what was read. Indian numbers are written
+     with +91, 0, spaces and dashes in every combination; the last ten
+     digits are the stable part. */
+  function verifiedPhone(p) {
+    const d = String(p || '').replace(/\D/g, '');
+    if (d.length < 8) return '';
+    const tail = d.slice(-10);
+    return corpusDigits.indexOf(tail) !== -1 ? String(p).trim() : '';
+  }
+
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(parsed.businesses) ? parsed.businesses : []).forEach(function(b) {
+    if (!b || !b.name) return;
+    if (b.sourceUrl && !readUrls.has(b.sourceUrl)) return;
+    const key = String(b.name).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const website = /^https?:\/\//i.test(b.website || '') ? b.website : '';
+    out.push({
+      name: String(b.name).slice(0, 120),
+      address: String(b.address || '').slice(0, 200),
+      phone: verifiedPhone(b.phone),
+      website: website
+    });
+  });
+
+  /* Verified phones first — those are the leads he can actually message. */
+  out.sort(function(a, b){ return (b.phone ? 1 : 0) - (a.phone ? 1 : 0); });
+  return out.slice(0, want);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1762,52 +1874,13 @@ export default {
         return jsonResponse({ error: 'limit_reached', limit: 'places' }, 403);
       }
 
-      // 6. Call Google Places API (New) — Text Search POST
-      // Field mask requests ONLY the four Basic SKU fields:
-      //   places.displayName, places.formattedAddress,
-      //   places.nationalPhoneNumber, places.websiteUri
-      // This keeps every call at the Text Search (Basic) SKU ($0.017/req).
-      // Adding any field from Atmosphere or Preferred tiers doubles or triples cost.
-      const PLACES_FIELD_MASK =
-        'places.displayName,places.formattedAddress,' +
-        'places.nationalPhoneNumber,places.websiteUri';
-
-      let placesRaw;
+      // 6. Call Claude web search to find businesses (replaces Google Places)
+      let places;
       try {
-        const placesResp = await fetch(
-          'https://places.googleapis.com/v1/places:searchText',
-          {
-            method:  'POST',
-            headers: {
-              'Content-Type':     'application/json',
-              'X-Goog-Api-Key':   env.GOOGLE_PLACES_KEY,
-              'X-Goog-FieldMask': PLACES_FIELD_MASK
-            },
-            body: JSON.stringify({
-              textQuery:   q,
-              maxResultCount: Math.min(cap, 20) // API hard max is 20 per call
-            })
-          }
-        );
-        if (!placesResp.ok) {
-          const errText = await placesResp.text();
-          return jsonResponse(
-            { error: 'Google Places error', detail: errText },
-            placesResp.status
-          );
-        }
-        placesRaw = await placesResp.json();
+        places = await findBusinesses(env, q, cap);
       } catch (e) {
-        return jsonResponse({ error: 'Failed to reach Google Places API' }, 502);
+        return jsonResponse({ error: 'Business search failed' }, 502);
       }
-
-      // 7. Normalise results — strip everything Google returned except our four fields
-      const places = (placesRaw.places || []).map(p => ({
-        name:    (p.displayName    && p.displayName.text) ? p.displayName.text : '',
-        address: p.formattedAddress            || '',
-        phone:   p.nationalPhoneNumber         || '',
-        website: p.websiteUri                  || ''
-      }));
 
       // 8. Store in cache — 30-day TTL (2592000 seconds)
       // Fire-and-forget; does not block the response
