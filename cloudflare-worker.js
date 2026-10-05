@@ -482,7 +482,9 @@ async function findBusinesses(env, query, cap) {
     '- Prefer mobile numbers. Skip numbers labelled as toll-free.\n' +
     '- Every business must match the request\'s trade and city.\n' +
     '- Return up to ' + want + ' businesses. Fewer real ones beat more doubtful ones.\n\n' +
-    'Reply with ONLY this JSON:\n' +
+    'First, for each business, write one short sentence stating its name, ' +
+    'area and phone number exactly as the source shows it, citing that ' +
+    'source. Then, on a new line, output this JSON and nothing after it:\n' +
     '{"businesses":[{"name":"","address":"area and city","phone":"exactly as printed",' +
     '"website":"","sourceUrl":"the page you read it on"}]}';
 
@@ -535,7 +537,7 @@ async function findBusinesses(env, query, cap) {
     .map(function(b){ return b.text; }).join('');
   let parsed = { businesses: [] };
   try {
-    const a = text.indexOf('{'), z = text.lastIndexOf('}');
+    const a = text.indexOf('{"businesses"'), z = text.lastIndexOf('}');
     if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
   } catch (e) {}
 
@@ -568,6 +570,25 @@ async function findBusinesses(env, query, cap) {
 
   /* Verified phones first — those are the leads he can actually message. */
   out.sort(function(a, b){ return (b.phone ? 1 : 0) - (a.phone ? 1 : 0); });
+
+  /* One log line per search — visible in Cloudflare Workers Logs. Tells us
+     where leads are lost: not found, phone not proposed, or phone not
+     verifiable. */
+  try {
+    const proposed = Array.isArray(parsed.businesses) ? parsed.businesses : [];
+    console.log(JSON.stringify({
+      finder: query,
+      proposed: proposed.length,
+      proposedWithPhone: proposed.filter(function(b){ return b && b.phone; }).length,
+      kept: out.length,
+      keptWithPhone: out.filter(function(b){ return b.phone; }).length,
+      fetchedPages: (data.content || []).filter(function(b){ return b.type === 'web_fetch_tool_result' && b.content && b.content.type === 'web_fetch_result'; }).length,
+      fetchErrors: (data.content || []).filter(function(b){ return b.type === 'web_fetch_tool_result' && b.content && b.content.type === 'web_fetch_tool_error'; }).length,
+      citations: (data.content || []).reduce(function(n, b){ return n + (Array.isArray(b.citations) ? b.citations.length : 0); }, 0),
+      corpusChars: corpus.length
+    }));
+  } catch (e) {}
+
   return out.slice(0, want);
 }
 
