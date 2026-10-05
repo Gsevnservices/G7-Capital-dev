@@ -392,55 +392,301 @@ async function unsubToken(env, firmCode) {
 /* Sends one firm its morning brief, at most once per IST day.
    Skips silently when: not opted in, no email, nothing to say, or
    already sent today. Returns a short status string for the admin route. */
-async function sendMorningEmail(env, firmCode, day, brief) {
+/* Reads one firm's synced Scout state. Handles bare or firm-suffixed keys
+   and string or object values, so it survives either save format. */
+async function loadScoutState(env, firmCode) {
+  const blob = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
+  if (!blob) return null;
+  function pick(name) {
+    var v = blob[name];
+    if (v === undefined) v = blob[name + '_' + firmCode];
+    if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return v; } }
+    return v === undefined ? null : v;
+  }
+  return { pick: pick };
+}
+
+/* PORT of pipelineDue from assets/pipeline.js — same statuses, same day
+   thresholds, same urgency, same messages. Takes the pipeline store and
+   current time as parameters instead of reading localStorage. */
+function daysSince(iso, now) {
+  if (!iso) return 999;
+  var then = new Date(iso).getTime();
+  if (isNaN(then)) return 999;
+  return Math.floor((now - then) / 86400000);
+}
+
+function pipelineDueFromStore(store, now, bizName) {
+  if (!store || !Array.isArray(store.people)) return [];
+  var out = [];
+  store.people.forEach(function(p) {
+    if (p.status === 'joined' || p.status === 'not_interested') return;
+    var d = daysSince(p.lastStatusAt || p.lastContactedAt, now);
+    var first = (p.name || '').split(' ')[0] || 'there';
+    var item = null;
+
+    if (p.status === 'contacted' && d >= 14) {
+      item = { reason: 'No response in ' + d + ' days', urgency: 3,
+               msg: 'Hi ' + first + ' \u2014 last try from my side. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.' };
+    } else if (p.status === 'contacted' && d >= 7) {
+      item = { reason: 'No reply for ' + d + ' days \u2014 final follow-up', urgency: 2,
+               msg: 'Hi ' + first + ' \u2014 ek baar aur pooch raha hoon. Aapke liye koi din suit karta hai baat karne ke liye?' };
+    } else if (p.status === 'contacted' && d >= 3) {
+      item = { reason: 'No reply for ' + d + ' days', urgency: 1,
+               msg: 'Hi ' + first + ' \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?' };
+    } else if (p.status === 'replied' && d >= 5) {
+      item = { reason: 'Replied ' + d + ' days ago but has not booked', urgency: 3,
+               msg: 'Hi ' + first + ' \u2014 aapne interest dikhaya tha. Is week ek slot rakh doon? Bas din bata dijiye.' };
+    } else if (p.status === 'trial_booked' && d >= 1) {
+      item = { reason: 'Trial was ' + d + ' day(s) ago \u2014 did they show?', urgency: 3,
+               msg: 'Hi ' + first + ' \u2014 kaisa raha? Koi baat ho toh bata dena.' };
+    } else if (p.status === 'gone_quiet' && d >= 14) {
+      item = { reason: 'Quiet for ' + d + ' days', urgency: 1,
+               msg: 'Hi ' + first + ' \u2014 kaafi time ho gaya. Jab ready ho, bata dena.' };
+    } else if (p.status === 'found' && d >= 1) {
+      item = { reason: 'Found ' + d + ' day(s) ago \u2014 never messaged', urgency: 2,
+               msg: 'Hi ' + (p.name || 'there') + ' \u2014 ' + (bizName ? 'main ' + bizName + ' se hoon. ' : '') + 'Aapke liye ek baat thi, 2 min baat kar sakte hain?' };
+    }
+
+    if (item) {
+      item.person = p;
+      out.push(item);
+    }
+  });
+  out.sort(function(a, b) { return b.urgency - a.urgency; });
+  return out;
+}
+
+/* Normalise a raw phone string for wa.me — port of waPhone from pipeline.js */
+function waPhone(raw) {
+  var d = String(raw || '').replace(/[^0-9]/g, '');
+  if (!d) return '';
+  if (d.indexOf('91') === 0 && d.length === 12) return d;
+  if (d.indexOf('0') === 0) d = d.slice(1);
+  if (d.length === 10) return '91' + d;
+  return d;
+}
+
+/* Daily tap snapshot. Running totals are all KV holds; storing today's
+   totals lets tomorrow show the change. */
+async function tapReport(env, firmCode, day) {
+  const sources = ['bio', 'google', 'status'];
+  const now = {};
+  for (const s of sources) {
+    now[s] = parseInt((await env.G7_KV.get('scout:inbound:' + firmCode + ':' + s + ':clicks')) || '0', 10);
+  }
+  const y = new Date(new Date(day + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
+  const prev = await env.G7_KV.get('scout:inbound:' + firmCode + ':snap:' + y, 'json');
+  await env.G7_KV.put('scout:inbound:' + firmCode + ':snap:' + day, JSON.stringify(now), { expirationTtl: 4 * 86400 });
+  return { now: now, prev: prev };
+}
+
+/* Full daily email — replaces the old market-only morning email. */
+async function sendDailyEmail(env, firmCode, day, brief) {
   const sentKey = 'market:emailed:' + firmCode + ':' + day;
   if (await env.G7_KV.get(sentKey)) return 'already_sent';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
   if (!user || !user.briefEmail) return 'not_opted_in';
   if (!user.recoveryEmail) return 'no_email';
-  const items = (brief && Array.isArray(brief.items)) ? brief.items : [];
-  if (!items.length) return 'quiet_day';
+
+  /* ── Load state ── */
+  const st = await loadScoutState(env, firmCode);
+  const pend = st ? (st.pick('scout_pending_result') || {}) : {};
+  let analysis = {};
+  try {
+    analysis = typeof pend.scoutOutput === 'string'
+      ? JSON.parse(pend.scoutOutput.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim())
+      : (pend.scoutOutput || {});
+  } catch (e) {}
+  const weekNum = parseInt((st && st.pick('scout_week_number')) || '1', 10) || 1;
+  const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+
+  /* If no analysis and no market items, nothing to send. */
+  const marketItems = (brief && Array.isArray(brief.items)) ? brief.items : [];
+  const hasAnalysis = analysis && analysis.tab3;
+  if (!hasAnalysis && !marketItems.length) return 'nothing_to_send';
 
   const appUrl = 'https://gsevnservices.in/login.html?product=scout';
   const token = await unsubToken(env, firmCode);
   const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token;
   const name = displayName(user, firmCode);
-  const n = items.length;
-  const subject = 'Scout · ' + n + (n === 1 ? ' thing' : ' things') + ' in your market today';
 
-  const blocks = items.map(function(it) {
-    const url = /^https?:\/\//i.test(it.sourceUrl || '') ? it.sourceUrl : '';
-    return '<tr><td style="padding:18px 0;border-top:1px solid #e6e2d8">' +
-      '<div style="font-size:16px;color:#111;font-weight:600;line-height:1.4">' + escEmail(it.headline) + '</div>' +
-      (it.whyItMatters ? '<div style="font-size:14px;color:#555;line-height:1.6;margin-top:6px">' + escEmail(it.whyItMatters) + '</div>' : '') +
-      '<div style="font-size:14px;color:#111;line-height:1.6;margin-top:8px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo) + '</div>' +
-      (url ? '<div style="margin-top:8px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>' : '') +
-      '</td></tr>';
-  }).join('');
+  /* ── Helpers ── */
+  function heading(title) { return '<tr><td style="padding:22px 28px 6px"><div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">' + escEmail(title) + '</div></td></tr>'; }
+  function row(html) { return '<tr><td style="padding:6px 28px;font-size:14px;color:#111;line-height:1.6">' + html + '</td></tr>'; }
+  function greyRow(text) { return '<tr><td style="padding:6px 28px;font-size:13px;color:#888;line-height:1.6">' + escEmail(text) + '</td></tr>'; }
+  function quote(text) { return '<div style="border-left:3px solid #e6e2d8;padding:8px 14px;margin:6px 0;font-size:13px;color:#555;line-height:1.6">' + escEmail(text) + '</div>'; }
+  function safeUrl(u) { return /^https:\/\//i.test(u || '') ? u : ''; }
 
-  const html =
+  var htmlParts = [];
+  var textParts = [];
+  var subjectParts = [];
+
+  /* ── A. TODAY'S STEP ── */
+  var tab3 = (analysis && analysis.tab3) || {};
+  var days = Array.isArray(tab3.days) ? tab3.days : [];
+  var todayStep = null;
+  for (var di = 0; di < days.length; di++) {
+    if (days[di].day && days[di].day.toLowerCase() === weekday.toLowerCase()) { todayStep = days[di]; break; }
+  }
+  if (todayStep) {
+    htmlParts.push(heading('Today\u2019s step'));
+    var stepHtml = '<strong>' + escEmail(todayStep.action || '') + '</strong>';
+    if (todayStep.timeRequired) stepHtml += ' \u00b7 ' + escEmail(todayStep.timeRequired);
+    if (todayStep.target) stepHtml += ' \u00b7 Target: ' + escEmail(todayStep.target);
+    htmlParts.push(row(stepHtml));
+    if (todayStep.messageToUse) htmlParts.push(row(quote(todayStep.messageToUse)));
+    textParts.push('TODAY\'S STEP\n' + (todayStep.action || '') +
+      (todayStep.timeRequired ? ' · ' + todayStep.timeRequired : '') +
+      (todayStep.target ? ' · Target: ' + todayStep.target : '') +
+      (todayStep.messageToUse ? '\n> ' + todayStep.messageToUse : ''));
+  }
+
+  /* ── B. FOLLOW UP TODAY ── */
+  var pipeline = st ? st.pick('scout_pipeline') : null;
+  var bizName = (pend && pend.businessData && pend.businessData.businessName) || '';
+  var due = pipelineDueFromStore(pipeline, Date.now(), bizName);
+  if (due.length > 0) {
+    htmlParts.push(heading('Follow up today'));
+    var show = due.slice(0, 5);
+    show.forEach(function(d) {
+      var p = d.person || {};
+      var pName = escEmail(p.name || 'Someone');
+      var pReason = escEmail(d.reason || '');
+      var ph = waPhone(p.phone);
+      var waUrl = ph ? safeUrl('https://wa.me/' + ph + '?text=' + encodeURIComponent(d.msg || '')) : '';
+      var line = '<strong>' + pName + '</strong> \u2014 ' + pReason;
+      if (waUrl) line += ' <a href="' + escEmail(waUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">\u00a0WhatsApp</a>';
+      htmlParts.push(row(line));
+    });
+    if (due.length > 5) htmlParts.push(greyRow('+' + (due.length - 5) + ' more in your pipeline'));
+    subjectParts.push(due.length + ' follow-up' + (due.length === 1 ? '' : 's'));
+
+    textParts.push('FOLLOW UP TODAY');
+    show.forEach(function(d) {
+      var p = d.person || {};
+      var ph = waPhone(p.phone);
+      textParts.push('  ' + (p.name || 'Someone') + ' — ' + (d.reason || '') +
+        (ph ? '\n  WhatsApp: https://wa.me/' + ph + '?text=' + encodeURIComponent(d.msg || '') : ''));
+    });
+    if (due.length > 5) textParts.push('  +' + (due.length - 5) + ' more in your pipeline');
+  }
+
+  /* ── C. SEND ON WHATSAPP TODAY ── */
+  var waCal = (tab3 && tab3.whatsappCalendar) || {};
+  var calWeek = ((weekNum - 1) % 4) + 1;
+  var weekKey = 'week' + calWeek;
+  var waEntries = Array.isArray(waCal[weekKey]) ? waCal[weekKey] : [];
+  var todayWa = waEntries.filter(function(e) { return e.day && e.day.toLowerCase() === weekday.toLowerCase(); });
+  if (todayWa.length > 0) {
+    htmlParts.push(heading('Send on WhatsApp today'));
+    todayWa.forEach(function(e) {
+      var sendLabel = escEmail(e.listName || e.sendTo || '');
+      var timeLabel = escEmail(e.time || '');
+      htmlParts.push(row((timeLabel ? timeLabel + ' \u00b7 ' : '') + 'Send to <strong>' + sendLabel + '</strong>'));
+      if (e.message) htmlParts.push(row(quote(e.message)));
+      if (e.purpose) htmlParts.push(row('<span style="font-size:12px;color:#888">' + escEmail(e.purpose) + '</span>'));
+    });
+    subjectParts.push(todayWa.length + ' WhatsApp send' + (todayWa.length === 1 ? '' : 's'));
+
+    textParts.push('SEND ON WHATSAPP TODAY');
+    todayWa.forEach(function(e) {
+      textParts.push('  ' + (e.time || '') + ' · Send to ' + (e.listName || e.sendTo || '') +
+        (e.message ? '\n  > ' + e.message : '') +
+        (e.purpose ? '\n  ' + e.purpose : ''));
+    });
+  }
+
+  /* ── D. YOUR LINKS ── */
+  var links = await env.G7_KV.get('scout:inbound:' + firmCode + ':links', 'json');
+  if (links) {
+    var taps = await tapReport(env, firmCode, day);
+    var totalNow = (taps.now.bio || 0) + (taps.now.google || 0) + (taps.now.status || 0);
+    if (totalNow > 0) {
+      htmlParts.push(heading('Your links'));
+      ['bio', 'google', 'status'].forEach(function(s) {
+        if (!taps.now[s] && !links[s]) return;
+        var line = escEmail(s.charAt(0).toUpperCase() + s.slice(1)) + ': <strong>' + (taps.now[s] || 0) + ' taps</strong>';
+        if (taps.prev && typeof taps.prev[s] === 'number') {
+          var change = (taps.now[s] || 0) - taps.prev[s];
+          if (change > 0) line += ' <span style="color:#2a7a2a">(+' + change + ' since yesterday)</span>';
+        }
+        htmlParts.push(row(line));
+      });
+      textParts.push('YOUR LINKS');
+      ['bio', 'google', 'status'].forEach(function(s) {
+        if (!taps.now[s] && !links[s]) return;
+        var line = '  ' + s.charAt(0).toUpperCase() + s.slice(1) + ': ' + (taps.now[s] || 0) + ' taps';
+        if (taps.prev && typeof taps.prev[s] === 'number') {
+          var change = (taps.now[s] || 0) - taps.prev[s];
+          if (change > 0) line += ' (+' + change + ' since yesterday)';
+        }
+        textParts.push(line);
+      });
+    } else {
+      htmlParts.push(heading('Your links'));
+      htmlParts.push(greyRow('No taps yet \u2014 share your bio link today.'));
+      textParts.push('YOUR LINKS\n  No taps yet — share your bio link today.');
+    }
+  }
+
+  /* ── E. YOUR MARKET ── */
+  if (marketItems.length > 0) {
+    htmlParts.push(heading('Your market today'));
+    marketItems.forEach(function(it) {
+      var url = safeUrl(it.sourceUrl || '');
+      var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
+      if (it.whyItMatters) h += '<div style="font-size:13px;color:#555;margin-top:4px">' + escEmail(it.whyItMatters) + '</div>';
+      h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo || '') + '</div>';
+      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
+      htmlParts.push(row(h));
+    });
+    textParts.push('YOUR MARKET TODAY');
+    marketItems.forEach(function(it) {
+      textParts.push('  ' + (it.headline || '') +
+        (it.whyItMatters ? '\n  ' + it.whyItMatters : '') +
+        '\n  Do this: ' + (it.whatToDo || '') +
+        (it.sourceUrl ? '\n  Source: ' + it.sourceUrl : ''));
+    });
+  } else {
+    htmlParts.push(heading('Your market today'));
+    htmlParts.push(greyRow('Quiet in your market today.'));
+    textParts.push('YOUR MARKET TODAY\n  Quiet in your market today.');
+  }
+
+  /* ── Subject line ── */
+  var subject;
+  if (subjectParts.length > 0) {
+    subject = weekday + ' with Scout \u00b7 ' + subjectParts.join(', ');
+  } else if (marketItems.length > 0) {
+    var n = marketItems.length;
+    subject = 'Scout \u00b7 ' + n + (n === 1 ? ' thing' : ' things') + ' in your market today';
+  } else {
+    subject = weekday + ' with Scout';
+  }
+
+  /* ── Build final HTML ── */
+  var html =
     '<div style="background:#f6f4ef;padding:24px 12px">' +
     '<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#fff;font-family:Arial,sans-serif" cellpadding="0" cellspacing="0">' +
-    '<tr><td style="padding:28px 28px 8px">' +
-    '<div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">Scout · Your market today</div>' +
+    '<tr><td style="padding:28px 28px 4px">' +
+    '<div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">Scout</div>' +
     '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
+    '<div style="font-size:13px;color:#888;margin-top:4px">Week ' + weekNum + ' of 12.</div>' +
     '</td></tr>' +
-    '<tr><td style="padding:0 28px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + blocks + '</table></td></tr>' +
+    htmlParts.join('') +
     '<tr><td style="padding:20px 28px 28px">' +
     '<a href="' + appUrl + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;font-size:13px;letter-spacing:.08em">Open Scout</a>' +
     '</td></tr></table>' +
     '<div style="max-width:560px;margin:14px auto 0;font-family:Arial,sans-serif;font-size:11px;color:#999;text-align:center;line-height:1.6">' +
-    'You get this because you switched on Scout\'s morning email. ' +
+    'You get this because you switched on Scout\u2019s morning email. ' +
     '<a href="' + unsubUrl + '" style="color:#999">Stop these emails</a></div></div>';
 
-  const text = 'Good morning, ' + name + '.\n\n' +
-    items.map(function(it) {
-      return it.headline + '\n' + (it.whyItMatters ? it.whyItMatters + '\n' : '') +
-        'Do this: ' + it.whatToDo + (it.sourceUrl ? '\nSource: ' + it.sourceUrl : '');
-    }).join('\n\n') +
+  var text = 'Good morning, ' + name + '.\nWeek ' + weekNum + ' of 12.\n\n' +
+    textParts.join('\n\n') +
     '\n\nOpen Scout: ' + appUrl + '\n\nStop these emails: ' + unsubUrl;
 
-  const ok = await sendEmail(env, user.recoveryEmail, subject, text, html, {
+  var ok = await sendEmail(env, user.recoveryEmail, subject, text, html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   });
@@ -456,8 +702,7 @@ async function runMorningForFirm(env, firmCode, day) {
     if (!saved || !saved.context) return 'no_context';
     brief = await generateMarketBrief(env, firmCode, day, saved.context, saved.city || '');
   }
-  if (!brief || !Array.isArray(brief.items)) return 'no_brief';
-  return await sendMorningEmail(env, firmCode, day, brief);
+  return await sendDailyEmail(env, firmCode, day, brief);
 }
 
 /* ═══════════════════════════════════════════
