@@ -213,18 +213,45 @@ async function validateSession(request, env) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SHARED HELPERS — used by generateMarketBrief and generateSharedNews.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/* Sentence-boundary trimmer for prose fields. */
+function clip(s, n) {
+  s = String(s || '').trim();
+  if (s.length <= n) return s;
+  var cut = s.slice(0, n);
+  var stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (stop > n * 0.5) return cut.slice(0, stop + 1);
+  return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:\s—-]+$/, '') + '\u2026';
+}
+
+/* A bare domain or a home page cannot be the source of a specific fact. */
+function isHomePage(u) {
+  try {
+    var p = new URL(u).pathname.replace(/\/+$/, '');
+    return p === '' || /^\/(index|home|default)(\.[a-z]+)?$/i.test(p);
+  } catch (e) { return true; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MARKET BRIEF GENERATOR — used by both the HTTP route and the scheduled job.
 // ─────────────────────────────────────────────────────────────────────────────
-async function generateMarketBrief(env, firmCode, day, context, city) {
+async function generateMarketBrief(env, firmCode, day, context, city, macroOnly) {
   /* History — what Scout already told this owner in the last two weeks. */
   const histKey = 'market:history:' + firmCode;
   const history = (await env.G7_KV.get(histKey, 'json')) || [];
   const told = history.map(function(h){ return '- ' + h.headline + ' (' + h.sourceUrl + ')'; }).join('\n');
 
-  const system =
+  var system =
     'You are Scout, the business-development employee for one Indian small business. ' +
-    'Today is ' + day + ' (India). Your job: find what changed in THIS business\'s market ' +
-    'in the last 7 days (an older event counts only if its consequences are new this week), or is coming in the next 6 weeks, that changes who it can win or how.\n\n' +
+    'Today is ' + day + ' (India). Find the news from the last 7 days that matters to ' +
+    'THIS business, at two levels:\n' +
+    'MICRO — its city and trade: local developments, competitors, demand in its area.\n' +
+    'MACRO — the economy and policy that move its trade: interest rates, input and ' +
+    'material prices, tax and rule changes, sector demand, government schemes.\n' +
+    'There is always macro news affecting any Indian trade in a given week. Return ' +
+    'between 2 and 4 items, at least one MACRO. Never return zero.\n\n' +
     'SEARCH FOR, in this order:\n' +
     '1. Local developments near the business: new offices, IT parks, residential projects, ' +
     'colleges, hospitals, malls, metro or road work — anything that brings or removes customers.\n' +
@@ -232,16 +259,12 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
     '3. Local events and festivals in the next 6 weeks that this trade can use.\n' +
     '4. Rule, licence or tax changes that specifically affect this trade.\n' +
     '5. Price moves in this trade\'s main inputs.\n\n' +
-    'IGNORE: national or global general news, stock markets, politics, celebrity news, and ' +
-    'anything without a concrete link to this business\'s city or trade.\n\n' +
     'NOT NEWS: something that already existed. A competitor simply having ' +
     'a shop, or a festival that happens every year, is not a change. A festival ' +
     'counts only if it is within the next 3 weeks and you give its exact date.\n\n' +
     'RULES:\n' +
     '- Every item must come from a page you actually found with web search. Never invent ' +
     'a development, a competitor, a date or a number.\n' +
-    '- Return between 0 and 3 items. If nothing material changed, return zero items. ' +
-    'An empty brief is correct on a quiet day; filler is a failure.\n' +
     '- whatToDo must be one concrete action this week, tied to one of the business\'s ' +
     'customer groups by name where possible.\n' +
     '- Never write labels like "Customer 1", "Customer 2" or "ICP 1". Use the ' +
@@ -254,7 +277,13 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
     '"whyItMatters":"one sentence, under 30 words, specific to this business",' +
     '"whatToDo":"one sentence, under 30 words, one action this week",' +
     '"urgency":"today | this_week | watch",' +
+    '"scope":"micro | macro",' +
     '"sourceTitle":"page title","sourceUrl":"exact URL from your search results"}]}';
+
+  if (macroOnly) {
+    system += '\nTHIS RUN: local news was empty. Search MACRO only — national economy, ' +
+      'policy and prices for this trade. Return 2 to 3 items.';
+  }
 
   const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 4 };
   if (city) {
@@ -306,31 +335,13 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
   /* Hard gate: drop items whose sourceUrl was already told in history. */
   const toldUrls = new Set(history.map(function(h){ return h.sourceUrl; }));
 
-  /* Sentence-boundary trimmer for prose fields. */
-  function clip(s, n) {
-    s = String(s || '').trim();
-    if (s.length <= n) return s;
-    var cut = s.slice(0, n);
-    var stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
-    if (stop > n * 0.5) return cut.slice(0, stop + 1);
-    return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:\s—-]+$/, '') + '…';
-  }
-
-  /* A bare domain or a home page cannot be the source of a specific fact. */
-  function isHomePage(u) {
-    try {
-      var p = new URL(u).pathname.replace(/\/+$/, '');
-      return p === '' || /^\/(index|home|default)(\.[a-z]+)?$/i.test(p);
-    } catch (e) { return true; }
-  }
-
   /* Integrity gate: an item survives only if its source URL is one web
      search really returned, was not already told, and is not a home page. */
   const items = (Array.isArray(parsed.items) ? parsed.items : [])
     .filter(function(it) {
       return it && it.headline && it.whatToDo && it.sourceUrl && seen.has(it.sourceUrl) && !toldUrls.has(it.sourceUrl) && !isHomePage(it.sourceUrl);
     })
-    .slice(0, 3)
+    .slice(0, 4)
     .map(function(it) {
       return {
         headline: String(it.headline).slice(0, 120),
@@ -338,10 +349,16 @@ async function generateMarketBrief(env, firmCode, day, context, city) {
         whyItMatters: clip(it.whyItMatters, 400),
         whatToDo: clip(it.whatToDo, 400),
         urgency: ['today','this_week','watch'].indexOf(it.urgency) !== -1 ? it.urgency : 'watch',
+        scope: it.scope === 'micro' ? 'micro' : 'macro',
         sourceTitle: String(it.sourceTitle || '').slice(0, 160),
         sourceUrl: it.sourceUrl
       };
     });
+
+  /* If nothing survived and we haven't tried macro-only yet, retry. */
+  if (items.length === 0 && !macroOnly) {
+    return generateMarketBrief(env, firmCode, day, context, city, true);
+  }
 
   const result = {
     items: items,
@@ -482,7 +499,7 @@ async function tapReport(env, firmCode, day) {
 }
 
 /* Full daily email — replaces the old market-only morning email. */
-async function sendDailyEmail(env, firmCode, day, brief) {
+async function sendDailyEmail(env, firmCode, day, news) {
   const sentKey = 'market:emailed:' + firmCode + ':' + day;
   if (await env.G7_KV.get(sentKey)) return 'already_sent';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
@@ -501,10 +518,12 @@ async function sendDailyEmail(env, firmCode, day, brief) {
   const weekNum = parseInt((st && st.pick('scout_week_number')) || '1', 10) || 1;
   const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
 
-  /* If no analysis and no market items, nothing to send. */
-  const marketItems = (brief && Array.isArray(brief.items)) ? brief.items : [];
+  /* ── News items ── */
+  const bizItems = (news && news.business && Array.isArray(news.business.items)) ? news.business.items : [];
+  const newsSections = (news && Array.isArray(news.sections)) ? news.sections : [];
+  const hasNews = bizItems.length > 0 || newsSections.some(function(s) { return s.items && s.items.length > 0; });
   const hasAnalysis = analysis && analysis.tab3;
-  if (!hasAnalysis && !marketItems.length) return 'nothing_to_send';
+  if (!hasAnalysis && !hasNews) return 'nothing_to_send';
 
   const appUrl = 'https://gsevnservices.in/login.html?product=scout';
   const token = await unsubToken(env, firmCode);
@@ -517,6 +536,31 @@ async function sendDailyEmail(env, firmCode, day, brief) {
   function greyRow(text) { return '<tr><td style="padding:6px 28px;font-size:13px;color:#888;line-height:1.6">' + escEmail(text) + '</td></tr>'; }
   function quote(text) { return '<div style="border-left:3px solid #e6e2d8;padding:8px 14px;margin:6px 0;font-size:13px;color:#555;line-height:1.6">' + escEmail(text) + '</div>'; }
   function safeUrl(u) { return /^https:\/\//i.test(u || '') ? u : ''; }
+  function tapWord(n) { return n === 1 ? '1 tap' : n + ' taps'; }
+
+  /* ── Resolve messageToUse ── */
+  function resolveMessage(raw) {
+    if (!raw) return '';
+    /* If it reads like an actual message, use it as-is */
+    if (!/^The /i.test(raw) && raw.indexOf('message written for') === -1) return raw;
+    /* Try to find the real message in tab2.messages */
+    var msgs = (analysis && analysis.tab2 && Array.isArray(analysis.tab2.messages)) ? analysis.tab2.messages : [];
+    if (!msgs.length) return '';
+    var words = raw.toLowerCase().split(/\s+/);
+    var best = null; var bestScore = -1;
+    for (var mi = 0; mi < msgs.length; mi++) {
+      var m = msgs[mi];
+      var icp = ((m.icp || '') + ' ' + (m.type || '')).toLowerCase();
+      var score = 0;
+      for (var wi = 0; wi < words.length; wi++) {
+        if (words[wi].length > 2 && icp.indexOf(words[wi]) !== -1) score++;
+      }
+      if (m.type === 'primary') score += 0.5;
+      if (score > bestScore) { bestScore = score; best = m; }
+    }
+    if (best && bestScore > 0) return best.versionA || best.text || '';
+    return '';
+  }
 
   var htmlParts = [];
   var textParts = [];
@@ -535,11 +579,12 @@ async function sendDailyEmail(env, firmCode, day, brief) {
     if (todayStep.timeRequired) stepHtml += ' \u00b7 ' + escEmail(todayStep.timeRequired);
     if (todayStep.target) stepHtml += ' \u00b7 Target: ' + escEmail(todayStep.target);
     htmlParts.push(row(stepHtml));
-    if (todayStep.messageToUse) htmlParts.push(row(quote(todayStep.messageToUse)));
+    var resolvedMsg = resolveMessage(todayStep.messageToUse);
+    if (resolvedMsg) htmlParts.push(row(quote(resolvedMsg)));
     textParts.push('TODAY\'S STEP\n' + (todayStep.action || '') +
       (todayStep.timeRequired ? ' · ' + todayStep.timeRequired : '') +
       (todayStep.target ? ' · Target: ' + todayStep.target : '') +
-      (todayStep.messageToUse ? '\n> ' + todayStep.messageToUse : ''));
+      (resolvedMsg ? '\n> ' + resolvedMsg : ''));
   }
 
   /* ── B. FOLLOW UP TODAY ── */
@@ -606,7 +651,7 @@ async function sendDailyEmail(env, firmCode, day, brief) {
       htmlParts.push(heading('Your links'));
       ['bio', 'google', 'status'].forEach(function(s) {
         if (!taps.now[s] && !links[s]) return;
-        var line = escEmail(s.charAt(0).toUpperCase() + s.slice(1)) + ': <strong>' + (taps.now[s] || 0) + ' taps</strong>';
+        var line = escEmail(s.charAt(0).toUpperCase() + s.slice(1)) + ': <strong>' + tapWord(taps.now[s] || 0) + '</strong>';
         if (taps.prev && typeof taps.prev[s] === 'number') {
           var change = (taps.now[s] || 0) - taps.prev[s];
           if (change > 0) line += ' <span style="color:#2a7a2a">(+' + change + ' since yesterday)</span>';
@@ -616,7 +661,7 @@ async function sendDailyEmail(env, firmCode, day, brief) {
       textParts.push('YOUR LINKS');
       ['bio', 'google', 'status'].forEach(function(s) {
         if (!taps.now[s] && !links[s]) return;
-        var line = '  ' + s.charAt(0).toUpperCase() + s.slice(1) + ': ' + (taps.now[s] || 0) + ' taps';
+        var line = '  ' + s.charAt(0).toUpperCase() + s.slice(1) + ': ' + tapWord(taps.now[s] || 0);
         if (taps.prev && typeof taps.prev[s] === 'number') {
           var change = (taps.now[s] || 0) - taps.prev[s];
           if (change > 0) line += ' (+' + change + ' since yesterday)';
@@ -630,10 +675,10 @@ async function sendDailyEmail(env, firmCode, day, brief) {
     }
   }
 
-  /* ── E. YOUR MARKET ── */
-  if (marketItems.length > 0) {
-    htmlParts.push(heading('Your market today'));
-    marketItems.forEach(function(it) {
+  /* ── E. YOUR BUSINESS ── */
+  if (bizItems.length > 0) {
+    htmlParts.push(heading('Your business'));
+    bizItems.forEach(function(it) {
       var url = safeUrl(it.sourceUrl || '');
       var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
       if (it.whyItMatters) h += '<div style="font-size:13px;color:#555;margin-top:4px">' + escEmail(it.whyItMatters) + '</div>';
@@ -641,26 +686,49 @@ async function sendDailyEmail(env, firmCode, day, brief) {
       if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
       htmlParts.push(row(h));
     });
-    textParts.push('YOUR MARKET TODAY');
-    marketItems.forEach(function(it) {
+    textParts.push('YOUR BUSINESS');
+    bizItems.forEach(function(it) {
       textParts.push('  ' + (it.headline || '') +
         (it.whyItMatters ? '\n  ' + it.whyItMatters : '') +
         '\n  Do this: ' + (it.whatToDo || '') +
         (it.sourceUrl ? '\n  Source: ' + it.sourceUrl : ''));
     });
-  } else {
-    htmlParts.push(heading('Your market today'));
-    htmlParts.push(greyRow('Quiet in your market today.'));
-    textParts.push('YOUR MARKET TODAY\n  Quiet in your market today.');
   }
 
+  /* ── F. NEWS SECTIONS (one per category) ── */
+  newsSections.forEach(function(sec) {
+    var items = (sec.items && sec.items.length) ? sec.items : [];
+    if (!items.length) return;
+    htmlParts.push(heading(sec.label || 'News'));
+    items.forEach(function(it) {
+      var url = safeUrl(it.sourceUrl || '');
+      var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
+      if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
+      var why = (it.why || '').trim();
+      if (why && why !== 'No direct effect on your business.') {
+        h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
+      }
+      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
+      htmlParts.push(row(h));
+    });
+    textParts.push(String(sec.label || 'NEWS').toUpperCase());
+    items.forEach(function(it) {
+      var why = (it.why || '').trim();
+      textParts.push('  ' + (it.headline || '') +
+        (it.whatHappened ? '\n  ' + it.whatHappened : '') +
+        (why && why !== 'No direct effect on your business.' ? '\n  For you: ' + why : '') +
+        (it.sourceUrl ? '\n  Source: ' + it.sourceUrl : ''));
+    });
+  });
+
   /* ── Subject line ── */
+  var totalNewsItems = bizItems.length;
+  newsSections.forEach(function(s) { totalNewsItems += (s.items ? s.items.length : 0); });
   var subject;
   if (subjectParts.length > 0) {
     subject = weekday + ' with Scout \u00b7 ' + subjectParts.join(', ');
-  } else if (marketItems.length > 0) {
-    var n = marketItems.length;
-    subject = 'Scout \u00b7 ' + n + (n === 1 ? ' thing' : ' things') + ' in your market today';
+  } else if (totalNewsItems > 0) {
+    subject = 'Scout \u00b7 ' + totalNewsItems + (totalNewsItems === 1 ? ' thing' : ' things') + ' in your market today';
   } else {
     subject = weekday + ' with Scout';
   }
@@ -694,15 +762,13 @@ async function sendDailyEmail(env, firmCode, day, brief) {
   return ok ? 'sent' : 'send_failed';
 }
 
-/* The whole morning job for one firm: brief (cached or fresh), then email. */
+/* The whole morning job for one firm: news (cached or fresh), then email. */
 async function runMorningForFirm(env, firmCode, day) {
-  let brief = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
-  if (!brief) {
-    const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
-    if (!saved || !saved.context) return 'no_context';
-    brief = await generateMarketBrief(env, firmCode, day, saved.context, saved.city || '');
-  }
-  return await sendDailyEmail(env, firmCode, day, brief);
+  const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  if (!saved || !saved.context) return 'no_context';
+  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
+  const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', user.newsPrefs);
+  return await sendDailyEmail(env, firmCode, day, news);
 }
 
 /* ═══════════════════════════════════════════
@@ -836,6 +902,183 @@ async function findBusinesses(env, query, cap) {
   } catch (e) {}
 
   return out.slice(0, want);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEWS CATEGORIES — optional feeds shared across firms.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NEWS_CATS = {
+  india_policy: {
+    label: 'India \u2014 politics & policy',
+    ask: 'The most important Indian government, policy, regulatory and political ' +
+         'decisions of the last 48 hours that affect businesses. Report what was ' +
+         'decided or announced. Neutral and factual \u2014 no opinion, no party framing.',
+    domains: ['pib.gov.in','rbi.org.in','thehindu.com','indianexpress.com','livemint.com',
+              'economictimes.indiatimes.com','business-standard.com','reuters.com','hindustantimes.com']
+  },
+  india_markets: {
+    label: 'Indian stock market',
+    ask: 'How Indian markets moved in the last trading session: Nifty 50 and Sensex ' +
+         'levels and percentage change, the sectors that led and lagged, and the main ' +
+         'reason. Exact figures from the source. Facts only \u2014 never advice or tips.',
+    domains: ['economictimes.indiatimes.com','livemint.com','business-standard.com',
+              'moneycontrol.com','reuters.com','nseindia.com','bseindia.com']
+  },
+  global: {
+    label: 'Global markets & world',
+    ask: 'The most important global economic and market news of the last 48 hours: ' +
+         'US markets and the Fed, oil, the dollar, major world events that move ' +
+         'business. Exact figures from the source. Facts only \u2014 never advice.',
+    domains: ['reuters.com','apnews.com','cnbc.com','bbc.com','aljazeera.com']
+  },
+  city: {
+    label: 'Your city',
+    ask: 'The most important news from the last 48 hours in the city named below that ' +
+         'affects local life and business: civic decisions, infrastructure, traffic and ' +
+         'road work, weather disruption, local events. Only this city.',
+    domains: ['timesofindia.indiatimes.com','hindustantimes.com','amarujala.com',
+              'jagran.com','bhaskar.com','indianexpress.com','thehindu.com']
+  }
+};
+
+/* Facts only, generated once per day per category and shared by every firm
+   that chose it (city news once per city). No personal relevance here —
+   that is added per firm by personaliseNews. */
+async function generateSharedNews(env, cat, day, city) {
+  const def = NEWS_CATS[cat];
+  if (!def) return { items: [] };
+  const citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+  if (cat === 'city' && !citySlug) return { items: [] };
+  const cacheKey = 'news:' + cat + (cat === 'city' ? ':' + citySlug : '') + ':' + day;
+  const cached = await env.G7_KV.get(cacheKey, 'json');
+  if (cached) return cached;
+
+  const system =
+    'You are a careful news editor for Indian small-business owners. Today is ' + day + ' (India).\n' +
+    def.ask + (cat === 'city' ? '\nCITY: ' + city : '') + '\n\n' +
+    'RULES:\n' +
+    '- Only from pages you actually found. Never invent a fact, figure or date.\n' +
+    '- Copy every number exactly as the source states it.\n' +
+    '- Nothing older than 48 hours.\n' +
+    '- Return 2 to 4 items, most important first.\n' +
+    '- sourceUrl must be the article that states the fact, never a home page.\n\n' +
+    'Reply with ONLY this JSON:\n' +
+    '{"items":[{"headline":"under 12 words","whatHappened":"one or two sentences, under 45 words",' +
+    '"sourceTitle":"","sourceUrl":""}]}';
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+               'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6', max_tokens: 1500, system: system,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3,
+                allowed_domains: def.domains }],
+      messages: [{ role: 'user', content: 'Today\'s ' + def.label + ' news.' }]
+    })
+  });
+  if (!r.ok) throw new Error('shared ' + cat + ' ' + r.status + ': ' + (await r.text()).slice(0, 300));
+  const data = await r.json();
+
+  /* Collect URLs web search returned. */
+  const seen = new Set();
+  (data.content || []).forEach(function(b) {
+    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+      b.content.forEach(function(res) { if (res && res.url) seen.add(res.url); });
+    }
+  });
+
+  /* Join text blocks, parse outermost JSON. */
+  const text = (data.content || []).filter(function(b){ return b.type === 'text'; })
+    .map(function(b){ return b.text; }).join('');
+  let parsed = { items: [] };
+  try {
+    const a = text.indexOf('{'), z = text.lastIndexOf('}');
+    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+  } catch (e) {}
+
+  /* Integrity gate — same rules as generateMarketBrief. */
+  const kept = (Array.isArray(parsed.items) ? parsed.items : [])
+    .filter(function(it) {
+      return it && it.headline && it.sourceUrl && seen.has(it.sourceUrl) && !isHomePage(it.sourceUrl);
+    })
+    .slice(0, 4)
+    .map(function(it) {
+      return {
+        headline: String(it.headline).slice(0, 120),
+        whatHappened: clip(it.whatHappened, 400),
+        sourceTitle: String(it.sourceTitle || '').slice(0, 160),
+        sourceUrl: it.sourceUrl
+      };
+    });
+
+  const result = { category: cat, label: def.label, items: kept, date: day };
+  await env.G7_KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
+  return result;
+}
+
+/* Per firm, no search: one short line per item on what it means for THIS
+   business. Cheap model — the facts are already verified. */
+async function personaliseNews(env, firmCode, day, context, sections) {
+  const key = 'news:why:' + firmCode + ':' + day;
+  const cached = await env.G7_KV.get(key, 'json');
+  if (cached) return cached;
+  const flat = [];
+  sections.forEach(function(s, si) {
+    (s.items || []).forEach(function(it, ii) {
+      flat.push({ id: si + '.' + ii, headline: it.headline, whatHappened: it.whatHappened });
+    });
+  });
+  if (!flat.length) return {};
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+               'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 1200,
+      system: 'For each news item, write ONE sentence (under 25 words) on what it ' +
+        'concretely means for the business described. If it genuinely does not affect ' +
+        'this business, write exactly "No direct effect on your business." Never ' +
+        'invent facts beyond the item. Never give investment advice. Reply with ONLY ' +
+        'JSON: {"<id>":"sentence", ...}',
+      messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
+        '\n\nITEMS:\n' + JSON.stringify(flat) }]
+    })
+  });
+  let out = {};
+  if (r.ok) {
+    try {
+      const d = await r.json();
+      const t = (d.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('');
+      const a = t.indexOf('{'), z = t.lastIndexOf('}');
+      if (a !== -1 && z > a) out = JSON.parse(t.slice(a, z + 1));
+    } catch (e) {}
+  }
+  await env.G7_KV.put(key, JSON.stringify(out), { expirationTtl: 172800 });
+  return out;
+}
+
+/* Everything a firm reads today: business brief + chosen categories,
+   each item carrying a `why` line. Used by the dashboard route and email. */
+async function buildDailyNews(env, firmCode, day, context, city, prefs) {
+  let business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
+  if (!business) business = await generateMarketBrief(env, firmCode, day, context, city, false);
+  const chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
+  const sections = [];
+  for (const c of chosen) {
+    try {
+      const s = await generateSharedNews(env, c, day, city);
+      if (s && s.items && s.items.length) sections.push(s);
+    } catch (e) { /* one category failing must not drop the rest */ }
+  }
+  const why = await personaliseNews(env, firmCode, day, context, sections);
+  sections.forEach(function(s, si) {
+    s.items = s.items.map(function(it, ii) {
+      return Object.assign({}, it, { why: why[si + '.' + ii] || '' });
+    });
+  });
+  return { business: business, sections: sections };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2206,6 +2449,51 @@ export default {
       user.briefEmail = !!body.on;
       await env.G7_KV.put(key, JSON.stringify(user));
       return jsonResponse({ on: user.briefEmail, hasEmail: true });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /scout/news-prefs — current news category selections.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/news-prefs') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      return jsonResponse({
+        prefs: user.newsPrefs || [],
+        options: Object.keys(NEWS_CATS).map(function(k) { return { key: k, label: NEWS_CATS[k].label }; })
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/news-prefs — { prefs: [...] }
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/news-prefs') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      const key = 'auth:users:' + session.firmCode;
+      const user = await env.G7_KV.get(key, 'json');
+      if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
+      const valid = (Array.isArray(body.prefs) ? body.prefs : []).filter(function(c){ return NEWS_CATS[c]; });
+      user.newsPrefs = valid;
+      await env.G7_KV.put(key, JSON.stringify(user));
+      return jsonResponse({ prefs: user.newsPrefs });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /scout/news — full daily news for the dashboard.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/news') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const today = ist.toISOString().slice(0, 10);
+      const saved = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
+      if (!saved || !saved.context) return jsonResponse({ business: { items: [] }, sections: [] });
+      const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', user.newsPrefs);
+      return jsonResponse(news);
     }
 
     // ─────────────────────────────────────────────────────────────
