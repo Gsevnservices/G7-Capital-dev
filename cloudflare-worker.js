@@ -914,31 +914,34 @@ const NEWS_CATS = {
     ask: 'The most important Indian government, policy, regulatory and political ' +
          'decisions of the last 48 hours that affect businesses. Report what was ' +
          'decided or announced. Neutral and factual \u2014 no opinion, no party framing.',
-    domains: ['pib.gov.in','rbi.org.in','thehindu.com','indianexpress.com','livemint.com',
-              'economictimes.indiatimes.com','business-standard.com','reuters.com','hindustantimes.com']
+    domains: ['pib.gov.in','rbi.org.in','sebi.gov.in','finmin.gov.in','business-standard.com',
+              'thehindubusinessline.com','financialexpress.com','ndtv.com','ndtvprofit.com',
+              'indiatoday.in','theprint.in','deccanherald.com','news18.com']
   },
   india_markets: {
     label: 'Indian stock market',
     ask: 'How Indian markets moved in the last trading session: Nifty 50 and Sensex ' +
          'levels and percentage change, the sectors that led and lagged, and the main ' +
          'reason. Exact figures from the source. Facts only \u2014 never advice or tips.',
-    domains: ['economictimes.indiatimes.com','livemint.com','business-standard.com',
-              'moneycontrol.com','reuters.com','nseindia.com','bseindia.com']
+    domains: ['nseindia.com','bseindia.com','sebi.gov.in','business-standard.com',
+              'thehindubusinessline.com','financialexpress.com','ndtvprofit.com','cnbctv18.com',
+              'zeebiz.com','businesstoday.in']
   },
   global: {
     label: 'Global markets & world',
     ask: 'The most important global economic and market news of the last 48 hours: ' +
          'US markets and the Fed, oil, the dollar, major world events that move ' +
          'business. Exact figures from the source. Facts only \u2014 never advice.',
-    domains: ['reuters.com','apnews.com','cnbc.com','bbc.com','aljazeera.com']
+    domains: ['cnbc.com','aljazeera.com','theguardian.com','dw.com','france24.com','npr.org',
+              'cnn.com','marketwatch.com','finance.yahoo.com']
   },
   city: {
     label: 'Your city',
     ask: 'The most important news from the last 48 hours in the city named below that ' +
          'affects local life and business: civic decisions, infrastructure, traffic and ' +
          'road work, weather disruption, local events. Only this city.',
-    domains: ['timesofindia.indiatimes.com','hindustantimes.com','amarujala.com',
-              'jagran.com','bhaskar.com','indianexpress.com','thehindu.com']
+    domains: ['amarujala.com','livehindustan.com','patrika.com','ndtv.com','indiatoday.in',
+              'news18.com','deccanherald.com','timesnownews.com']
   }
 };
 
@@ -967,17 +970,44 @@ async function generateSharedNews(env, cat, day, city) {
     '{"items":[{"headline":"under 12 words","whatHappened":"one or two sentences, under 45 words",' +
     '"sourceTitle":"","sourceUrl":""}]}';
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-               'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6', max_tokens: 1500, system: system,
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3,
-                allowed_domains: def.domains }],
-      messages: [{ role: 'user', content: 'Today\'s ' + def.label + ' news.' }]
-    })
-  });
+  /* Publishers that block AI crawlers make the whole request fail. Remember
+     each rejected domain for 30 days and retry without it, so a publisher
+     changing its policy never breaks a category. */
+  const blockedRaw = await env.G7_KV.get('news:blocked-domains', 'json');
+  const blocked = new Set(Array.isArray(blockedRaw) ? blockedRaw : []);
+
+  async function ask(domains) {
+    const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 3 };
+    if (domains.length) tool.allowed_domains = domains;
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+                 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6', max_tokens: 1500, system: system,
+        tools: [tool],
+        messages: [{ role: 'user', content: 'Today\'s ' + def.label + ' news.' }]
+      })
+    });
+  }
+
+  let domains = def.domains.filter(function(d){ return !blocked.has(d); });
+  let r = await ask(domains);
+  if (r.status === 400) {
+    const errText = await r.text();
+    const m = errText.match(/not accessible to our user agent: \[([^\]]*)\]/);
+    if (!m) throw new Error('shared ' + cat + ' 400: ' + errText.slice(0, 300));
+    const rejected = m[1].split(',').map(function(s){ return s.replace(/['"\s]/g, ''); }).filter(Boolean);
+    rejected.forEach(function(d){ blocked.add(d); });
+    await env.G7_KV.put('news:blocked-domains', JSON.stringify(Array.from(blocked)), { expirationTtl: 30 * 86400 });
+    domains = domains.filter(function(d){ return !blocked.has(d); });
+    console.log(JSON.stringify({ newsDomainsBlocked: rejected, category: cat, remaining: domains }));
+    /* With fewer than two trusted outlets left, the category is not
+       trustworthy enough to show. Return nothing rather than search the
+       open web under a "trusted news" label. */
+    if (domains.length < 2) return { category: cat, label: def.label, items: [], date: day };
+    r = await ask(domains);
+  }
   if (!r.ok) throw new Error('shared ' + cat + ' ' + r.status + ': ' + (await r.text()).slice(0, 300));
   const data = await r.json();
 
