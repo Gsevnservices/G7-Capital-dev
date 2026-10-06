@@ -226,11 +226,21 @@ function clip(s, n) {
   return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:\s—-]+$/, '') + '\u2026';
 }
 
-/* A bare domain or a home page cannot be the source of a specific fact. */
+/* A home page, section page or listing page cannot be the source of a
+   specific fact — only an article can. */
 function isHomePage(u) {
   try {
-    var p = new URL(u).pathname.replace(/\/+$/, '');
-    return p === '' || /^\/(index|home|default)(\.[a-z]+)?$/i.test(p);
+    var url = new URL(u);
+    var p = url.pathname.replace(/\/+$/, '');
+    if (p === '' || /^\/(index|home|default)(\.[a-z]+)?$/i.test(p)) return true;
+    if (/allrelease|archive|latest-news|\/tag\/|\/topic\/|\/category\//i.test(u)) return true;
+    var segs = p.split('/').filter(Boolean);
+    var last = segs[segs.length - 1] || '';
+    /* One short word with no digits ("/economy", "/markets") is a section
+       page — unless the query carries an article id, as PIB's do. */
+    var hasId = /[?&](prid|id|newsid|articleid)=/i.test(url.search);
+    if (segs.length === 1 && last.length < 20 && !/\d/.test(last) && !hasId) return true;
+    return false;
   } catch (e) { return true; }
 }
 
@@ -1117,6 +1127,25 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs) {
       return Object.assign({}, it, { why: why[si + '.' + ii] || '' });
     });
   });
+  /* Relevance first. In policy and city news, an item with no effect on
+     this business is noise — drop it. In markets and global news he chose
+     to follow the market itself, so keep them, relevant items first. */
+  const CAP = { india_markets: 2, india_policy: 3, global: 3, city: 3 };
+  const NO_EFFECT = 'No direct effect on your business.';
+  sections.forEach(function(s) {
+    let items = s.items.slice();
+    if (s.category === 'india_policy' || s.category === 'city') {
+      items = items.filter(function(it){ return it.why && it.why.trim() !== NO_EFFECT; });
+    }
+    items.sort(function(a, b){
+      return ((b.why && b.why.trim() !== NO_EFFECT) ? 1 : 0) - ((a.why && a.why.trim() !== NO_EFFECT) ? 1 : 0);
+    });
+    s.items = items.slice(0, CAP[s.category] || 3);
+  });
+  /* A category emptied by the relevance filter is not shown. */
+  for (let i = sections.length - 1; i >= 0; i--) {
+    if (!sections[i].items.length) sections.splice(i, 1);
+  }
   return { business: business, sections: sections, errors: errors };
 }
 
