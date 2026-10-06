@@ -1066,11 +1066,20 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs) {
   if (!business) business = await generateMarketBrief(env, firmCode, day, context, city, false);
   const chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
   const sections = [];
+  const errors = [];
   for (const c of chosen) {
     try {
       const s = await generateSharedNews(env, c, day, city);
-      if (s && s.items && s.items.length) sections.push(s);
-    } catch (e) { /* one category failing must not drop the rest */ }
+      if (s && s.items && s.items.length) {
+        sections.push(s);
+      } else {
+        errors.push({ category: c, error: 'no items after gates' });
+      }
+    } catch (e) {
+      var errMsg = String((e && e.message) || e).slice(0, 300);
+      errors.push({ category: c, error: errMsg });
+      console.log(JSON.stringify({ newsCategoryFailed: c, error: errMsg }));
+    }
   }
   const why = await personaliseNews(env, firmCode, day, context, sections);
   sections.forEach(function(s, si) {
@@ -1078,7 +1087,7 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs) {
       return Object.assign({}, it, { why: why[si + '.' + ii] || '' });
     });
   });
-  return { business: business, sections: sections };
+  return { business: business, sections: sections, errors: errors };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
