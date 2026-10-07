@@ -398,6 +398,14 @@ function displayName(user, fallback) {
     .replace(/\s*[—–-]\s*(Scout|Alex)\s*$/i, '').trim() || fallback || '';
 }
 
+function emailPrefs(user) {
+  const legacy = !!(user && user.briefEmail);
+  return {
+    actions: user && typeof user.emailActions === 'boolean' ? user.emailActions : legacy,
+    news:    user && typeof user.emailNews    === 'boolean' ? user.emailNews    : legacy
+  };
+}
+
 /* Escape anything from the web before it goes into email HTML. */
 function escEmail(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -508,15 +516,44 @@ async function tapReport(env, firmCode, day) {
   return { now: now, prev: prev };
 }
 
-/* Full daily email — replaces the old market-only morning email. */
-async function sendDailyEmail(env, firmCode, day, news) {
-  const sentKey = 'market:emailed:' + firmCode + ':' + day;
+/* ── Shared email helpers ── */
+function emailHeading(title) { return '<tr><td style="padding:22px 28px 6px"><div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">' + escEmail(title) + '</div></td></tr>'; }
+function emailRow(html) { return '<tr><td style="padding:6px 28px;font-size:14px;color:#111;line-height:1.6">' + html + '</td></tr>'; }
+function emailGreyRow(text) { return '<tr><td style="padding:6px 28px;font-size:13px;color:#888;line-height:1.6">' + escEmail(text) + '</td></tr>'; }
+function emailQuote(text) { return '<div style="border-left:3px solid #e6e2d8;padding:8px 14px;margin:6px 0;font-size:13px;color:#555;line-height:1.6">' + escEmail(text) + '</div>'; }
+function emailSafeUrl(u) { return /^https:\/\//i.test(u || '') ? u : ''; }
+function tapWord(n) { return n === 1 ? '1 tap' : n + ' taps'; }
+
+function emailShell(opts) {
+  var appUrl = 'https://gsevnservices.in/login.html?product=scout';
+  var html =
+    '<div style="background:#f6f4ef;padding:24px 12px">' +
+    '<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#fff;font-family:Arial,sans-serif" cellpadding="0" cellspacing="0">' +
+    '<tr><td style="padding:28px 28px 4px">' +
+    '<div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">' + escEmail(opts.headerLabel || 'Scout') + '</div>' +
+    (opts.greeting || '') +
+    '</td></tr>' +
+    opts.htmlParts.join('') +
+    '<tr><td style="padding:20px 28px 28px">' +
+    '<a href="' + appUrl + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;font-size:13px;letter-spacing:.08em">Open Scout</a>' +
+    '</td></tr></table>' +
+    '<div style="max-width:560px;margin:14px auto 0;font-family:Arial,sans-serif;font-size:11px;color:#999;text-align:center;line-height:1.6">' +
+    escEmail(opts.footerLine) + ' ' +
+    '<a href="' + opts.unsubUrl + '" style="color:#999">Stop these emails</a></div></div>';
+  var text = (opts.textGreeting || '') +
+    opts.textParts.join('\n\n') +
+    '\n\nOpen Scout: ' + appUrl + '\n\nStop these emails: ' + opts.unsubUrl;
+  return { html: html, text: text };
+}
+
+/* Actions email: today's step, follow-ups, WhatsApp sends, link taps. */
+async function sendActionsEmail(env, firmCode, day) {
+  const sentKey = 'actions:emailed:' + firmCode + ':' + day;
   if (await env.G7_KV.get(sentKey)) return 'already_sent';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
-  if (!user || !user.briefEmail) return 'not_opted_in';
-  if (!user.recoveryEmail) return 'no_email';
+  if (!emailPrefs(user).actions) return 'not_opted_in';
+  if (!user || !user.recoveryEmail) return 'no_email';
 
-  /* ── Load state ── */
   const st = await loadScoutState(env, firmCode);
   const pend = st ? (st.pick('scout_pending_result') || {}) : {};
   let analysis = {};
@@ -525,35 +562,19 @@ async function sendDailyEmail(env, firmCode, day, news) {
       ? JSON.parse(pend.scoutOutput.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim())
       : (pend.scoutOutput || {});
   } catch (e) {}
+  const hasAnalysis = analysis && analysis.tab3;
+  if (!hasAnalysis) return 'nothing_to_send';
+
   const weekNum = parseInt((st && st.pick('scout_week_number')) || '1', 10) || 1;
   const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
-
-  /* ── News items ── */
-  const bizItems = (news && news.business && Array.isArray(news.business.items)) ? news.business.items : [];
-  const newsSections = (news && Array.isArray(news.sections)) ? news.sections : [];
-  const hasNews = bizItems.length > 0 || newsSections.some(function(s) { return s.items && s.items.length > 0; });
-  const hasAnalysis = analysis && analysis.tab3;
-  if (!hasAnalysis && !hasNews) return 'nothing_to_send';
-
-  const appUrl = 'https://gsevnservices.in/login.html?product=scout';
-  const token = await unsubToken(env, firmCode);
-  const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token;
   const name = displayName(user, firmCode);
+  const token = await unsubToken(env, firmCode);
+  const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token + '&type=actions';
 
-  /* ── Helpers ── */
-  function heading(title) { return '<tr><td style="padding:22px 28px 6px"><div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">' + escEmail(title) + '</div></td></tr>'; }
-  function row(html) { return '<tr><td style="padding:6px 28px;font-size:14px;color:#111;line-height:1.6">' + html + '</td></tr>'; }
-  function greyRow(text) { return '<tr><td style="padding:6px 28px;font-size:13px;color:#888;line-height:1.6">' + escEmail(text) + '</td></tr>'; }
-  function quote(text) { return '<div style="border-left:3px solid #e6e2d8;padding:8px 14px;margin:6px 0;font-size:13px;color:#555;line-height:1.6">' + escEmail(text) + '</div>'; }
-  function safeUrl(u) { return /^https:\/\//i.test(u || '') ? u : ''; }
-  function tapWord(n) { return n === 1 ? '1 tap' : n + ' taps'; }
-
-  /* ── Resolve messageToUse ── */
+  /* Resolve messageToUse against tab2.messages */
   function resolveMessage(raw) {
     if (!raw) return '';
-    /* If it reads like an actual message, use it as-is */
     if (!/^The /i.test(raw) && raw.indexOf('message written for') === -1) return raw;
-    /* Try to find the real message in tab2.messages */
     var msgs = (analysis && analysis.tab2 && Array.isArray(analysis.tab2.messages)) ? analysis.tab2.messages : [];
     if (!msgs.length) return '';
     var words = raw.toLowerCase().split(/\s+/);
@@ -576,7 +597,7 @@ async function sendDailyEmail(env, firmCode, day, news) {
   var textParts = [];
   var subjectParts = [];
 
-  /* ── A. TODAY'S STEP ── */
+  /* ── TODAY'S STEP ── */
   var tab3 = (analysis && analysis.tab3) || {};
   var days = Array.isArray(tab3.days) ? tab3.days : [];
   var todayStep = null;
@@ -584,37 +605,37 @@ async function sendDailyEmail(env, firmCode, day, news) {
     if (days[di].day && days[di].day.toLowerCase() === weekday.toLowerCase()) { todayStep = days[di]; break; }
   }
   if (todayStep) {
-    htmlParts.push(heading('Today\u2019s step'));
+    htmlParts.push(emailHeading('Today\u2019s step'));
     var stepHtml = '<strong>' + escEmail(todayStep.action || '') + '</strong>';
     if (todayStep.timeRequired) stepHtml += ' \u00b7 ' + escEmail(todayStep.timeRequired);
     if (todayStep.target) stepHtml += ' \u00b7 Target: ' + escEmail(todayStep.target);
-    htmlParts.push(row(stepHtml));
+    htmlParts.push(emailRow(stepHtml));
     var resolvedMsg = resolveMessage(todayStep.messageToUse);
-    if (resolvedMsg) htmlParts.push(row(quote(resolvedMsg)));
+    if (resolvedMsg) htmlParts.push(emailRow(emailQuote(resolvedMsg)));
     textParts.push('TODAY\'S STEP\n' + (todayStep.action || '') +
       (todayStep.timeRequired ? ' · ' + todayStep.timeRequired : '') +
       (todayStep.target ? ' · Target: ' + todayStep.target : '') +
       (resolvedMsg ? '\n> ' + resolvedMsg : ''));
   }
 
-  /* ── B. FOLLOW UP TODAY ── */
+  /* ── FOLLOW UP TODAY ── */
   var pipeline = st ? st.pick('scout_pipeline') : null;
   var bizName = (pend && pend.businessData && pend.businessData.businessName) || '';
   var due = pipelineDueFromStore(pipeline, Date.now(), bizName);
   if (due.length > 0) {
-    htmlParts.push(heading('Follow up today'));
+    htmlParts.push(emailHeading('Follow up today'));
     var show = due.slice(0, 5);
     show.forEach(function(d) {
       var p = d.person || {};
       var pName = escEmail(p.name || 'Someone');
       var pReason = escEmail(d.reason || '');
       var ph = waPhone(p.phone);
-      var waUrl = ph ? safeUrl('https://wa.me/' + ph + '?text=' + encodeURIComponent(d.msg || '')) : '';
+      var waUrl = ph ? emailSafeUrl('https://wa.me/' + ph + '?text=' + encodeURIComponent(d.msg || '')) : '';
       var line = '<strong>' + pName + '</strong> \u2014 ' + pReason;
       if (waUrl) line += ' <a href="' + escEmail(waUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">\u00a0WhatsApp</a>';
-      htmlParts.push(row(line));
+      htmlParts.push(emailRow(line));
     });
-    if (due.length > 5) htmlParts.push(greyRow('+' + (due.length - 5) + ' more in your pipeline'));
+    if (due.length > 5) htmlParts.push(emailGreyRow('+' + (due.length - 5) + ' more in your pipeline'));
     subjectParts.push(due.length + ' follow-up' + (due.length === 1 ? '' : 's'));
 
     textParts.push('FOLLOW UP TODAY');
@@ -627,20 +648,20 @@ async function sendDailyEmail(env, firmCode, day, news) {
     if (due.length > 5) textParts.push('  +' + (due.length - 5) + ' more in your pipeline');
   }
 
-  /* ── C. SEND ON WHATSAPP TODAY ── */
+  /* ── SEND ON WHATSAPP TODAY ── */
   var waCal = (tab3 && tab3.whatsappCalendar) || {};
   var calWeek = ((weekNum - 1) % 4) + 1;
   var weekKey = 'week' + calWeek;
   var waEntries = Array.isArray(waCal[weekKey]) ? waCal[weekKey] : [];
   var todayWa = waEntries.filter(function(e) { return e.day && e.day.toLowerCase() === weekday.toLowerCase(); });
   if (todayWa.length > 0) {
-    htmlParts.push(heading('Send on WhatsApp today'));
+    htmlParts.push(emailHeading('Send on WhatsApp today'));
     todayWa.forEach(function(e) {
       var sendLabel = escEmail(e.listName || e.sendTo || '');
       var timeLabel = escEmail(e.time || '');
-      htmlParts.push(row((timeLabel ? timeLabel + ' \u00b7 ' : '') + 'Send to <strong>' + sendLabel + '</strong>'));
-      if (e.message) htmlParts.push(row(quote(e.message)));
-      if (e.purpose) htmlParts.push(row('<span style="font-size:12px;color:#888">' + escEmail(e.purpose) + '</span>'));
+      htmlParts.push(emailRow((timeLabel ? timeLabel + ' \u00b7 ' : '') + 'Send to <strong>' + sendLabel + '</strong>'));
+      if (e.message) htmlParts.push(emailRow(emailQuote(e.message)));
+      if (e.purpose) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">' + escEmail(e.purpose) + '</span>'));
     });
     subjectParts.push(todayWa.length + ' WhatsApp send' + (todayWa.length === 1 ? '' : 's'));
 
@@ -652,13 +673,13 @@ async function sendDailyEmail(env, firmCode, day, news) {
     });
   }
 
-  /* ── D. YOUR LINKS ── */
+  /* ── YOUR LINKS ── */
   var links = await env.G7_KV.get('scout:inbound:' + firmCode + ':links', 'json');
   if (links) {
     var taps = await tapReport(env, firmCode, day);
     var totalNow = (taps.now.bio || 0) + (taps.now.google || 0) + (taps.now.status || 0);
     if (totalNow > 0) {
-      htmlParts.push(heading('Your links'));
+      htmlParts.push(emailHeading('Your links'));
       ['bio', 'google', 'status'].forEach(function(s) {
         if (!taps.now[s] && !links[s]) return;
         var line = escEmail(s.charAt(0).toUpperCase() + s.slice(1)) + ': <strong>' + tapWord(taps.now[s] || 0) + '</strong>';
@@ -666,7 +687,7 @@ async function sendDailyEmail(env, firmCode, day, news) {
           var change = (taps.now[s] || 0) - taps.prev[s];
           if (change > 0) line += ' <span style="color:#2a7a2a">(+' + change + ' since yesterday)</span>';
         }
-        htmlParts.push(row(line));
+        htmlParts.push(emailRow(line));
       });
       textParts.push('YOUR LINKS');
       ['bio', 'google', 'status'].forEach(function(s) {
@@ -679,22 +700,70 @@ async function sendDailyEmail(env, firmCode, day, news) {
         textParts.push(line);
       });
     } else {
-      htmlParts.push(heading('Your links'));
-      htmlParts.push(greyRow('No taps yet \u2014 share your bio link today.'));
+      htmlParts.push(emailHeading('Your links'));
+      htmlParts.push(emailGreyRow('No taps yet \u2014 share your bio link today.'));
       textParts.push('YOUR LINKS\n  No taps yet — share your bio link today.');
     }
   }
 
-  /* ── E. YOUR BUSINESS ── */
+  /* ── Subject ── */
+  var subject;
+  if (subjectParts.length > 0) {
+    subject = weekday + ' with Scout \u00b7 ' + subjectParts.join(', ');
+  } else {
+    subject = weekday + ' with Scout';
+  }
+
+  var shell = emailShell({
+    headerLabel: 'Scout',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
+              '<div style="font-size:13px;color:#888;margin-top:4px">Week ' + weekNum + ' of 12.</div>',
+    textGreeting: 'Good morning, ' + name + '.\nWeek ' + weekNum + ' of 12.\n\n',
+    htmlParts: htmlParts,
+    textParts: textParts,
+    footerLine: 'You get this because you switched on Scout\u2019s daily actions.',
+    unsubUrl: unsubUrl
+  });
+
+  var ok = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
+    'List-Unsubscribe': '<' + unsubUrl + '>',
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+  });
+  if (ok) await env.G7_KV.put(sentKey, '1', { expirationTtl: 172800 });
+  return ok ? 'sent' : 'send_failed';
+}
+
+/* News email: business brief + category sections. */
+async function sendNewsEmail(env, firmCode, day, news) {
+  const sentKey = 'market:emailed:' + firmCode + ':' + day;
+  if (await env.G7_KV.get(sentKey)) return 'already_sent';
+  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+  if (!emailPrefs(user).news) return 'not_opted_in';
+  if (!user || !user.recoveryEmail) return 'no_email';
+
+  const bizItems = (news && news.business && Array.isArray(news.business.items)) ? news.business.items : [];
+  const newsSections = (news && Array.isArray(news.sections)) ? news.sections : [];
+  var totalItems = bizItems.length;
+  newsSections.forEach(function(s) { totalItems += (s.items ? s.items.length : 0); });
+  if (!totalItems) return 'nothing_to_send';
+
+  const name = displayName(user, firmCode);
+  const token = await unsubToken(env, firmCode);
+  const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token + '&type=news';
+
+  var htmlParts = [];
+  var textParts = [];
+
+  /* ── YOUR BUSINESS ── */
   if (bizItems.length > 0) {
-    htmlParts.push(heading('Your business'));
+    htmlParts.push(emailHeading('Your business'));
     bizItems.forEach(function(it) {
-      var url = safeUrl(it.sourceUrl || '');
+      var url = emailSafeUrl(it.sourceUrl || '');
       var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
       if (it.whyItMatters) h += '<div style="font-size:13px;color:#555;margin-top:4px">' + escEmail(it.whyItMatters) + '</div>';
       h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo || '') + '</div>';
       if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
-      htmlParts.push(row(h));
+      htmlParts.push(emailRow(h));
     });
     textParts.push('YOUR BUSINESS');
     bizItems.forEach(function(it) {
@@ -705,13 +774,13 @@ async function sendDailyEmail(env, firmCode, day, news) {
     });
   }
 
-  /* ── F. NEWS SECTIONS (one per category) ── */
+  /* ── NEWS SECTIONS (one per category) ── */
   newsSections.forEach(function(sec) {
     var items = (sec.items && sec.items.length) ? sec.items : [];
     if (!items.length) return;
-    htmlParts.push(heading(sec.label || 'News'));
+    htmlParts.push(emailHeading(sec.label || 'News'));
     items.forEach(function(it) {
-      var url = safeUrl(it.sourceUrl || '');
+      var url = emailSafeUrl(it.sourceUrl || '');
       var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
       if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
       var why = (it.why || '').trim();
@@ -719,7 +788,7 @@ async function sendDailyEmail(env, firmCode, day, news) {
         h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
       }
       if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
-      htmlParts.push(row(h));
+      htmlParts.push(emailRow(h));
     });
     textParts.push(String(sec.label || 'NEWS').toUpperCase());
     items.forEach(function(it) {
@@ -731,40 +800,37 @@ async function sendDailyEmail(env, firmCode, day, news) {
     });
   });
 
-  /* ── Subject line ── */
-  var totalNewsItems = bizItems.length;
-  newsSections.forEach(function(s) { totalNewsItems += (s.items ? s.items.length : 0); });
-  var subject;
-  if (subjectParts.length > 0) {
-    subject = weekday + ' with Scout \u00b7 ' + subjectParts.join(', ');
-  } else if (totalNewsItems > 0) {
-    subject = 'Scout \u00b7 ' + totalNewsItems + (totalNewsItems === 1 ? ' thing' : ' things') + ' in your market today';
+  /* ── Subject ── */
+  var firstHeadline = '';
+  if (bizItems.length > 0) {
+    firstHeadline = bizItems[0].headline || '';
   } else {
-    subject = weekday + ' with Scout';
+    for (var si = 0; si < newsSections.length; si++) {
+      if (newsSections[si].items && newsSections[si].items.length) {
+        firstHeadline = newsSections[si].items[0].headline || '';
+        break;
+      }
+    }
   }
+  var subjectTail = String(firstHeadline).slice(0, 60);
+  if (subjectTail.length < firstHeadline.length) {
+    var lastSpace = subjectTail.lastIndexOf(' ');
+    if (lastSpace > 20) subjectTail = subjectTail.slice(0, lastSpace);
+    subjectTail += '\u2026';
+  }
+  var subject = subjectTail ? 'Your news today \u00b7 ' + subjectTail : 'Your news today';
 
-  /* ── Build final HTML ── */
-  var html =
-    '<div style="background:#f6f4ef;padding:24px 12px">' +
-    '<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#fff;font-family:Arial,sans-serif" cellpadding="0" cellspacing="0">' +
-    '<tr><td style="padding:28px 28px 4px">' +
-    '<div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#B8862B">Scout</div>' +
-    '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
-    '<div style="font-size:13px;color:#888;margin-top:4px">Week ' + weekNum + ' of 12.</div>' +
-    '</td></tr>' +
-    htmlParts.join('') +
-    '<tr><td style="padding:20px 28px 28px">' +
-    '<a href="' + appUrl + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;font-size:13px;letter-spacing:.08em">Open Scout</a>' +
-    '</td></tr></table>' +
-    '<div style="max-width:560px;margin:14px auto 0;font-family:Arial,sans-serif;font-size:11px;color:#999;text-align:center;line-height:1.6">' +
-    'You get this because you switched on Scout\u2019s morning email. ' +
-    '<a href="' + unsubUrl + '" style="color:#999">Stop these emails</a></div></div>';
+  var shell = emailShell({
+    headerLabel: 'Scout \u00b7 Your news today',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>',
+    textGreeting: 'Good morning, ' + name + '.\n\n',
+    htmlParts: htmlParts,
+    textParts: textParts,
+    footerLine: 'You get this because you switched on Scout\u2019s news email.',
+    unsubUrl: unsubUrl
+  });
 
-  var text = 'Good morning, ' + name + '.\nWeek ' + weekNum + ' of 12.\n\n' +
-    textParts.join('\n\n') +
-    '\n\nOpen Scout: ' + appUrl + '\n\nStop these emails: ' + unsubUrl;
-
-  var ok = await sendEmail(env, user.recoveryEmail, subject, text, html, {
+  var ok = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   });
@@ -772,13 +838,16 @@ async function sendDailyEmail(env, firmCode, day, news) {
   return ok ? 'sent' : 'send_failed';
 }
 
-/* The whole morning job for one firm: news (cached or fresh), then email. */
+/* The whole morning job for one firm: actions email, then news email. */
 async function runMorningForFirm(env, firmCode, day) {
   const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
   if (!saved || !saved.context) return 'no_context';
+  var a = 'error', n = 'error';
+  try { a = await sendActionsEmail(env, firmCode, day); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
   const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', user.newsPrefs);
-  return await sendDailyEmail(env, firmCode, day, news);
+  try { n = await sendNewsEmail(env, firmCode, day, news); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  return 'actions:' + a + ' news:' + n;
 }
 
 /* ═══════════════════════════════════════════
@@ -2492,11 +2561,12 @@ export default {
       const session = await validateSession(request, env);
       if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
-      return jsonResponse({ on: !!user.briefEmail, hasEmail: !!user.recoveryEmail });
+      const ep = emailPrefs(user);
+      return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: !!user.recoveryEmail });
     }
 
     // ─────────────────────────────────────────────────────────────
-    // POST /scout/brief-email — { on, email? }
+    // POST /scout/brief-email — { actions?, news?, on?, email? }
     // email is accepted ONLY when the account has no recovery email yet.
     // Changing an existing one needs the current password and is not done here.
     // ─────────────────────────────────────────────────────────────
@@ -2514,9 +2584,17 @@ export default {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonResponse({ error: 'That email address does not look right.' }, 400);
         user.recoveryEmail = email;
       }
-      user.briefEmail = !!body.on;
+      if (typeof body.on === 'boolean' && typeof body.actions !== 'boolean' && typeof body.news !== 'boolean') {
+        user.emailActions = body.on;
+        user.emailNews = body.on;
+      } else {
+        if (typeof body.actions === 'boolean') user.emailActions = body.actions;
+        if (typeof body.news === 'boolean') user.emailNews = body.news;
+      }
+      user.briefEmail = !!(user.emailActions || user.emailNews);
       await env.G7_KV.put(key, JSON.stringify(user));
-      return jsonResponse({ on: user.briefEmail, hasEmail: true });
+      const ep = emailPrefs(user);
+      return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: true });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -2565,21 +2643,36 @@ export default {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // GET /unsub?t=<token> and POST /unsub (Gmail one-click) — no session.
+    // GET /unsub?t=<token>&type=actions|news and POST /unsub (Gmail one-click) — no session.
     // ─────────────────────────────────────────────────────────────
     if ((request.method === 'GET' || request.method === 'POST') && path === '/unsub') {
       const t = url.searchParams.get('t') || '';
+      const type = url.searchParams.get('type') || '';
       const firmCode = t ? await env.G7_KV.get('unsub:' + t) : null;
+      var stoppedLabel = 'morning emails';
       if (firmCode) {
         const key = 'auth:users:' + firmCode;
         const user = await env.G7_KV.get(key, 'json');
-        if (user) { user.briefEmail = false; await env.G7_KV.put(key, JSON.stringify(user)); }
+        if (user) {
+          if (type === 'actions') {
+            user.emailActions = false;
+            stoppedLabel = 'daily actions email';
+          } else if (type === 'news') {
+            user.emailNews = false;
+            stoppedLabel = 'news email';
+          } else {
+            user.emailActions = false;
+            user.emailNews = false;
+          }
+          user.briefEmail = !!(user.emailActions || user.emailNews);
+          await env.G7_KV.put(key, JSON.stringify(user));
+        }
       }
       return new Response(
         '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
         '<div style="font-family:Arial,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#222;line-height:1.6">' +
         '<h2 style="font-weight:400">You\'re unsubscribed.</h2>' +
-        '<p>Scout won\'t send you the morning email any more. You can switch it back on from your dashboard.</p></div>',
+        '<p>Scout won\'t send your ' + stoppedLabel + ' any more. You can switch it back on from your dashboard.</p></div>',
         { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
