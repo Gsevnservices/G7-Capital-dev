@@ -560,6 +560,42 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
     <div class="form-nav">
       <button class="btn-back" onclick="goBack(7)">← Back</button>
+      <button class="btn-next" onclick="goNext(7)">Next →</button>
+    </div>
+  </div>
+
+  <div class="form-section" id="section-8">
+    <h2 class="section-title">What should Scout send you each morning?</h2>
+    <p class="section-desc">Two short emails at 6 am. You can change these any time.</p>
+    <div class="section-divider"></div>
+
+    <div class="field-group">
+      <label class="field-label">Emails</label>
+      <div class="checkbox-grid">
+        <label class="checkbox-item"><input type="checkbox" id="emailActions" value="actions" checked><label for="emailActions">Daily actions — today's step, who to follow up with, what to send on WhatsApp</label></label>
+        <label class="checkbox-item"><input type="checkbox" id="emailNews" value="news" checked><label for="emailNews">News — what's moving in your business, and anything you choose below</label></label>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">Also in my news</label>
+      <span class="field-sub">Your business news is always included. These are extra.</span>
+      <div class="checkbox-grid">
+        <label class="checkbox-item"><input type="checkbox" id="npIndia" value="india_policy"><label for="npIndia">India — politics &amp; policy</label></label>
+        <label class="checkbox-item"><input type="checkbox" id="npCity" value="city"><label for="npCity">My city</label></label>
+        <label class="checkbox-item"><input type="checkbox" id="npMarkets" value="india_markets"><label for="npMarkets">Indian stock market</label></label>
+        <label class="checkbox-item"><input type="checkbox" id="npGlobal" value="global"><label for="npGlobal">Global markets &amp; world</label></label>
+      </div>
+    </div>
+
+    <div class="field-group" id="emailFieldGroup" style="display:none">
+      <label class="field-label" for="briefEmailAddr">Your email</label>
+      <input class="field-input" type="email" id="briefEmailAddr" placeholder="you@example.com" autocomplete="email">
+      <span class="field-sub">We only use this for Scout's emails and password resets.</span>
+    </div>
+
+    <div class="form-nav">
+      <button class="btn-back" onclick="goBack(8)">← Back</button>
     </div>
     <button class="btn-submit" id="submitBtn" onclick="handleSubmit()">Build My Customer Acquisition System →</button>
   </div>
@@ -682,7 +718,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 var SECTIONS = [
   {id:1,label:'Business'},{id:2,label:'Market'},{id:3,label:'Competition'},
   {id:4,label:'Channels'},{id:5,label:'Language'},{id:6,label:'Seasonal'},
-  {id:7,label:'Situation'}
+  {id:7,label:'Situation'},{id:8,label:'Emails'}
 ];
 var currentSection = 1;
 
@@ -1007,6 +1043,14 @@ function showSection(n) {
   document.getElementById('section-' + n).classList.add('active');
   currentSection = n;
   renderProgress(n);
+  if (n === 8) {
+    fetch(SCOUT_WORKER + '/scout/brief-email', {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
+    }).then(function(r){ return r.json(); }).then(function(j){
+      var grp = document.getElementById('emailFieldGroup');
+      if (grp) grp.style.display = (j && j.hasEmail) ? 'none' : '';
+    }).catch(function(){});
+  }
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
@@ -1381,6 +1425,25 @@ async function handleSubmit() {
     localStorage.setItem(scoutKey('scout_pending_result'), JSON.stringify(pending));
 
     await saveScoutStateToServer();
+
+    /* Save email preferences — never block or fail the analysis */
+    try {
+      var _authH = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken };
+      var _newsPrefs = [];
+      ['npIndia','npCity','npMarkets','npGlobal'].forEach(function(id) {
+        var cb = document.getElementById(id);
+        if (cb && cb.checked) _newsPrefs.push(cb.value);
+      });
+      fetch(SCOUT_WORKER + '/scout/news-prefs', { method: 'POST', headers: _authH,
+        body: JSON.stringify({ prefs: _newsPrefs }) }).catch(function(){});
+      var _emailBody = { actions: !!document.getElementById('emailActions').checked,
+                         news: !!document.getElementById('emailNews').checked };
+      var _briefAddr = (document.getElementById('briefEmailAddr').value || '').trim();
+      if (_briefAddr) _emailBody.email = _briefAddr;
+      fetch(SCOUT_WORKER + '/scout/brief-email', { method: 'POST', headers: _authH,
+        body: JSON.stringify(_emailBody) }).catch(function(){});
+    } catch (e) {}
+
     window.location.href = 'result.html';
 
   } catch (err) {
@@ -1468,7 +1531,11 @@ function saveDraft() {
       triedSoFar:       document.getElementById('triedSoFar').value,
       whatsappListSize: document.getElementById('whatsappListSize').value,
       howFoundYou:      document.getElementById('howFoundYou').value,
-      specificFocus:    document.getElementById('specificFocus').value
+      specificFocus:    document.getElementById('specificFocus').value,
+      emailActions:     !!document.getElementById('emailActions').checked,
+      emailNews:        !!document.getElementById('emailNews').checked,
+      newsPrefs:        (function(){ var p=[]; ['npIndia','npCity','npMarkets','npGlobal'].forEach(function(id){ var cb=document.getElementById(id); if(cb&&cb.checked) p.push(cb.value); }); return p; })(),
+      briefEmailAddr:   document.getElementById('briefEmailAddr').value
     };
     localStorage.setItem(scoutKey('scout_onboard_draft'), JSON.stringify(draft));
     showDraftSaved();
@@ -1513,6 +1580,16 @@ function restoreDraft(draft) {
   /* Restore businessType hidden value (visible text already restored via textFields above) */
   var _btHid = document.getElementById('businessType');
   if (_btHid && draft.businessType) _btHid.value = draft.businessType;
+  /* Email step checkboxes */
+  if (typeof draft.emailActions === 'boolean') document.getElementById('emailActions').checked = draft.emailActions;
+  if (typeof draft.emailNews === 'boolean') document.getElementById('emailNews').checked = draft.emailNews;
+  if (Array.isArray(draft.newsPrefs)) {
+    ['npIndia','npCity','npMarkets','npGlobal'].forEach(function(id) {
+      var cb = document.getElementById(id);
+      if (cb) cb.checked = draft.newsPrefs.indexOf(cb.value) !== -1;
+    });
+  }
+  if (draft.briefEmailAddr) document.getElementById('briefEmailAddr').value = draft.briefEmailAddr;
   /* Re-apply conditional visibility after selects are restored */
   applyRevenueModelVisibility();
   applyCustomerTypeVisibility();
