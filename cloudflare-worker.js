@@ -602,6 +602,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
     htmlParts.push(emailHeading('Scout\u2019s move today'));
     htmlParts.push(emailRow('<strong>' + escEmail(move.headline) + '</strong>'));
     if (move.reason) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">Why: ' + escEmail(move.reason) + '</span>'));
+    if (move.sourceUrl) htmlParts.push(emailRow('<a href="' + escEmail(emailSafeUrl(move.sourceUrl)) + '" style="font-size:12px;color:#888">' + escEmail(move.sourceTitle || 'Source') + '</a>'));
     htmlParts.push(emailRow(escEmail(move.action || '')));
     if (move.message) {
       htmlParts.push(emailRow(emailQuote(move.message)));
@@ -613,6 +614,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
     textParts.push('SCOUT\'S MOVE TODAY');
     textParts.push('  ' + move.headline);
     if (move.reason) textParts.push('  Why: ' + move.reason);
+    if (move.sourceUrl) textParts.push('  Source: ' + (move.sourceTitle || move.sourceUrl));
     textParts.push('  ' + (move.action || ''));
     if (move.message) {
       textParts.push('  > ' + move.message);
@@ -1277,17 +1279,19 @@ async function generateScoutMove(env, firmCode, day, context, news, st) {
   const cached = await env.G7_KV.get(cacheKey, 'json');
   if (cached) return cached;
 
-  /* Signals: business items plus section items with a real effect. */
+  /* Signals: business items plus section items with a real effect. Numbered. */
   const signals = [];
   ((news && news.business && news.business.items) || []).forEach(function(it) {
-    signals.push({ headline: it.headline, what: it.whatHappened, why: it.whyItMatters,
-                   impact: it.impact || 'none', group: it.group || '', horizon: it.horizon || '' });
+    signals.push({ i: signals.length, headline: it.headline, what: it.whatHappened, why: it.whyItMatters,
+                   impact: it.impact || 'none', group: it.group || '', horizon: it.horizon || '',
+                   sourceTitle: it.sourceTitle || '', sourceUrl: it.sourceUrl || '' });
   });
   ((news && news.sections) || []).forEach(function(s) {
     (s.items || []).forEach(function(it) {
       if (it.impact && it.impact !== 'none') {
-        signals.push({ headline: it.headline, what: it.whatHappened, why: it.why,
-                       impact: it.impact, group: it.group || '', horizon: it.horizon || '' });
+        signals.push({ i: signals.length, headline: it.headline, what: it.whatHappened, why: it.why,
+                       impact: it.impact, group: it.group || '', horizon: it.horizon || '',
+                       sourceTitle: it.sourceTitle || '', sourceUrl: it.sourceUrl || '' });
       }
     });
   });
@@ -1337,10 +1341,15 @@ async function generateScoutMove(env, firmCode, day, context, news, st) {
     '- message: a WhatsApp message the owner sends to customers or partners, in the ' +
     'same language and tone as the business context (Hinglish if it uses Hinglish), ' +
     'under 60 words, warm and specific, never mentioning news websites, never spammy.\n' +
-    '- If the move needs no message, return message as "".\n\n' +
+    '- If the move needs no message, return message as "".\n' +
+    '- Write headline and action directly to the owner, as instructions: ' +
+    '"Call the tender desk today", never "The owner should…".\n' +
+    '- group must be copied exactly from CUSTOMER GROUPS, or "" if the move ' +
+    'is not about one of them.\n\n' +
     'Reply with ONLY this JSON:\n' +
     '{"headline":"under 12 words","reason":"one sentence","action":"one or two sentences",' +
     '"group":"customer group name or \\"\\"","message":"","basedOn":"news | pipeline | plan",' +
+    '"signal": "<the i of the news signal the move is based on, or -1>",' +
     '"confidence":"high | medium | low"}';
 
   const userMsg =
@@ -1368,14 +1377,23 @@ async function generateScoutMove(env, firmCode, day, context, news, st) {
   } catch (e) {}
   if (!mv || !mv.headline || !mv.action) throw new Error('move: unparseable');
 
+  const sigIdx = typeof mv.signal === 'number' ? mv.signal : parseInt(mv.signal, 10);
+  const sig = (!isNaN(sigIdx) && signals[sigIdx]) ? signals[sigIdx] : null;
+  var mvBasedOn = ['news','pipeline','plan'].indexOf(mv.basedOn) !== -1 ? mv.basedOn : 'plan';
+  if (mvBasedOn === 'news' && !sig) mvBasedOn = 'plan';
+  var mvGroup = String(mv.group || '').slice(0, 120);
+  if (mvGroup && groups.indexOf(mvGroup) === -1) mvGroup = '';
+
   const move = {
     date: day,
     headline: String(mv.headline).slice(0, 120),
     reason: clip(mv.reason, 300),
     action: clip(mv.action, 400),
-    group: String(mv.group || '').slice(0, 120),
+    group: mvGroup,
     message: String(mv.message || '').slice(0, 600),
-    basedOn: ['news','pipeline','plan'].indexOf(mv.basedOn) !== -1 ? mv.basedOn : 'plan',
+    basedOn: mvBasedOn,
+    sourceTitle: sig ? String(sig.sourceTitle || sig.headline || '').slice(0, 160) : '',
+    sourceUrl: sig && /^https:\/\//i.test(sig.sourceUrl || '') ? sig.sourceUrl : '',
     confidence: ['high','medium','low'].indexOf(mv.confidence) !== -1 ? mv.confidence : 'medium',
     status: 'suggested'
   };
