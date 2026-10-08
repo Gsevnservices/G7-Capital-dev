@@ -308,8 +308,8 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly)
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
+      model: 'claude-sonnet-5-5',
+      max_tokens: 6000,
       system: system,
       tools: [tool],
       messages: [{ role: 'user', content: 'THE BUSINESS:\n' + context +
@@ -924,8 +924,8 @@ async function findBusinesses(env, query, cap) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 3000,
+      model: 'claude-sonnet-5-5',
+      max_tokens: 6000,
       system: system,
       tools: [
         { type: 'web_search_20250305', name: 'web_search', max_uses: 5,
@@ -1100,7 +1100,7 @@ async function generateSharedNews(env, cat, day, city) {
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                  'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6', max_tokens: 1500, system: system,
+        model: 'claude-sonnet-5-5', max_tokens: 4000, system: system,
         tools: [tool],
         messages: [{ role: 'user', content: 'Today\'s ' + def.label + ' news.' }]
       })
@@ -1366,7 +1366,7 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 900, system: system,
+    body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 4000, system: system,
                            messages: [{ role: 'user', content: userMsg }] })
   });
   if (!r.ok) throw new Error('move ' + r.status + ': ' + (await r.text()).slice(0, 300));
@@ -2273,7 +2273,7 @@ export default {
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model:      'claude-sonnet-4-6',
+          model:      'claude-sonnet-5-5',
           max_tokens: 400,
           stream:     false,
           messages:   body.messages || []
@@ -2404,7 +2404,7 @@ export default {
           'anthropic-beta': 'prompt-caching-2024-07-31'
         },
         body: JSON.stringify({
-          model:    'claude-sonnet-4-6',
+          model:    'claude-sonnet-5-5',
           max_tokens: 3000,
           stream:   true,
           system:   body.system   || '',
