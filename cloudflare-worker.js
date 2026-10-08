@@ -2274,7 +2274,7 @@ export default {
         },
         body: JSON.stringify({
           model:      'claude-sonnet-5-5',
-          max_tokens: 400,
+          max_tokens: 2000,
           stream:     false,
           messages:   body.messages || []
         })
@@ -2286,7 +2286,7 @@ export default {
       }
 
       const result = await anthropicResponse.json();
-      const text = (result.content && result.content[0] && result.content[0].text) || '';
+      const text = (result.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('');
 
       return jsonResponse({ text: text });
     }
