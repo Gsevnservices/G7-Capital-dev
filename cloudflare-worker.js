@@ -1274,10 +1274,12 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs) {
 /* One decision per firm per day: the single most useful thing to do today,
    built from news signals, the pipeline, the plan and past moves. No web
    search — every fact it uses was already verified upstream. */
-async function generateScoutMove(env, firmCode, day, context, news, st) {
+async function generateScoutMove(env, firmCode, day, context, news, st, force) {
   const cacheKey = 'move:' + firmCode + ':' + day;
-  const cached = await env.G7_KV.get(cacheKey, 'json');
-  if (cached) return cached;
+  if (!force) {
+    const cached = await env.G7_KV.get(cacheKey, 'json');
+    if (cached) return cached;
+  }
 
   /* Signals: business items plus section items with a real effect. Numbered. */
   const signals = [];
@@ -2047,6 +2049,32 @@ export default {
         return jsonResponse({ firmCode: firmCode, day: day, status: status });
       } catch (e) {
         return jsonResponse({ error: 'run_failed', detail: String(e.message || '').slice(0, 300) }, 500);
+      }
+    }
+
+    // POST /admin/regen-move — { adminPassword, firmCode }
+    // Regenerates today's move for one firm, ignoring the cached one.
+    // For tuning the move prompt without deleting KV keys by hand.
+    if (request.method === 'POST' && path === '/admin/regen-move') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      const firmCode = String(body.firmCode || '').toUpperCase().trim();
+      if (!firmCode) return jsonResponse({ error: 'firmCode required' }, 400);
+      const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const day = ist.toISOString().slice(0, 10);
+      const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+      if (!saved || !saved.context) return jsonResponse({ error: 'no_context' }, 404);
+      try {
+        const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
+        const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', user.newsPrefs);
+        const st = await loadScoutState(env, firmCode);
+        const move = await generateScoutMove(env, firmCode, day, saved.context, news, st, true);
+        return jsonResponse({ move: move });
+      } catch (e) {
+        return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 300) }, 500);
       }
     }
 
