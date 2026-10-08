@@ -547,7 +547,7 @@ function emailShell(opts) {
 }
 
 /* Actions email: today's step, follow-ups, WhatsApp sends, link taps. */
-async function sendActionsEmail(env, firmCode, day) {
+async function sendActionsEmail(env, firmCode, day, move) {
   const sentKey = 'actions:emailed:' + firmCode + ':' + day;
   if (await env.G7_KV.get(sentKey)) return 'already_sent';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
@@ -596,6 +596,30 @@ async function sendActionsEmail(env, firmCode, day) {
   var htmlParts = [];
   var textParts = [];
   var subjectParts = [];
+
+  /* ── SCOUT'S MOVE TODAY ── */
+  if (move && move.headline) {
+    htmlParts.push(emailHeading('Scout\u2019s move today'));
+    htmlParts.push(emailRow('<strong>' + escEmail(move.headline) + '</strong>'));
+    if (move.reason) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">Why: ' + escEmail(move.reason) + '</span>'));
+    htmlParts.push(emailRow(escEmail(move.action || '')));
+    if (move.message) {
+      htmlParts.push(emailRow(emailQuote(move.message)));
+      var waUrl = emailSafeUrl('https://wa.me/?text=' + encodeURIComponent(move.message));
+      htmlParts.push(emailRow('<a href="' + escEmail(waUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">Share on WhatsApp</a>'));
+    }
+    htmlParts.push(emailGreyRow('A suggestion from Scout \u2014 you know your business best.'));
+
+    textParts.push('SCOUT\'S MOVE TODAY');
+    textParts.push('  ' + move.headline);
+    if (move.reason) textParts.push('  Why: ' + move.reason);
+    textParts.push('  ' + (move.action || ''));
+    if (move.message) {
+      textParts.push('  > ' + move.message);
+      textParts.push('  Share on WhatsApp: https://wa.me/?text=' + encodeURIComponent(move.message));
+    }
+    textParts.push('  A suggestion from Scout — you know your business best.');
+  }
 
   /* ── TODAY'S STEP ── */
   var tab3 = (analysis && analysis.tab3) || {};
@@ -708,7 +732,16 @@ async function sendActionsEmail(env, firmCode, day) {
 
   /* ── Subject ── */
   var subject;
-  if (subjectParts.length > 0) {
+  if (move && move.headline) {
+    var moveTail = weekday + ' with Scout \u00b7 ' + move.headline;
+    if (moveTail.length > 70) {
+      var cut = moveTail.slice(0, 70);
+      var ls = cut.lastIndexOf(' ');
+      if (ls > 30) cut = cut.slice(0, ls);
+      moveTail = cut + '\u2026';
+    }
+    subject = moveTail;
+  } else if (subjectParts.length > 0) {
     subject = weekday + ' with Scout \u00b7 ' + subjectParts.join(', ');
   } else {
     subject = weekday + ' with Scout';
@@ -838,16 +871,18 @@ async function sendNewsEmail(env, firmCode, day, news) {
   return ok ? 'sent' : 'send_failed';
 }
 
-/* The whole morning job for one firm: actions email, then news email. */
+/* The whole morning job for one firm: news → move → actions email → news email. */
 async function runMorningForFirm(env, firmCode, day) {
   const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
   if (!saved || !saved.context) return 'no_context';
-  var a = 'error', n = 'error';
-  try { a = await sendActionsEmail(env, firmCode, day); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
-  const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', user.newsPrefs);
-  try { n = await sendNewsEmail(env, firmCode, day, news); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
-  return 'actions:' + a + ' news:' + n;
+  var news = null, move = null, a = 'error', n = 'error';
+  try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', user.newsPrefs); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  const st = await loadScoutState(env, firmCode);
+  try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  if (news) { try { n = await sendNewsEmail(env, firmCode, day, news); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = 'no_news'; }
+  return 'actions:' + a + ' news:' + n + ' move:' + (move ? 'ok' : 'none');
 }
 
 /* ═══════════════════════════════════════════
@@ -1127,16 +1162,16 @@ async function generateSharedNews(env, cat, day, city) {
   return result;
 }
 
-/* Per firm, no search: one short line per item on what it means for THIS
-   business. Cheap model — the facts are already verified. */
+/* Per firm, no search: tag every item with why, impact, group, horizon.
+   Cheap model — the facts are already verified. */
 async function personaliseNews(env, firmCode, day, context, sections) {
-  const key = 'news:why:' + firmCode + ':' + day;
+  const key = 'news:sig:' + firmCode + ':' + day;
   const cached = await env.G7_KV.get(key, 'json');
   if (cached) return cached;
   const flat = [];
   sections.forEach(function(s, si) {
     (s.items || []).forEach(function(it, ii) {
-      flat.push({ id: si + '.' + ii, headline: it.headline, whatHappened: it.whatHappened });
+      flat.push({ id: si + '.' + ii, headline: it.headline, whatHappened: it.whatHappened || it.whyItMatters || '' });
     });
   });
   if (!flat.length) return {};
@@ -1145,12 +1180,18 @@ async function personaliseNews(env, firmCode, day, context, sections) {
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001', max_tokens: 1200,
-      system: 'For each news item, write ONE sentence (under 25 words) on what it ' +
-        'concretely means for the business described. If it genuinely does not affect ' +
-        'this business, write exactly "No direct effect on your business." Never ' +
-        'invent facts beyond the item. Never give investment advice. Reply with ONLY ' +
-        'JSON: {"<id>":"sentence", ...}',
+      model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
+      system: 'For each news item, judge what it means for the business described. ' +
+        'Return for each id an object:\n' +
+        '  why: ONE sentence under 25 words on the concrete effect on this business, ' +
+        'or exactly "No direct effect on your business."\n' +
+        '  impact: one of demand_up, demand_down, cost_up, cost_down, lead_source, ' +
+        'competitor, regulation, timing, none\n' +
+        '  group: the name of the business\'s customer group most affected, copied ' +
+        'exactly from the business description, or ""\n' +
+        '  horizon: now (this week), weeks, or months\n' +
+        'Never invent facts beyond the item. Never give investment or loan advice. ' +
+        'Reply with ONLY JSON: {"<id>":{"why":"","impact":"","group":"","horizon":""}, ...}',
       messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
         '\n\nITEMS:\n' + JSON.stringify(flat) }]
     })
@@ -1190,10 +1231,20 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs) {
       console.log(JSON.stringify({ newsCategoryFailed: c, error: errMsg }));
     }
   }
-  const why = await personaliseNews(env, firmCode, day, context, sections);
+  const all = [{ category: 'business', items: (business && business.items) || [] }].concat(sections);
+  const sig = await personaliseNews(env, firmCode, day, context, all);
+  /* Apply tags back — index 0 is business, 1+ are sections. */
+  (all[0].items || []).forEach(function(it, ii) {
+    var v = sig['0.' + ii];
+    if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
+    if (v) { it.impact = v.impact || 'none'; it.group = v.group || ''; it.horizon = v.horizon || ''; }
+  });
   sections.forEach(function(s, si) {
     s.items = s.items.map(function(it, ii) {
-      return Object.assign({}, it, { why: why[si + '.' + ii] || '' });
+      var v = sig[(si + 1) + '.' + ii];
+      if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
+      if (v) return Object.assign({}, it, { why: v.why || '', impact: v.impact || 'none', group: v.group || '', horizon: v.horizon || '' });
+      return Object.assign({}, it, { why: '' });
     });
   });
   /* Relevance first. In policy and city news, an item with no effect on
@@ -1216,6 +1267,122 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs) {
     if (!sections[i].items.length) sections.splice(i, 1);
   }
   return { business: business, sections: sections, errors: errors };
+}
+
+/* One decision per firm per day: the single most useful thing to do today,
+   built from news signals, the pipeline, the plan and past moves. No web
+   search — every fact it uses was already verified upstream. */
+async function generateScoutMove(env, firmCode, day, context, news, st) {
+  const cacheKey = 'move:' + firmCode + ':' + day;
+  const cached = await env.G7_KV.get(cacheKey, 'json');
+  if (cached) return cached;
+
+  /* Signals: business items plus section items with a real effect. */
+  const signals = [];
+  ((news && news.business && news.business.items) || []).forEach(function(it) {
+    signals.push({ headline: it.headline, what: it.whatHappened, why: it.whyItMatters,
+                   impact: it.impact || 'none', group: it.group || '', horizon: it.horizon || '' });
+  });
+  ((news && news.sections) || []).forEach(function(s) {
+    (s.items || []).forEach(function(it) {
+      if (it.impact && it.impact !== 'none') {
+        signals.push({ headline: it.headline, what: it.whatHappened, why: it.why,
+                       impact: it.impact, group: it.group || '', horizon: it.horizon || '' });
+      }
+    });
+  });
+
+  /* Pipeline summary — counts and the people due, never phone numbers. */
+  const pend = st ? (st.pick('scout_pending_result') || {}) : {};
+  const bizName = (pend.businessData && pend.businessData.businessName) || '';
+  const pipeline = st ? st.pick('scout_pipeline') : null;
+  const people = (pipeline && Array.isArray(pipeline.people)) ? pipeline.people : [];
+  const counts = {};
+  people.forEach(function(p){ counts[p.status] = (counts[p.status] || 0) + 1; });
+  const due = pipelineDueFromStore(pipeline, Date.now(), bizName).slice(0, 5)
+    .map(function(d){ return { name: (d.person && d.person.name) || '', status: d.person && d.person.status, reason: d.reason }; });
+
+  /* Today's plan step and the customer group names. */
+  let analysis = {};
+  try {
+    analysis = typeof pend.scoutOutput === 'string'
+      ? JSON.parse(pend.scoutOutput.replace(/^```json\s*/i,'').replace(/```\s*$/,'').trim())
+      : (pend.scoutOutput || {});
+  } catch (e) {}
+  const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+  const days = (analysis.tab3 && Array.isArray(analysis.tab3.days)) ? analysis.tab3.days : [];
+  const step = days.filter(function(d){ return d.day && d.day.toLowerCase() === weekday.toLowerCase(); })[0] || null;
+  const groups = (analysis.tab1 && Array.isArray(analysis.tab1.icps)) ? analysis.tab1.icps.map(function(g){ return g.name; }) : [];
+
+  /* Recent moves, so it does not repeat itself. */
+  const history = (await env.G7_KV.get('move:history:' + firmCode, 'json')) || [];
+  const recent = history.slice(-7).map(function(h){ return { date: h.date, headline: h.headline, status: h.status || 'suggested' }; });
+
+  const system =
+    'You are Scout, the business-development employee for one Indian small business. ' +
+    'Today is ' + weekday + ', ' + day + '. Decide the ONE most useful move the owner ' +
+    'should make today to win customers or protect margins.\n\n' +
+    'HOW TO DECIDE:\n' +
+    '- Prefer a move driven by a news signal with horizon "now" and a clear effect on ' +
+    'a named customer group. A strong signal can change WHICH group to target this ' +
+    'week, WHAT to say, or HOW to price and quote.\n' +
+    '- If no signal is strong, base the move on the pipeline (who is due) or the plan step.\n' +
+    '- The move adjusts the plan; it never contradicts it without saying why.\n' +
+    '- Do not repeat any recent move unless something new justifies it.\n\n' +
+    'RULES:\n' +
+    '- Exactly one move. Concrete, doable today, in under an hour where possible.\n' +
+    '- reason must name what it is based on: a specific news headline, or a pipeline fact.\n' +
+    '- Never invent numbers, names or facts not given to you.\n' +
+    '- Never give investment, stock or loan advice.\n' +
+    '- message: a WhatsApp message the owner sends to customers or partners, in the ' +
+    'same language and tone as the business context (Hinglish if it uses Hinglish), ' +
+    'under 60 words, warm and specific, never mentioning news websites, never spammy.\n' +
+    '- If the move needs no message, return message as "".\n\n' +
+    'Reply with ONLY this JSON:\n' +
+    '{"headline":"under 12 words","reason":"one sentence","action":"one or two sentences",' +
+    '"group":"customer group name or \\"\\"","message":"","basedOn":"news | pipeline | plan",' +
+    '"confidence":"high | medium | low"}';
+
+  const userMsg =
+    'BUSINESS:\n' + String(context).slice(0, 2500) +
+    '\n\nCUSTOMER GROUPS: ' + JSON.stringify(groups) +
+    '\n\nNEWS SIGNALS:\n' + JSON.stringify(signals) +
+    '\n\nPIPELINE: counts ' + JSON.stringify(counts) + '; due today ' + JSON.stringify(due) +
+    '\n\nTODAY\'S PLAN STEP: ' + (step ? JSON.stringify({ action: step.action, target: step.target }) : 'none') +
+    '\n\nRECENT MOVES: ' + JSON.stringify(recent);
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+               'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 900, system: system,
+                           messages: [{ role: 'user', content: userMsg }] })
+  });
+  if (!r.ok) throw new Error('move ' + r.status + ': ' + (await r.text()).slice(0, 300));
+  const d = await r.json();
+  const t = (d.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('');
+  let mv = null;
+  try {
+    const a = t.indexOf('{'), z = t.lastIndexOf('}');
+    if (a !== -1 && z > a) mv = JSON.parse(t.slice(a, z + 1));
+  } catch (e) {}
+  if (!mv || !mv.headline || !mv.action) throw new Error('move: unparseable');
+
+  const move = {
+    date: day,
+    headline: String(mv.headline).slice(0, 120),
+    reason: clip(mv.reason, 300),
+    action: clip(mv.action, 400),
+    group: String(mv.group || '').slice(0, 120),
+    message: String(mv.message || '').slice(0, 600),
+    basedOn: ['news','pipeline','plan'].indexOf(mv.basedOn) !== -1 ? mv.basedOn : 'plan',
+    confidence: ['high','medium','low'].indexOf(mv.confidence) !== -1 ? mv.confidence : 'medium',
+    status: 'suggested'
+  };
+  await env.G7_KV.put(cacheKey, JSON.stringify(move), { expirationTtl: 172800 });
+  const nextHist = history.concat([{ date: day, headline: move.headline, basedOn: move.basedOn, status: 'suggested' }]).slice(-30);
+  await env.G7_KV.put('move:history:' + firmCode, JSON.stringify(nextHist));
+  return move;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2640,6 +2807,29 @@ export default {
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
       const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', user.newsPrefs);
       return jsonResponse(news);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /scout/move — today's move for the dashboard.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/move') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const today = ist.toISOString().slice(0, 10);
+      const cached = await env.G7_KV.get('move:' + session.firmCode + ':' + today, 'json');
+      if (cached) return jsonResponse({ move: cached });
+      const saved = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
+      if (!saved || !saved.context) return jsonResponse({ move: null });
+      try {
+        const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+        const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', user.newsPrefs);
+        const st = await loadScoutState(env, session.firmCode);
+        const move = await generateScoutMove(env, session.firmCode, today, saved.context, news, st);
+        return jsonResponse({ move: move });
+      } catch (e) {
+        return jsonResponse({ move: null });
+      }
     }
 
     // ─────────────────────────────────────────────────────────────
