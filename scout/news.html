@@ -91,17 +91,11 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 window.addEventListener('DOMContentLoaded', async function() {
   var token = localStorage.getItem('g7_session_token');
   if (!token) { window.location.href = '../login.html?product=scout'; return; }
-  try {
-    var v = await validateSessionOnLoad();
-    if (!v) { window.location.href = '../login.html?product=scout'; return; }
-  } catch (e) { window.location.href = '../login.html?product=scout'; return; }
+
   document.body.style.visibility = 'visible';
 
-  var firmEl = document.getElementById('navFirmName');
-  if (firmEl) {
-    var fc = localStorage.getItem('g7_firm_code') || '';
-    if (fc) firmEl.textContent = fc;
-  }
+  var firmName = localStorage.getItem('g7_session_name') || '';
+  if (firmName) document.getElementById('navFirmName').textContent = firmName;
 
   var wrap = document.getElementById('newsWrap');
   var news = await scoutNewsLoad();
