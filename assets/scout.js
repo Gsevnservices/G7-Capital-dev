@@ -1585,6 +1585,82 @@ function speakableName(s) {
 
 
 // ─────────────────────────────────────────────────────────────
+// SHARED HELPERS — used by multiple Scout pages
+// ─────────────────────────────────────────────────────────────
+
+/* HTML-escape a string for safe insertion into innerHTML. */
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* Only http(s) links reach an href — never javascript: or data: URLs. */
+function scoutSafeUrl(u) {
+  return /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+}
+
+/* Flatten a /scout/news response into a single ordered item list.
+   Business items first (labelled "Your business"), then each section
+   in order. Every item gets an `_idx` (0-based) and `_label`.
+   Both the dashboard headline view and news.html use this so
+   #item-N always refers to the same item. */
+function scoutNewsFlatItems(news) {
+  var out = [];
+  if (!news) return out;
+  var bizItems = (news.business && Array.isArray(news.business.items)) ? news.business.items : [];
+  bizItems.forEach(function(it) {
+    out.push(Object.assign({}, it, { _idx: out.length, _label: 'Your business' }));
+  });
+  var sections = Array.isArray(news.sections) ? news.sections : [];
+  sections.forEach(function(sec) {
+    var items = (sec.items && sec.items.length) ? sec.items : [];
+    items.forEach(function(it) {
+      out.push(Object.assign({}, it, { _idx: out.length, _label: sec.label || 'News' }));
+    });
+  });
+  return out;
+}
+
+/* Load today's news from /scout/news (with localStorage cache).
+   Returns a promise resolving to the raw response object or null. */
+var _scoutNewsPromise = null;
+function scoutNewsLoad() {
+  if (_scoutNewsPromise) return _scoutNewsPromise;
+  var ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+  var day = ist.toISOString().slice(0, 10);
+  var localKey = scoutKey('scout_news2_' + day);
+  try {
+    var hit = JSON.parse(localStorage.getItem(localKey) || 'null');
+    if (hit && (Array.isArray(hit.sections) || (hit.business && hit.business.items))) {
+      _scoutNewsPromise = Promise.resolve(hit);
+      return _scoutNewsPromise;
+    }
+  } catch (e) {}
+  _scoutNewsPromise = (async function() {
+    try {
+      var r = await fetch(SCOUT_WORKER + '/scout/news', {
+        headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
+      });
+      if (!r.ok) return null;
+      var j = await r.json();
+      if (j && (Array.isArray(j.sections) || (j.business && j.business.items))) {
+        try {
+          localStorage.setItem(localKey, JSON.stringify(j));
+          /* Clean up old scout_news_ and scout_news2_ keys for other days. */
+          for (var i = localStorage.length - 1; i >= 0; i--) {
+            var k = localStorage.key(i);
+            if (!k) continue;
+            if (k.indexOf('scout_news_') !== -1 && k.indexOf(day) === -1) localStorage.removeItem(k);
+            else if (k.indexOf('scout_news2_') !== -1 && k.indexOf(day) === -1) localStorage.removeItem(k);
+          }
+        } catch (e) {}
+      }
+      return j;
+    } catch (e) { return null; }
+  })();
+  return _scoutNewsPromise;
+}
+
+// ─────────────────────────────────────────────────────────────
 // MODULE EXPORT (Node.js validation only)
 // Not used in browser — Scout pages load this via <script> tag
 // ─────────────────────────────────────────────────────────────
