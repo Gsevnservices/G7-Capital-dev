@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/scout-master-v1.js?v=19"></script>
 <script src="../assets/auth.js?v=18"></script>
-<script src="../assets/scout.js?v=25"></script>
+<script src="../assets/scout.js?v=26"></script>
 <script src="../assets/pipeline.js?v=16"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -520,7 +520,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
    Prefixed cc- so it cannot collide with the existing dashboard styles
    while both exist.
 ═══════════════════════════════════════════ */
-.cc-wrap{display:flex;gap:20px;padding:20px 0;align-items:stretch}
+.cc-wrap{display:flex;gap:20px;padding:20px 0;align-items:start}
 .cc-rail{flex-shrink:0;display:flex;flex-direction:column;gap:16px}
 .cc-rail-l{width:340px}
 .cc-rail-r{width:380px}
@@ -639,6 +639,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
   <div class="nav-right">
     <a href="index.html" class="nav-link active">Dashboard</a>
+    <a href="news.html" class="nav-link">News</a>
     <a href="onboard.html" class="nav-link">New Analysis</a>
     <a href="history.html" class="nav-link">History</a>
     <a href="checkin.html" class="nav-link">Check-In</a>
@@ -799,7 +800,8 @@ window.addEventListener('DOMContentLoaded', async function() {
   await scoutMigratePinKey();
   scoutPinnedRender();
   ccRender();
-  scoutMarketLoad().then(function(items) { scoutMarketRender(items); scoutNewsLoad().then(scoutNewsRender); });
+  scoutMarketLoad(); /* preload for voice/briefing — not rendered into #ccMarket */
+  scoutNewsLoad().then(scoutNewsRender);
   scoutSettingsRender();
 
   /* Firm name in nav */
@@ -937,10 +939,7 @@ function plainLang(str) {
 }
 
 
-function escHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+/* escHtml is now in scout.js */
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -1375,10 +1374,7 @@ function scoutMarketLoad() {
 }
 window.scoutMarketLoad = scoutMarketLoad;
 
-/* Only http(s) links reach an href — never javascript: or data: URLs. */
-function scoutSafeUrl(u) {
-  return /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
-}
+/* scoutSafeUrl is now in scout.js */
 
 function scoutMarketRender(items) {
   var el = document.getElementById('ccMarket');
@@ -1401,62 +1397,38 @@ function scoutMarketRender(items) {
   }).join('');
 }
 
-var _newsPromise = null;
-function scoutNewsLoad() {
-  if (_newsPromise) return _newsPromise;
-  var day = scoutMarketDay();
-  var localKey = scoutKey('scout_news_' + day);
-  try {
-    var hit = JSON.parse(localStorage.getItem(localKey) || 'null');
-    if (hit && Array.isArray(hit.sections)) {
-      _newsPromise = Promise.resolve(hit);
-      return _newsPromise;
-    }
-  } catch (e) {}
-  _newsPromise = (async function() {
-    try {
-      var r = await fetch(SCOUT_WORKER + '/scout/news', {
-        headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
-      });
-      if (!r.ok) return null;
-      var j = await r.json();
-      if (j && Array.isArray(j.sections)) {
-        try {
-          localStorage.setItem(localKey, JSON.stringify({ sections: j.sections }));
-          for (var i = localStorage.length - 1; i >= 0; i--) {
-            var k = localStorage.key(i);
-            if (k && k.indexOf('scout_news_') !== -1 && k.indexOf(day) === -1) localStorage.removeItem(k);
-          }
-        } catch (e) {}
-      }
-      return j;
-    } catch (e) { return null; }
-  })();
-  return _newsPromise;
-}
+/* scoutNewsLoad is now in scout.js — shared with news.html */
 
+/* Dashboard: headline-only view, capped at 5 — 2 business max, then
+   first item of each section. Uses _idx from scoutNewsFlatItems so
+   anchors match news.html exactly. */
 function scoutNewsRender(news) {
   var el = document.getElementById('ccMarket');
-  if (!el || !news || !Array.isArray(news.sections)) return;
-  var sections = news.sections.filter(function(s) { return s.items && s.items.length; });
-  if (!sections.length) return;
+  if (!el) return;
+  var flat = scoutNewsFlatItems(news);
+  if (!flat.length) {
+    el.innerHTML = '<div class="cc-task-why">Nothing has changed in your market today that needs you. Scout checks again tomorrow.</div>';
+    return;
+  }
+  var show = [];
+  var bizCount = 0;
+  var seenLabel = {};
+  for (var i = 0; i < flat.length && show.length < 5; i++) {
+    var it = flat[i];
+    if (it._label === 'Your business') {
+      if (bizCount < 2) { show.push(it); bizCount++; }
+    } else {
+      if (!seenLabel[it._label]) { show.push(it); seenLabel[it._label] = true; }
+    }
+  }
   var html = '';
-  sections.forEach(function(sec) {
-    html += '<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border2)">' +
-      '<div style="font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);margin-bottom:10px">' + escHtml(sec.label || 'News') + '</div>';
-    sec.items.forEach(function(it) {
-      var url = scoutSafeUrl(it.sourceUrl);
-      var why = (it.why || '').trim();
-      html += '<div class="cc-mk">' +
-        '<div class="cc-mk-head"><span>' + escHtml(it.headline || '') + '</span></div>' +
-        (why && why !== 'No direct effect on your business.' ? '<div class="cc-mk-why">' + escHtml(why) + '</div>' : '') +
-        (url ? '<a class="cc-mk-src" href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' +
-               escHtml(it.sourceTitle || 'Source') + ' \u2197</a>' : '') +
-        '</div>';
-    });
-    html += '</div>';
+  show.forEach(function(it) {
+    html += '<a href="news.html#item-' + it._idx + '" style="display:block;text-decoration:none;padding:6px 0;border-bottom:1px solid var(--border2)">' +
+      '<span style="font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--amber);margin-right:8px">' + escHtml(it._label) + '</span>' +
+      '<span style="font-size:13px;color:var(--white);line-height:1.4">' + escHtml(it.headline || '') + '</span></a>';
   });
-  el.insertAdjacentHTML('beforeend', html);
+  html += '<div style="margin-top:10px"><a href="news.html" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none">Read all news \u2192</a></div>';
+  el.innerHTML = html;
 }
 
 async function scoutSettingsRender() {

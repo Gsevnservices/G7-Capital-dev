@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Today's News — G7 Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/scout-master-v1.js?v=19"></script>
+<script src="../assets/auth.js?v=18"></script>
+<script src="../assets/scout.js?v=26"></script>
+<script src="../assets/pipeline.js?v=16"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;font-size:16px}
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;--black4:#1E1E1E;
+  --amber:#E0922F;--amber-d:#D17B2E;--amber-l:#F0B968;
+  --white:#FAFAF8;--white2:#F0EFE9;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(224,146,47,0.15);--border2:rgba(250,250,248,0.08)
+}
+body{font-family:'Tenor Sans',sans-serif;background:var(--black);color:var(--white);overflow-x:hidden;cursor:none;min-height:100vh;visibility:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:.4}
+.cursor{position:fixed;width:8px;height:8px;background:var(--amber);border-radius:50%;pointer-events:none;z-index:9999;transition:transform .15s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+.cursor-ring{position:fixed;width:36px;height:36px;border:1px solid rgba(224,146,47,.5);border-radius:50%;pointer-events:none;z-index:9998;transition:all .12s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+@media(max-width:480px){.cursor,.cursor-ring{display:none}body{cursor:auto}}
+nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:center;justify-content:space-between;padding:0 64px;height:80px;background:rgba(8,8,8,.92);backdrop-filter:blur(24px);border-bottom:1px solid var(--border2)}
+.nav-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:300;letter-spacing:.25em;text-transform:uppercase;color:var(--white);text-decoration:none}
+.nav-logo em{font-style:normal;color:var(--amber)}
+.nav-right{display:flex;align-items:center;gap:32px}
+.nav-link{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .3s}
+.nav-link:hover{color:var(--white)}
+.nav-link.active{color:var(--amber)}
+.nav-firm-indicator{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:rgba(224,146,47,0.6);margin-right:8px}
+.nav-logout{font-size:9px;letter-spacing:.15em;text-transform:uppercase;background:transparent;border:1px solid rgba(224,146,47,0.4);color:var(--amber);padding:6px 16px;cursor:pointer;transition:all .3s;font-family:'Tenor Sans',sans-serif}
+.nav-logout:hover{border-color:var(--amber);background:rgba(224,146,47,0.08)}
+@media(max-width:768px){nav{padding:0 24px}.nav-link{display:none}}
+
+.page-header{margin-top:80px;padding:56px 64px 40px;border-bottom:1px solid var(--border2)}
+.eyebrow{font-size:9px;letter-spacing:.25em;text-transform:uppercase;color:var(--amber);margin-bottom:16px}
+.page-heading{font-family:'Cormorant Garamond',serif;font-size:clamp(28px,4vw,42px);font-weight:300;line-height:1.2;color:var(--white);margin-bottom:12px}
+.page-subheading{font-size:13px;line-height:1.9;color:var(--grey1);max-width:520px}
+@media(max-width:768px){.page-header{padding:40px 24px 32px}}
+
+.news-wrap{max-width:760px;margin:0 auto;padding:40px 24px 80px}
+.news-section{margin-bottom:40px}
+.news-section-label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--amber);margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.news-item{padding:18px 0;border-bottom:1px solid var(--border2)}
+.news-headline{font-size:15px;color:var(--white);line-height:1.5;margin-bottom:6px;font-weight:400}
+.news-why{font-size:13px;color:var(--grey1);line-height:1.7;margin-bottom:8px}
+.news-do{font-size:13px;color:var(--white);line-height:1.7;margin-bottom:8px}
+.news-do b{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-right:6px;font-weight:400}
+.news-src{font-size:12px;color:var(--grey2);text-decoration:none;transition:color .2s}
+.news-src:hover{color:var(--grey1)}
+.news-empty{font-size:14px;color:var(--grey1);line-height:1.8;padding:40px 0}
+.news-loading{font-size:13px;color:var(--grey2);padding:40px 0}
+</style>
+</head>
+<body>
+
+<div class="cursor" id="cursor"></div>
+<div class="cursor-ring" id="cursorRing"></div>
+
+<nav>
+  <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
+  <div class="nav-right">
+    <a href="index.html" class="nav-link">Dashboard</a>
+    <a href="news.html" class="nav-link active">News</a>
+    <a href="onboard.html" class="nav-link">New Analysis</a>
+    <a href="history.html" class="nav-link">History</a>
+    <a href="checkin.html" class="nav-link">Check-In</a>
+    <a href="pipeline.html" class="nav-link">Pipeline</a>
+    <span class="nav-firm-indicator" id="navFirmName"></span>
+    <button class="nav-logout" onclick="handleLogout()">Sign Out</button>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="eyebrow">Scout</div>
+  <h1 class="page-heading">Today's News</h1>
+  <p class="page-subheading">What happened today that matters for your business. Updated at 6 am.</p>
+</div>
+
+<div class="news-wrap" id="newsWrap">
+  <div class="news-loading">Loading today's news&hellip;</div>
+</div>
+
+<script>
+
+window.addEventListener('DOMContentLoaded', async function() {
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) { window.location.href = '../login.html?product=scout'; return; }
+  try {
+    var v = await validateSessionOnLoad();
+    if (!v) { window.location.href = '../login.html?product=scout'; return; }
+  } catch (e) { window.location.href = '../login.html?product=scout'; return; }
+  document.body.style.visibility = 'visible';
+
+  var firmEl = document.getElementById('navFirmName');
+  if (firmEl) {
+    var fc = localStorage.getItem('g7_firm_code') || '';
+    if (fc) firmEl.textContent = fc;
+  }
+
+  var wrap = document.getElementById('newsWrap');
+  var news = await scoutNewsLoad();
+  var flat = scoutNewsFlatItems(news);
+
+  if (!flat.length) {
+    wrap.innerHTML = '<div class="news-empty">No news yet today \u2014 Scout updates this at 6\u202Fam.</div>';
+    return;
+  }
+
+  /* Group items by their _label, preserving order. */
+  var groups = [];
+  var groupMap = {};
+  flat.forEach(function(it) {
+    if (!groupMap[it._label]) {
+      groupMap[it._label] = { label: it._label, items: [] };
+      groups.push(groupMap[it._label]);
+    }
+    groupMap[it._label].items.push(it);
+  });
+
+  var html = '';
+  groups.forEach(function(g) {
+    html += '<div class="news-section">';
+    html += '<div class="news-section-label">' + escHtml(g.label) + '</div>';
+    g.items.forEach(function(it) {
+      var url = scoutSafeUrl(it.sourceUrl);
+      var why = (it.why || it.whyItMatters || '').trim();
+      var noEffect = 'No direct effect on your business.';
+      html += '<div class="news-item" id="item-' + it._idx + '">';
+      html += '<div class="news-headline">' + escHtml(it.headline || '') + '</div>';
+      if (why && why !== noEffect) {
+        html += '<div class="news-why">' + escHtml(why) + '</div>';
+      }
+      if (it.whatToDo) {
+        html += '<div class="news-do"><b>Do this</b>' + escHtml(it.whatToDo) + '</div>';
+      }
+      if (url) {
+        html += '<a class="news-src" href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' +
+                escHtml(it.sourceTitle || 'Source') + ' \u2197</a>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  wrap.innerHTML = html;
+
+  /* Scroll to the anchored item if the URL has a hash. */
+  if (location.hash) {
+    var target = document.getElementById(location.hash.slice(1));
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+});
+
+/* ── CUSTOM CURSOR ── */
+(function() {
+  var c = document.getElementById('cursor'), r = document.getElementById('cursorRing');
+  if (!c) return;
+  document.addEventListener('mousemove', function(e) {
+    c.style.left = e.clientX + 'px'; c.style.top = e.clientY + 'px';
+    r.style.left = e.clientX + 'px'; r.style.top = e.clientY + 'px';
+  });
+  document.addEventListener('mousedown', function() { c.style.transform = 'translate(-50%,-50%) scale(1.8)'; });
+  document.addEventListener('mouseup', function() { c.style.transform = 'translate(-50%,-50%) scale(1)'; });
+})();
+
+</script>
+</body>
+</html>
