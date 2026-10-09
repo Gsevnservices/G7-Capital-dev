@@ -94,6 +94,9 @@ window.addEventListener('DOMContentLoaded', async function() {
 
   document.body.style.visibility = 'visible';
 
+  migrateUnscopedScoutKeys();
+  await loadScoutStateFromServer();
+
   var firmName = localStorage.getItem('g7_session_name') || '';
   if (firmName) document.getElementById('navFirmName').textContent = firmName;
 
@@ -151,17 +154,21 @@ window.addEventListener('DOMContentLoaded', async function() {
   }
 });
 
+function handleLogout() {
+  scoutClearLocalState();
+  ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){ localStorage.removeItem(k); });
+  window.location.href = 'landing.html';
+}
+
 /* ── CUSTOM CURSOR ── */
-(function() {
+function initCursor() {
   var c = document.getElementById('cursor'), r = document.getElementById('cursorRing');
-  if (!c) return;
-  document.addEventListener('mousemove', function(e) {
-    c.style.left = e.clientX + 'px'; c.style.top = e.clientY + 'px';
-    r.style.left = e.clientX + 'px'; r.style.top = e.clientY + 'px';
-  });
-  document.addEventListener('mousedown', function() { c.style.transform = 'translate(-50%,-50%) scale(1.8)'; });
-  document.addEventListener('mouseup', function() { c.style.transform = 'translate(-50%,-50%) scale(1)'; });
-})();
+  if (!c || !r) return;
+  document.addEventListener('mousemove', function(e){ c.style.left=e.clientX+'px';c.style.top=e.clientY+'px';r.style.left=e.clientX+'px';r.style.top=e.clientY+'px'; });
+  document.addEventListener('mousedown', function(){ c.style.transform='translate(-50%,-50%) scale(0.7)';r.style.transform='translate(-50%,-50%) scale(0.8)'; });
+  document.addEventListener('mouseup',   function(){ c.style.transform='translate(-50%,-50%) scale(1)';r.style.transform='translate(-50%,-50%) scale(1)'; });
+}
+initCursor();
 
 </script>
 </body>
