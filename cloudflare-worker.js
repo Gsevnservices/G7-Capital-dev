@@ -686,7 +686,11 @@ async function sendActionsEmail(env, firmCode, day, move) {
       var sendLabel = escEmail(e.listName || e.sendTo || '');
       var timeLabel = escEmail(e.time || '');
       htmlParts.push(emailRow((timeLabel ? timeLabel + ' \u00b7 ' : '') + 'Send to <strong>' + sendLabel + '</strong>'));
-      if (e.message) htmlParts.push(emailRow(emailQuote(e.message)));
+      if (e.message) {
+        htmlParts.push(emailRow(emailQuote(e.message)));
+        var calWaUrl = emailSafeUrl('https://wa.me/?text=' + encodeURIComponent(e.message));
+        htmlParts.push(emailRow('<a href="' + escEmail(calWaUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">Send on WhatsApp</a>'));
+      }
       if (e.purpose) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">' + escEmail(e.purpose) + '</span>'));
     });
     subjectParts.push(todayWa.length + ' WhatsApp send' + (todayWa.length === 1 ? '' : 's'));
@@ -694,7 +698,8 @@ async function sendActionsEmail(env, firmCode, day, move) {
     textParts.push('SEND ON WHATSAPP TODAY');
     todayWa.forEach(function(e) {
       textParts.push('  ' + (e.time || '') + ' · Send to ' + (e.listName || e.sendTo || '') +
-        (e.message ? '\n  > ' + e.message : '') +
+        (e.message ? '\n  > ' + e.message +
+          '\n  Send: https://wa.me/?text=' + encodeURIComponent(e.message) : '') +
         (e.purpose ? '\n  ' + e.purpose : ''));
     });
   }
@@ -879,7 +884,9 @@ async function runMorningForFirm(env, firmCode, day) {
   if (!saved || !saved.context) return 'no_context';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
   var news = null, move = null, a = 'error', n = 'error';
-  try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', user.newsPrefs); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  var effectiveNewsPrefs;
+  try { effectiveNewsPrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs); } catch (e) { effectiveNewsPrefs = user.newsPrefs || []; }
+  try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectiveNewsPrefs); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
   const st = await loadScoutState(env, firmCode);
   try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
   try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
@@ -1211,6 +1218,23 @@ async function personaliseNews(env, firmCode, day, context, sections) {
   return out;
 }
 
+/* Resolve effective news prefs. undefined (never chosen) → smart defaults
+   by business type. [] (explicitly saved empty) → respected as-is.
+   Returns an array of NEWS_CATS keys. */
+async function resolveNewsPrefs(env, firmCode, rawPrefs) {
+  if (Array.isArray(rawPrefs)) return rawPrefs;
+  /* Never chosen — pick defaults from business type. */
+  const st = await loadScoutState(env, firmCode);
+  const pend = st ? (st.pick('scout_pending_result') || {}) : {};
+  const btype = String((pend.businessData && pend.businessData.businessType) || '').toLowerCase();
+  var pro = ['consultant','consulting','professional','agency','architect','lawyer',
+    'chartered accountant','ca ','advocate','doctor','clinic','hospital','diagnostic',
+    'financial','insurance','wealth','advisor','audit','tax','legal','it services',
+    'software','saas','tech','digital','marketing agency'];
+  var isPro = pro.some(function(k){ return btype.indexOf(k) !== -1; });
+  return isPro ? ['india_policy','india_markets','city'] : ['india_policy','city'];
+}
+
 /* Everything a firm reads today: business brief + chosen categories,
    each item carrying a `why` line. Used by the dashboard route and email. */
 async function buildDailyNews(env, firmCode, day, context, city, prefs) {
@@ -1320,6 +1344,14 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force) {
   const step = days.filter(function(d){ return d.day && d.day.toLowerCase() === weekday.toLowerCase(); })[0] || null;
   const groups = (analysis.tab1 && Array.isArray(analysis.tab1.icps)) ? analysis.tab1.icps.map(function(g){ return g.name; }) : [];
 
+  /* Resolve message language. */
+  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
+  var msgLang = user.messageLanguage || '';
+  if (!msgLang) {
+    msgLang = (pend.businessData && pend.businessData.language) || 'Hinglish';
+    if (/regional/i.test(msgLang)) msgLang = 'Hinglish';
+  }
+
   /* Recent moves, so it does not repeat itself. */
   const history = (await env.G7_KV.get('move:history:' + firmCode, 'json')) || [];
   const recent = history.slice(-7).map(function(h){ return { date: h.date, headline: h.headline, status: h.status || 'suggested' }; });
@@ -1340,9 +1372,9 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force) {
     '- reason must name what it is based on: a specific news headline, or a pipeline fact.\n' +
     '- Never invent numbers, names or facts not given to you.\n' +
     '- Never give investment, stock or loan advice.\n' +
-    '- message: a WhatsApp message the owner sends to customers or partners, in the ' +
-    'same language and tone as the business context (Hinglish if it uses Hinglish), ' +
-    'under 60 words, warm and specific, never mentioning news websites, never spammy.\n' +
+    '- message: a WhatsApp message the owner sends to customers or partners. ' +
+    'Write it in ' + msgLang + '. Hinglish = Hindi words in Roman script mixed with English. ' +
+    'Under 60 words, warm and specific, never mentioning news websites, never spammy.\n' +
     '- If the move needs no message, return message as "".\n' +
     '- Write headline and action directly to the owner, as instructions: ' +
     '"Call the tender desk today", never "The owner should…".\n' +
@@ -2817,8 +2849,9 @@ export default {
       const session = await validateSession(request, env);
       if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      const effective = await resolveNewsPrefs(env, session.firmCode, user.newsPrefs);
       return jsonResponse({
-        prefs: user.newsPrefs || [],
+        prefs: effective,
         options: Object.keys(NEWS_CATS).map(function(k) { return { key: k, label: NEWS_CATS[k].label }; })
       });
     }
@@ -2841,6 +2874,42 @@ export default {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // GET /scout/message-lang — current message language setting.
+    // Falls back to onboarding's businessData.language if never saved.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/message-lang') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      if (user.messageLanguage) return jsonResponse({ language: user.messageLanguage });
+      /* Default from onboarding. */
+      const st = await loadScoutState(env, session.firmCode);
+      const pend = st ? (st.pick('scout_pending_result') || {}) : {};
+      var lang = (pend.businessData && pend.businessData.language) || 'Hinglish';
+      if (/regional/i.test(lang)) lang = 'Hinglish';
+      return jsonResponse({ language: lang });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/message-lang — { language: "English"|"Hinglish"|"Hindi" }
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/message-lang') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      const allowed = ['English','Hinglish','Hindi'];
+      var lang = String(body.language || '').trim();
+      if (allowed.indexOf(lang) === -1) return jsonResponse({ error: 'Language must be English, Hinglish or Hindi.' }, 400);
+      const key = 'auth:users:' + session.firmCode;
+      const user = await env.G7_KV.get(key, 'json');
+      if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
+      user.messageLanguage = lang;
+      await env.G7_KV.put(key, JSON.stringify(user));
+      return jsonResponse({ language: user.messageLanguage });
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // GET /scout/news — full daily news for the dashboard.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'GET' && path === '/scout/news') {
@@ -2851,7 +2920,8 @@ export default {
       const saved = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
       if (!saved || !saved.context) return jsonResponse({ business: { items: [] }, sections: [] });
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
-      const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', user.newsPrefs);
+      const effectivePrefs = await resolveNewsPrefs(env, session.firmCode, user.newsPrefs);
+      const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', effectivePrefs);
       return jsonResponse(news);
     }
 

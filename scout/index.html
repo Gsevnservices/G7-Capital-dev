@@ -627,6 +627,15 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   .cc-core-name{font-size:36px}
   .cc-core-ask input{width:100%;max-width:392px}
 }
+@media(max-width:700px){
+  body{overflow-x:hidden}
+  .cc-wrap{flex-direction:column}
+  .cc-mid{order:3}
+  .cc-core{display:none}
+  .cc-rail-r{order:1}
+  .cc-rail-l{order:2}
+  .cc-metrics{grid-template-columns:1fr 1fr}
+}
 
 </style>
 </head>
@@ -1480,12 +1489,46 @@ async function scoutSettingsRender() {
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
     '<span>News email</span>' +
     '<button id="ccNewsToggle" style="color:' + (st.news ? 'var(--amber)' : 'var(--grey2)') + '">' + (st.news ? 'On' : 'Off') + '</button></div>';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+    '<span>Message language</span>' +
+    '<span id="ccLangPicker" style="display:flex;gap:6px"></span></div>';
   html += '<div><button id="ccNewsCatsBtn" style="color:var(--amber)">Choose my news</button></div>';
   html += '<div id="ccNewsCats" style="display:none;margin-top:10px"></div>';
   el.innerHTML = html;
 
   document.getElementById('ccActionsToggle').onclick = function(){ saveToggle({ actions: !st.actions }); };
   document.getElementById('ccNewsToggle').onclick = function(){ saveToggle({ news: !st.news }); };
+
+  /* Language picker — load current, render three buttons. */
+  (async function() {
+    var lp = document.getElementById('ccLangPicker');
+    if (!lp) return;
+    var cur = 'Hinglish';
+    try {
+      var lr = await fetch(SCOUT_WORKER + '/scout/message-lang', { headers: auth });
+      if (lr.ok) { var lj = await lr.json(); cur = lj.language || cur; }
+    } catch (e) {}
+    var langs = ['English','Hinglish','Hindi'];
+    lp.innerHTML = langs.map(function(l) {
+      var active = l === cur;
+      return '<button data-lang="' + l + '" style="font-family:inherit;font-size:9px;letter-spacing:.12em;' +
+        'text-transform:uppercase;background:transparent;border:0;padding:0;cursor:pointer;' +
+        'color:' + (active ? 'var(--amber)' : 'var(--grey2)') + '">' + l + '</button>';
+    }).join('');
+    lp.querySelectorAll('button').forEach(function(b) {
+      b.onclick = async function() {
+        var picked = b.getAttribute('data-lang');
+        try {
+          await fetch(SCOUT_WORKER + '/scout/message-lang', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
+            body: JSON.stringify({ language: picked })
+          });
+        } catch (e) {}
+        scoutSettingsRender();
+      };
+    });
+  })();
 
   document.getElementById('ccNewsCatsBtn').onclick = async function() {
     var catsEl = document.getElementById('ccNewsCats');
@@ -1696,6 +1739,7 @@ function ccRender() {
             '<div style="flex-shrink:0;display:flex;align-items:center;gap:10px">' +
             '<span class="taps' + (n > 0 ? ' hot' : '') + '" title="taps so far">' + n + '</span>' +
             '<button class="cc-copy" data-copy="' + escHtml(url) + '">Copy</button>' +
+            '<a class="cc-copy" href="https://wa.me/?text=' + encodeURIComponent(url) + '" target="_blank" rel="noopener" style="text-decoration:none">WhatsApp</a>' +
             '</div></div>';
         }).join('');
       } catch (e) {
@@ -2045,6 +2089,7 @@ function scoutContext() {
       } catch (e) {}
     }
     if (a.headline && a.headline.momentumNote) parts.push('SCOUT ASSESSMENT: ' + a.headline.momentumNote);
+    if (bd.language) parts.push('PREFERRED LANGUAGE: ' + bd.language);
   } catch (e) {}
   _scoutCtx = parts.join('\n');
   if (_scoutCtx.length > 3500) _scoutCtx = _scoutCtx.slice(0, 3500);

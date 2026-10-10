@@ -301,7 +301,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   </div>
   <div class="milestone-momentum">Scout Momentum: +15 points 🚀</div>
   <div class="milestone-btns">
-    <button class="btn-share" onclick="shareMilestone()">Share this win →</button>
+    <button class="btn-share" onclick="shareMilestone()">Copy to share →</button>
+    <button class="btn-share" onclick="shareOnWhatsApp()">Share on WhatsApp</button>
     <button class="btn-continue" onclick="proceedAfterMilestone()">Continue to my playbook →</button>
   </div>
 </div>
@@ -792,6 +793,18 @@ function shareMilestone() {
   } else {
     selectAndCopy(text);
   }
+}
+
+function shareOnWhatsApp() {
+  var bizName = 'My business';
+  try {
+    var pr = JSON.parse(localStorage.getItem(scoutKey('scout_pending_result')) || '{}');
+    bizName = (pr.businessData && pr.businessData.businessName) ? pr.businessData.businessName : bizName;
+  } catch(e) {}
+  var text = bizName + ' just acquired its first customer using G7 Scout\'s AI-powered acquisition system. ' +
+    'The system identified the right customers, built the right messages, and delivered the first result. ' +
+    '#G7Scout #BusinessGrowth';
+  window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
 }
 
 function selectAndCopy(text) {
