@@ -80,7 +80,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 <div class="page-header">
   <div class="eyebrow">Scout</div>
   <h1 class="page-heading">Today's News</h1>
-  <p class="page-subheading">What happened today that matters for your business. Updated at 6 am.</p>
+  <p class="page-subheading" id="newsSubheading">What happened today that matters for your business.</p>
 </div>
 
 <div class="news-wrap" id="newsWrap">
@@ -100,12 +100,23 @@ window.addEventListener('DOMContentLoaded', async function() {
 
   var wrap = document.getElementById('newsWrap');
   var news = await scoutNewsLoad();
+  /* Update subtitle with generation time. */
+  if (news && news.generatedAt) {
+    try {
+      var _gt = new Date(news.generatedAt);
+      var _timeStr = _gt.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+      document.getElementById('newsSubheading').textContent =
+        'What happened today that matters for your business. Updated ' + _timeStr + ' today.';
+    } catch (e) {}
+  }
   var flat = scoutNewsFlatItems(news);
 
   if (!flat.length) {
     wrap.innerHTML = '<div class="news-empty">No news yet \u2014 Scout is getting set up.</div>';
     return;
   }
+  /* Handle "From <weekday>" for never-empty fallback items. */
+  var _bizFromDay = (news && news.business && news.business.fromDay) || '';
 
   /* Group items by their _label, preserving order. */
   var groups = [];
@@ -132,11 +143,21 @@ window.addEventListener('DOMContentLoaded', async function() {
       var why = (it.why || it.whyItMatters || '').trim();
       var noEffect = 'No direct effect on your business.';
       html += '<div class="news-item" id="item-' + it._idx + '">';
+      if (it._placeholder) {
+        html += '<div class="news-headline" style="color:var(--grey1)">' + escHtml(it.headline || '') + '</div>';
+        html += '</div>';
+        return;
+      }
+      if (it._fromDay) {
+        html += '<div style="font-size:11px;color:var(--grey2);margin-bottom:4px">From ' + escHtml(it._fromDay) + '</div>';
+      }
       html += '<div class="news-headline">' + escHtml(it.headline || '') + '</div>';
-      if (why && why !== noEffect) {
+      if (it._marketLine) {
+        /* Markets today — compact: headline + source only, no "for you" line. */
+      } else if (why && why !== noEffect) {
         html += '<div class="news-why">' + escHtml(why) + '</div>';
       }
-      if (it.whatToDo) {
+      if (it.whatToDo && !it._marketLine) {
         html += '<div class="news-do"><b>Do this</b>' + escHtml(it.whatToDo) + '</div>';
       }
       if (url) {

@@ -53,6 +53,21 @@
 const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TRUSTED NEWS DOMAINS — used by the business news search (searchBusinessNews).
+// Edit this list when adding or removing sources.
+// Shared-news categories (NEWS_CATS) keep their own domain lists.
+// ─────────────────────────────────────────────────────────────────────────────
+const TRUSTED_NEWS_DOMAINS = [
+  'economictimes.indiatimes.com','livemint.com','business-standard.com',
+  'thehindubusinessline.com','financialexpress.com','moneycontrol.com',
+  'ndtvprofit.com','timesofindia.indiatimes.com','hindustantimes.com',
+  'indianexpress.com','thehindu.com','deccanherald.com',
+  'amarujala.com','jagran.com','bhaskar.com','livehindustan.com',
+  'pib.gov.in','rbi.org.in','constructionworld.in',
+  'realty.economictimes.indiatimes.com'
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HELPER: CORS HEADERS
 // All responses must include these so GitHub Pages (a different origin)
 // can read the response. The wildcard '*' is safe here because every
@@ -797,31 +812,43 @@ function failsRelevanceGate(whyItMatters) {
 
 async function searchBusinessNews(env, day, context, city, watchlist, told, macroOnly, cost) {
   /* Build the three search instructions from the watchlist. */
+
+  /* Current month label for time-anchored queries. */
+  var _mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var _ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+  var _monthLabel = _mNames[_ist.getMonth()] + ' ' + _ist.getFullYear();
+
   var searches = [];
   if (!macroOnly) {
     if (watchlist.materials && watchlist.materials.length) {
       searches.push('SEARCH 1 — MATERIAL/INPUT PRICES: ' +
-        watchlist.materials.map(function(m){ return '"' + m + ' price India"'; }).join(', '));
+        watchlist.materials.map(function(m){ return '"' + m + ' price hike ' + _monthLabel + '"'; }).join(', '));
+    } else {
+      searches.push('SEARCH 1 — MATERIAL/INPUT PRICES: price changes for inputs this business buys, ' + _monthLabel);
     }
     var demandParts = [];
     if (watchlist.localities && watchlist.localities.length)
-      demandParts.push('local developments, new projects near: ' + watchlist.localities.join(', '));
+      demandParts.push(watchlist.localities.map(function(l){ return '"' + l + (city ? ' ' + city : '') + ' new project ' + _monthLabel + '"'; }).join(', '));
     if (watchlist.triggers && watchlist.triggers.length)
-      demandParts.push('demand triggers: ' + watchlist.triggers.map(function(t){ return '"' + t + '"'; }).join(', '));
+      demandParts.push(watchlist.triggers.map(function(t){ return '"' + t + ' ' + _monthLabel + '"'; }).join(', '));
     if (watchlist.competitors && watchlist.competitors.length)
       demandParts.push('competitor news: ' + watchlist.competitors.map(function(c){ return '"' + c + '"'; }).join(', '));
     if (demandParts.length) {
       searches.push('SEARCH 2 — DEMAND/LOCALITY: ' + demandParts.join('. '));
+    } else {
+      searches.push('SEARCH 2 — DEMAND/LOCALITY: new projects, tenders, demand changes for this trade, ' + _monthLabel);
     }
   }
-  var macroParts = ['interest rates, GST changes, government schemes for this trade'];
+  var macroParts = [];
   if (watchlist.regulations && watchlist.regulations.length)
-    macroParts.push('regulation changes: ' + watchlist.regulations.join(', '));
-  searches.push('SEARCH 3 — MACRO/REGULATION: ' + macroParts.join('. '));
+    macroParts.push(watchlist.regulations.map(function(r){ return '"' + r + ' ' + _monthLabel + '"'; }).join(', '));
+  macroParts.push('"GST ' + _monthLabel + '"', '"RBI repo rate ' + _monthLabel + '"');
+  searches.push('SEARCH 3 — MACRO/REGULATION: ' + macroParts.join(', '));
 
   var system =
     'You are a news researcher for one Indian small business. Today is ' + day + ' (India).\n' +
-    'Run these searches IN ORDER:\n' + searches.join('\n') + '\n\n' +
+    'You MUST run ALL ' + searches.length + ' searches below, IN ORDER. Every search is mandatory.\n' +
+    searches.join('\n') + '\n\n' +
     (macroOnly ? 'THIS RUN: local news was empty. Search MACRO only — national economy, ' +
       'policy and prices for this trade.\n\n' : '') +
     'NOT NEWS: something that already existed. A competitor simply having a shop, or ' +
@@ -830,12 +857,14 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     '- Return EVERY result relevant to this business — up to 10 candidates, at least 2 per search when available.\n' +
     '- Every item must come from a page you actually found with web search.\n' +
     '- Never invent a development, competitor, date or number.\n' +
-    '- sourceUrl must be the article page, not a home page or listing.\n\n' +
+    '- sourceUrl must be the article page, not a home page or listing.\n' +
+    '- "search" must be the number (1, 2 or 3) of the search that found it.\n\n' +
     'Reply with ONLY this JSON:\n' +
     '{"candidates":[{"sourceUrl":"exact URL","whatHappened":"one sentence, under 30 words",' +
     '"search":1|2|3}]}';
 
-  var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3 };
+  var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3,
+               allowed_domains: TRUSTED_NEWS_DOMAINS };
   if (city) tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
 
   var r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1041,6 +1070,7 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
   /* ── A1: Retry once with macro search if < 2 items survived gates ── */
   if (items.length < 2 && !_retried && !macroOnly) {
     var retry = await searchBusinessNews(env, day, context, city, watchlist, told, true, cost);
+    console.log(JSON.stringify({ retried: true, firm: firmCode, retryRaw: retry.rawCount, retryCandidates: retry.candidates.length, itemsBefore: items.length }));
     drops = drops.concat(retry.drops || []);
     /* Merge new candidates with existing survivors, re-run Step b. */
     var combined = items.concat(retry.candidates);
@@ -1085,25 +1115,50 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
   };
   try { console.log(JSON.stringify(_newsLog)); } catch (e) {}
 
+  /* ── NEVER EMPTY: if 0 items survived, pull last-good day's items ── */
+  var _fromDay = '';
+  if (items.length === 0) {
+    var _lastGood = await lastMarketBrief(env, firmCode, day);
+    if (_lastGood && _lastGood.items && _lastGood.items.length) {
+      var _lgDate = _lastGood.date || '';
+      var _wd = '';
+      try { _wd = new Date(_lgDate + 'T12:00:00+05:30').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'Asia/Kolkata' }); } catch (e) {}
+      items = _lastGood.items.slice(0, 3).map(function(it) {
+        return Object.assign({}, it, { _fromDay: _wd || _lgDate });
+      });
+      _fromDay = _wd || _lgDate;
+      _newsLog.neverEmpty = { fromDate: _lgDate, fromDay: _wd, itemCount: items.length };
+    }
+    if (items.length === 0) {
+      items = [{ headline: 'No new changes for your trade today.', _placeholder: true }];
+      _newsLog.neverEmpty = { placeholder: true };
+    }
+  }
+
   const result = {
     items: items,
     date: day,
     dropped: afterPick - items.length
   };
+  if (_fromDay) result.fromDay = _fromDay;
   result.generatedAt = new Date().toISOString();
   const cacheKey = 'market:' + firmCode + ':' + day;
   await kvPut(env,cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
 
-  /* Persist as last-known-good for fallback when generation fails. */
-  if (items.length > 0) {
+  /* Persist as last-known-good for fallback when generation fails.
+     Don't overwrite with fallback items or placeholders. */
+  if (items.length > 0 && !_fromDay && !items[0]._placeholder) {
     await kvPut(env,'market:last:' + firmCode, JSON.stringify(result));
   }
 
-  /* Append today's items to history, keep last 15. */
-  const nextHist = history.concat(items.map(function(it){
-    return { headline: it.headline, sourceUrl: it.sourceUrl, date: day };
-  })).slice(-15);
-  await kvPut(env,histKey, JSON.stringify(nextHist));
+  /* Append today's items to history, keep last 15.
+     Don't re-add last-good items — they're already in history. */
+  if (!_fromDay && !items[0]._placeholder) {
+    const nextHist = history.concat(items.map(function(it){
+      return { headline: it.headline, sourceUrl: it.sourceUrl, date: day };
+    })).slice(-15);
+    await kvPut(env,histKey, JSON.stringify(nextHist));
+  }
 
   /* _log is ephemeral — never persisted to KV or sent to clients.
      Attached after KV writes so callers (admin regen) can read it. */
@@ -2210,6 +2265,25 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
   var alsoSection = [];
   if (alsoPool.length > 0) {
     alsoSection = [{ category: 'also', label: 'Also worth knowing', items: alsoPool.slice(0, 3) }];
+  }
+
+  /* Markets today — if firm chose india_markets or global, always include
+     ONE headline from each as a compact line at the end of "Also worth knowing".
+     These don't count toward the max 3. */
+  var _marketCats = ['india_markets', 'global'];
+  var _marketItems = [];
+  _marketCats.forEach(function(mc) {
+    if (chosen.indexOf(mc) === -1) return;
+    var sec = sections.filter(function(s) { return s.category === mc; })[0];
+    if (!sec || !sec.items || !sec.items.length) return;
+    var top = sec.items[0];
+    _marketItems.push(Object.assign({}, top, { _marketLine: true }));
+  });
+  if (_marketItems.length) {
+    if (!alsoSection.length) {
+      alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
+    }
+    alsoSection[0].items = alsoSection[0].items.concat(_marketItems);
   }
 
   /* Capture _log before stripping — only used by admin regen-news route. */
