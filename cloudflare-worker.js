@@ -136,8 +136,7 @@ async function flushCost(env, day, firmCode, cost) {
    KV key: feat:{day}:{firmCode}:{feature}  (string int, 24h TTL)
    Returns { ok, used, limit, feature } */
 var FEAT_LIMITS = {
-  ask:      { paid: 10, free: 3 },
-  briefing: { paid: 10, free: 3 },
+  ask:      { paid: 10, free: 3 },   /* Ask Scout = /scout/briefing */
   finder:   { paid: 5,  free: 2 },
   /* news + move are once-a-day via cron/cache — no counter needed.
      analyse + checkin keep their existing monthly gates. */
@@ -3293,13 +3292,7 @@ export default {
       }
       // ---- end limit gate ----
 
-      /* Feature gate for Ask Scout. Analysis exempt from firm cost cap. */
-      var _istAn = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-      var _fgAn = await featureGate(env, _istAn, session.firmCode, 'ask');
-      if (!_fgAn.ok) {
-        return jsonResponse({ error: "You\u2019ve used today\u2019s Ask Scout \u2014 back tomorrow.", budgetPaused: true }, 429);
-      }
-      await featureIncrement(env, _fgAn);
+      /* Analysis exempt from firm cost cap — existing monthly limit gate above is sufficient. */
       var cost = newCostAccum();
 
       const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3465,14 +3458,14 @@ export default {
 
       /* Feature gate + firm money backstop */
       var _istBrief = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-      var _fgB = await featureGate(env, _istBrief, session.firmCode, 'briefing');
+      var _fgB = await featureGate(env, _istBrief, session.firmCode, 'ask');
       if (!_fgB.ok) {
-        return jsonResponse({ error: "You\u2019ve used today\u2019s Ask Scout \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return jsonResponse({ error: "You\u2019ve used today\u2019s questions \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
       var _bcB = await budgetCheck(env, _istBrief, session.firmCode);
       if (!_bcB.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istBrief, session.firmCode, _bcB.firmSpent, _bcB.cap));
-        return jsonResponse({ error: "You\u2019ve used today\u2019s Ask Scout \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return jsonResponse({ error: "You\u2019ve used today\u2019s questions \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
       await featureIncrement(env, _fgB);
       var cost = newCostAccum();
@@ -3643,7 +3636,7 @@ export default {
       var _bcCI = await budgetCheck(env, _istCI, session.firmCode);
       if (!_bcCI.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istCI, session.firmCode, _bcCI.firmSpent, _bcCI.cap));
-        return jsonResponse({ error: "You\u2019ve used today\u2019s Check-In \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return jsonResponse({ error: "You\u2019ve used today\u2019s check-ins \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
       var cost = newCostAccum();
 
@@ -4043,7 +4036,7 @@ export default {
       var _bcP = await budgetCheck(env, _istPlaces, session.firmCode);
       if (!_bcP.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istPlaces, session.firmCode, _bcP.firmSpent, _bcP.cap));
-        return jsonResponse({ error: "You\u2019ve used today\u2019s Customer Finder \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return jsonResponse({ error: "You\u2019ve used today\u2019s customer searches \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
 
       // 6. Call Claude web search to find businesses
