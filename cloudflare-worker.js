@@ -941,7 +941,7 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
 
   var catLog = Object.keys(catRaw).map(function(k) { return { cat: k, raw: catRaw[k], vetted: catVetted[k] || 0 }; });
 
-  return { candidates: vetted, meta: meta, usage: data.usage || {}, rawCount: raw.length, catLog: catLog, drops: drops };
+  return { candidates: vetted, meta: meta, usage: data.usage || {}, rawCount: raw.length, catLog: catLog, drops: drops, searches: searches };
 }
 
 /* ── Step b: pick and write final items (Sonnet, no tools) ── */
@@ -1101,6 +1101,15 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
   var _newsLog = {
     newsLog: firmCode, day: day, macroOnly: !!macroOnly, retried: !!_retried,
     watchlistHit: !!(watchlist && watchlist.hash),
+    watchlist: {
+      materials: (watchlist && watchlist.materials) || [],
+      triggers: (watchlist && watchlist.triggers) || [],
+      localities: (watchlist && watchlist.localities) || [],
+      regulations: (watchlist && watchlist.regulations) || [],
+      competitors: (watchlist && watchlist.competitors) || [],
+      groups: (watchlist && watchlist.groups) || []
+    },
+    queryStrings: search.searches || [],
     searches: (search.usage.server_tool_use && search.usage.server_tool_use.web_search_requests) || 0,
     step1Tokens: { input: search.usage.input_tokens || 0, output: search.usage.output_tokens || 0 },
     step2Tokens: { input: pick.usage.input_tokens || 0, output: pick.usage.output_tokens || 0 },
@@ -3195,9 +3204,10 @@ export default {
       const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
       if (!saved || !saved.context) return jsonResponse({ error: 'no_context' }, 404);
       try {
-        /* Delete business brief cache + personalisation tags. */
+        /* Delete business brief cache + personalisation tags + watchlist (force rebuild). */
         await env.G7_KV.delete('market:' + firmCode + ':' + day);
         await env.G7_KV.delete('news:sig:' + firmCode + ':' + day);
+        await env.G7_KV.delete('market:watch:' + firmCode);
 
         /* Optionally nuke shared category caches too. */
         if (body.shared) {

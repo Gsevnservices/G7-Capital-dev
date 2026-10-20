@@ -858,7 +858,19 @@ async function regenNews(firmCode, shared) {
     if (!response.ok) throw new Error(data.error || 'Regen failed (' + response.status + ')');
     var log = data.log || {};
     var items = (data.news && data.news.business && data.news.business.items) || [];
+    var wl = log.watchlist || {};
+    var qs = log.queryStrings || [];
     var msg = 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n\n' +
+      '── WATCHLIST ──\n' +
+      'Materials: ' + ((wl.materials && wl.materials.length) ? wl.materials.join(', ') : '(none)') + '\n' +
+      'Triggers: ' + ((wl.triggers && wl.triggers.length) ? wl.triggers.join(', ') : '(none)') + '\n' +
+      'Localities: ' + ((wl.localities && wl.localities.length) ? wl.localities.join(', ') : '(none)') + '\n' +
+      'Regulations: ' + ((wl.regulations && wl.regulations.length) ? wl.regulations.join(', ') : '(none)') + '\n' +
+      'Competitors: ' + ((wl.competitors && wl.competitors.length) ? wl.competitors.join(', ') : '(none)') + '\n' +
+      'Groups: ' + ((wl.groups && wl.groups.length) ? wl.groups.join(', ') : '(none)') + '\n\n' +
+      '── QUERY STRINGS ──\n' +
+      (qs.length ? qs.map(function(q, i) { return (i + 1) + '. ' + q; }).join('\n') : '(none)') + '\n\n' +
+      '── PIPELINE ──\n' +
       'Items: ' + items.length + '\n' +
       'Searches: ' + (log.searches || 0) + '\n' +
       'Step 1 tokens: ' + ((log.step1Tokens && log.step1Tokens.input) || 0) + ' in / ' + ((log.step1Tokens && log.step1Tokens.output) || 0) + ' out\n' +
