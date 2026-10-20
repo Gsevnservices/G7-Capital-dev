@@ -132,29 +132,66 @@ async function flushCost(env, day, firmCode, cost) {
   return amt;
 }
 
-/* Budget check. Returns { ok:true } or { ok:false, reason, firmSpent, daySpent }. */
-async function budgetCheck(env, day, firmCode, opts) {
-  var firmCap = parseFloat(env.COST_CAP_FIRM || '0.10');
-  var dayCap = parseFloat(env.COST_CAP_DAY || '2.00');
-  var firmSpent = parseFloat(await env.G7_KV.get('cost:' + day + ':' + firmCode) || '0');
-  var daySpent = parseFloat(await env.G7_KV.get('cost:' + day + ':total') || '0');
-  if (!(opts && opts.exemptFirm) && firmSpent >= firmCap) {
-    return { ok: false, reason: 'firm', firmSpent: firmSpent, daySpent: daySpent, cap: firmCap };
+/* ── Per-feature daily limits (IST day) ──
+   KV key: feat:{day}:{firmCode}:{feature}  (string int, 24h TTL)
+   Returns { ok, used, limit, feature } */
+var FEAT_LIMITS = {
+  ask:      { paid: 10, free: 3 },
+  briefing: { paid: 10, free: 3 },
+  finder:   { paid: 5,  free: 2 },
+  /* news + move are once-a-day via cron/cache — no counter needed.
+     analyse + checkin keep their existing monthly gates. */
+};
+async function featureGate(env, day, firmCode, feature) {
+  var def = FEAT_LIMITS[feature];
+  if (!def) return { ok: true, used: 0, limit: 999, feature: feature };
+  var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+  var plan = (user && user.plan) ? user.plan : 'free';
+  var limit = def[plan] || def.free;
+  var key = 'feat:' + day + ':' + firmCode + ':' + feature;
+  var used = parseInt(await env.G7_KV.get(key) || '0', 10);
+  if (used >= limit) return { ok: false, used: used, limit: limit, feature: feature };
+  return { ok: true, used: used, limit: limit, feature: feature, counterKey: key };
+}
+async function featureIncrement(env, gate) {
+  if (gate && gate.counterKey) {
+    await kvPut(env, gate.counterKey, String((gate.used || 0) + 1), { expirationTtl: 86400 });
   }
-  if (daySpent >= dayCap) {
-    return { ok: false, reason: 'total', firmSpent: firmSpent, daySpent: daySpent, cap: dayCap };
-  }
-  return { ok: true, firmSpent: firmSpent, daySpent: daySpent };
 }
 
-/* Send budget-reached email — ONE per day per cap type (firm or total). */
-async function sendBudgetEmail(env, day, capType, spent, cap) {
-  var alertKey = 'cost:alert:' + day + ':' + capType;
+/* Firm money backstop — only firm-level, no global day cap.
+   Analysis is exempt (opts.exemptFirm). */
+async function budgetCheck(env, day, firmCode, opts) {
+  if (opts && opts.exemptFirm) return { ok: true, firmSpent: 0 };
+  var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+  var plan = (user && user.plan) ? user.plan : 'free';
+  var firmCap = plan === 'free'
+    ? parseFloat(env.COST_CAP_FIRM_FREE || '0.20')
+    : parseFloat(env.COST_CAP_FIRM || '0.50');
+  var firmSpent = parseFloat(await env.G7_KV.get('cost:' + day + ':' + firmCode) || '0');
+  if (firmSpent >= firmCap) {
+    return { ok: false, reason: 'firm', firmSpent: firmSpent, cap: firmCap };
+  }
+  return { ok: true, firmSpent: firmSpent };
+}
+
+/* Shared-news cost cap — checked before generating shared categories in cron. */
+async function sharedBudgetCheck(env, day) {
+  var cap = parseFloat(env.COST_CAP_SHARED || '0.30');
+  var spent = parseFloat(await env.G7_KV.get('cost:' + day + ':SHARED') || '0');
+  if (spent >= cap) return { ok: false, spent: spent, cap: cap };
+  return { ok: true, spent: spent };
+}
+
+/* Send budget/limit email — ONE per firm per IST day.
+   capType is the firm code or "SHARED". */
+async function sendBudgetEmail(env, day, firmCode, spent, cap) {
+  var alertKey = 'cost:alert:' + day + ':' + firmCode;
   if (await env.G7_KV.get(alertKey)) return;
   await kvPut(env, alertKey, '1', { expirationTtl: 172800 });
-  var subj = 'Scout daily budget reached (' + capType + ': $' + spent.toFixed(4) + ' of $' + cap.toFixed(2) + ')';
+  var subj = 'Scout daily budget reached (' + firmCode + ': $' + spent.toFixed(4) + ' of $' + cap.toFixed(2) + ')';
   var text = subj + '.\n\nGeneration paused until midnight IST.\n' +
-    'Day: ' + day + '\nCap type: ' + capType + '\nSpent: $' + spent.toFixed(4) + '\nCap: $' + cap.toFixed(2);
+    'Day: ' + day + '\nFirm: ' + firmCode + '\nSpent: $' + spent.toFixed(4) + '\nCap: $' + cap.toFixed(2);
   try { await sendEmail(env, (env.ADMIN_EMAIL || 'contact@gsevnservices.in'), subj, text, '<p>' + text.replace(/\n/g, '<br>') + '</p>'); } catch (e) {}
 }
 
@@ -1661,12 +1698,12 @@ async function runMorningForFirm(env, firmCode, day) {
     if (seenDaysAgo > 3) return 'skipped_no_email';
   }
 
-  /* Budget guard — skip generation if firm or day cap exceeded. */
+  /* Budget guard — skip generation if firm cost cap exceeded. */
   var _bc = await budgetCheck(env, day, firmCode);
   if (!_bc.ok) {
-    console.log(JSON.stringify({ budgetSkip: firmCode, reason: _bc.reason, firmSpent: _bc.firmSpent, daySpent: _bc.daySpent }));
-    await sendBudgetEmail(env, day, _bc.reason, _bc.reason === 'firm' ? _bc.firmSpent : _bc.daySpent, _bc.cap);
-    return { status: 'budget_exceeded', cost: { firmSpent: _bc.firmSpent, daySpent: _bc.daySpent } };
+    console.log(JSON.stringify({ budgetSkip: firmCode, firmSpent: _bc.firmSpent }));
+    await sendBudgetEmail(env, day, firmCode, _bc.firmSpent, _bc.cap);
+    return { status: 'budget_exceeded', cost: { firmSpent: _bc.firmSpent } };
   }
 
   var cost = newCostAccum();
@@ -3053,12 +3090,7 @@ export default {
       const day = ist.toISOString().slice(0, 10);
       const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
       if (!saved || !saved.context) return jsonResponse({ error: 'no_context' }, 404);
-      /* Budget guard for admin regen-move */
-      var _bcRM = await budgetCheck(env, day, firmCode);
-      if (!_bcRM.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, day, _bcRM.reason === 'firm' ? firmCode : 'total', _bcRM.reason === 'firm' ? _bcRM.firmSpent : _bcRM.daySpent, _bcRM.cap));
-        return jsonResponse({ error: 'Budget exceeded ($' + (_bcRM.reason === 'firm' ? _bcRM.firmSpent : _bcRM.daySpent).toFixed(4) + ' of $' + _bcRM.cap.toFixed(2) + ' ' + _bcRM.reason + ' cap)' }, 429);
-      }
+      /* Admin regen — exempt from feature gates and budget guard. */
       var cost = newCostAccum();
       try {
         const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
@@ -3105,12 +3137,7 @@ export default {
 
         const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
         const effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs);
-        /* Budget guard for admin regen */
-        var _bcR = await budgetCheck(env, day, firmCode);
-        if (!_bcR.ok) {
-          ctx.waitUntil(sendBudgetEmail(env, day, _bcR.reason === 'firm' ? firmCode : 'total', _bcR.reason === 'firm' ? _bcR.firmSpent : _bcR.daySpent, _bcR.cap));
-          return jsonResponse({ error: 'Budget exceeded ($' + (_bcR.reason === 'firm' ? _bcR.firmSpent : _bcR.daySpent).toFixed(4) + ' of $' + _bcR.cap.toFixed(2) + ' ' + _bcR.reason + ' cap)' }, 429);
-        }
+        /* Admin regen — exempt from feature gates and budget guard. */
         var cost = newCostAccum();
         const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
         var bizLog = (news && news._log) || null;
@@ -3266,13 +3293,13 @@ export default {
       }
       // ---- end limit gate ----
 
-      /* Budget guard — analysis exempt from firm cap, but day cap still applies. */
+      /* Feature gate for Ask Scout. Analysis exempt from firm cost cap. */
       var _istAn = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-      var _bcAn = await budgetCheck(env, _istAn, session.firmCode, { exemptFirm: true });
-      if (!_bcAn.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, _istAn, _bcAn.reason === 'firm' ? session.firmCode : 'total', _bcAn.reason === 'firm' ? _bcAn.firmSpent : _bcAn.daySpent, _bcAn.cap));
-        return jsonResponse({ error: 'Scout has reached today\u2019s limit \u2014 back tomorrow.', budgetPaused: true }, 429);
+      var _fgAn = await featureGate(env, _istAn, session.firmCode, 'ask');
+      if (!_fgAn.ok) {
+        return jsonResponse({ error: "You\u2019ve used today\u2019s Ask Scout \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
+      await featureIncrement(env, _fgAn);
       var cost = newCostAccum();
 
       const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3429,23 +3456,6 @@ export default {
         return jsonResponse({ error: 'Unauthorized' }, 401);
       }
 
-      // Daily briefing cap — 50 per firm per UTC day
-      const BRIEFING_DAILY_LIMIT = 50;
-      const briefingKey = 'usage:briefing:' + session.firmCode + ':' + new Date().toISOString().slice(0, 10);
-      const briefingUsage = await env.G7_KV.get(briefingKey, 'json') || { count: 0 };
-
-      if (briefingUsage.count >= BRIEFING_DAILY_LIMIT) {
-        return jsonResponse({ error: 'Daily briefing limit reached' }, 429);
-      }
-
-      // Increment BEFORE the Anthropic call — a failed call still consumed
-      // the attempt, and this prevents a retry loop draining the key.
-      await kvPut(env,briefingKey, JSON.stringify({
-        count:    briefingUsage.count + 1,
-        lastUsed: Date.now(),
-        firmCode: session.firmCode
-      }), { expirationTtl: 172800 });
-
       let body;
       try {
         body = await request.json();
@@ -3453,13 +3463,18 @@ export default {
         return jsonResponse({ error: 'Invalid JSON body' }, 400);
       }
 
-      /* Budget guard */
+      /* Feature gate + firm money backstop */
       var _istBrief = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+      var _fgB = await featureGate(env, _istBrief, session.firmCode, 'briefing');
+      if (!_fgB.ok) {
+        return jsonResponse({ error: "You\u2019ve used today\u2019s Ask Scout \u2014 back tomorrow.", budgetPaused: true }, 429);
+      }
       var _bcB = await budgetCheck(env, _istBrief, session.firmCode);
       if (!_bcB.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, _istBrief, _bcB.reason === 'firm' ? session.firmCode : 'total', _bcB.reason === 'firm' ? _bcB.firmSpent : _bcB.daySpent, _bcB.cap));
-        return jsonResponse({ error: 'Scout has reached today\u2019s limit \u2014 back tomorrow.', budgetPaused: true }, 429);
+        ctx.waitUntil(sendBudgetEmail(env, _istBrief, session.firmCode, _bcB.firmSpent, _bcB.cap));
+        return jsonResponse({ error: "You\u2019ve used today\u2019s Ask Scout \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
+      await featureIncrement(env, _fgB);
       var cost = newCostAccum();
 
       const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3534,10 +3549,10 @@ export default {
 
       if (!context) return jsonResponse({ items: [], date: day });
 
-      /* Budget guard */
+      /* Firm money backstop */
       var _bcM = await budgetCheck(env, day, session.firmCode);
       if (!_bcM.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, day, _bcM.reason === 'firm' ? session.firmCode : 'total', _bcM.reason === 'firm' ? _bcM.firmSpent : _bcM.daySpent, _bcM.cap));
+        ctx.waitUntil(sendBudgetEmail(env, day, session.firmCode, _bcM.firmSpent, _bcM.cap));
         var _lbM = await lastMarketBrief(env, session.firmCode, day);
         if (_lbM) return jsonResponse(Object.assign({}, _lbM, { stale: true, staleDate: _lbM.date || '', budgetPaused: true }));
         return jsonResponse({ items: [], date: day, budgetPaused: true });
@@ -3623,12 +3638,12 @@ export default {
       }
       // ---- end limit gate ----
 
-      /* Budget guard */
+      /* Firm money backstop (check-in already has its own monthly limit gate above). */
       var _istCI = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
       var _bcCI = await budgetCheck(env, _istCI, session.firmCode);
       if (!_bcCI.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, _istCI, _bcCI.reason === 'firm' ? session.firmCode : 'total', _bcCI.reason === 'firm' ? _bcCI.firmSpent : _bcCI.daySpent, _bcCI.cap));
-        return jsonResponse({ error: 'Scout has reached today\u2019s limit \u2014 back tomorrow.', budgetPaused: true }, 429);
+        ctx.waitUntil(sendBudgetEmail(env, _istCI, session.firmCode, _bcCI.firmSpent, _bcCI.cap));
+        return jsonResponse({ error: "You\u2019ve used today\u2019s Check-In \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
       var cost = newCostAccum();
 
@@ -4023,12 +4038,12 @@ export default {
         return jsonResponse({ error: 'limit_reached', limit: 'places' }, 403);
       }
 
-      // Budget guard
+      /* Firm money backstop (places already has its own daily limit gate above). */
       var _istPlaces = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
       var _bcP = await budgetCheck(env, _istPlaces, session.firmCode);
       if (!_bcP.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, _istPlaces, _bcP.reason === 'firm' ? session.firmCode : 'total', _bcP.reason === 'firm' ? _bcP.firmSpent : _bcP.daySpent, _bcP.cap));
-        return jsonResponse({ error: 'Scout has reached today\u2019s limit \u2014 back tomorrow.', budgetPaused: true }, 429);
+        ctx.waitUntil(sendBudgetEmail(env, _istPlaces, session.firmCode, _bcP.firmSpent, _bcP.cap));
+        return jsonResponse({ error: "You\u2019ve used today\u2019s Customer Finder \u2014 back tomorrow.", budgetPaused: true }, 429);
       }
 
       // 6. Call Claude web search to find businesses
@@ -4255,10 +4270,10 @@ export default {
       }
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
       const effectivePrefs = await resolveNewsPrefs(env, session.firmCode, user.newsPrefs);
-      /* Budget guard — serve cache/last-good when over cap. */
+      /* Firm money backstop — serve cache/last-good when over cap. */
       var _bc1 = await budgetCheck(env, today, session.firmCode);
       if (!_bc1.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, today, _bc1.reason === 'firm' ? session.firmCode : 'total', _bc1.reason === 'firm' ? _bc1.firmSpent : _bc1.daySpent, _bc1.cap));
+        ctx.waitUntil(sendBudgetEmail(env, today, session.firmCode, _bc1.firmSpent, _bc1.cap));
         var _cachedBiz = await env.G7_KV.get('market:' + session.firmCode + ':' + today, 'json')
                       || await lastMarketBrief(env, session.firmCode, today);
         if (_cachedBiz) return jsonResponse({ business: _cachedBiz, sections: [], budgetPaused: true });
@@ -4283,10 +4298,10 @@ export default {
       if (cached) return jsonResponse({ move: cached });
       const saved = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
       if (!saved || !saved.context) return jsonResponse({ move: null });
-      /* Budget guard */
+      /* Firm money backstop */
       var _bc2 = await budgetCheck(env, today, session.firmCode);
       if (!_bc2.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, today, _bc2.reason === 'firm' ? session.firmCode : 'total', _bc2.reason === 'firm' ? _bc2.firmSpent : _bc2.daySpent, _bc2.cap));
+        ctx.waitUntil(sendBudgetEmail(env, today, session.firmCode, _bc2.firmSpent, _bc2.cap));
         return jsonResponse({ move: null, budgetPaused: true });
       }
       var cost = newCostAccum();
@@ -4563,10 +4578,16 @@ export default {
     } while (cursor0);
     /* Generate each needed shared category once (they cache in KV).
        City news: once per DISTINCT active city. Others: once total. */
+    /* Shared-news cost cap. */
+    var _sbc = await sharedBudgetCheck(env, day);
+    if (!_sbc.ok) {
+      console.log(JSON.stringify({ sharedBudgetSkip: true, spent: _sbc.spent, cap: _sbc.cap }));
+    }
     var cost = newCostAccum();
     var _distinctCities = new Set();
     Object.values(_firmCities).forEach(function(c) { if (c) _distinctCities.add(c); });
     for (var _cat of _neededCats) {
+      if (!_sbc.ok) break;
       if (_cat === 'city') {
         for (var _city of _distinctCities) {
           try { await generateSharedNews(env, _cat, day, _city, cost); } catch (e) {
