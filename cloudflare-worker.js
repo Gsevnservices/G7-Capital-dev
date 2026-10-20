@@ -813,10 +813,10 @@ function failsRelevanceGate(whyItMatters) {
 async function searchBusinessNews(env, day, context, city, watchlist, told, macroOnly, cost) {
   /* Build the three search instructions from the watchlist. */
 
-  /* Current month label for time-anchored queries. */
+  /* Current month label from the IST day parameter (e.g. "2026-10-20" → "October 2026"). */
   var _mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  var _ist = new Date(Date.now() + 5.5 * 3600 * 1000);
-  var _monthLabel = _mNames[_ist.getMonth()] + ' ' + _ist.getFullYear();
+  var _dayDate = new Date(day + 'T12:00:00+05:30');
+  var _monthLabel = _mNames[_dayDate.getMonth()] + ' ' + _dayDate.getFullYear();
 
   var searches = [];
   if (!macroOnly) {
