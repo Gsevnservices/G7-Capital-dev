@@ -868,26 +868,18 @@ async function regenNews(firmCode, shared) {
       'Regulations: ' + ((wl.regulations && wl.regulations.length) ? wl.regulations.join(', ') : '(none)') + '\n' +
       'Competitors: ' + ((wl.competitors && wl.competitors.length) ? wl.competitors.join(', ') : '(none)') + '\n' +
       'Groups: ' + ((wl.groups && wl.groups.length) ? wl.groups.join(', ') : '(none)') + '\n\n' +
-      '── QUERY STRINGS ──\n' +
-      (qs.length ? qs.map(function(q, i) { return (i + 1) + '. ' + q; }).join('\n') : '(none)') + '\n\n' +
-      '── PIPELINE ──\n' +
-      'Items: ' + items.length + '\n' +
-      'Searches: ' + (log.searches || 0) + '\n' +
-      'Step 1 tokens: ' + ((log.step1Tokens && log.step1Tokens.input) || 0) + ' in / ' + ((log.step1Tokens && log.step1Tokens.output) || 0) + ' out\n' +
-      'Step 2 tokens: ' + ((log.step2Tokens && log.step2Tokens.input) || 0) + ' in / ' + ((log.step2Tokens && log.step2Tokens.output) || 0) + ' out\n' +
-      'Candidates: ' + (log.candidatesRaw || 0) + ' raw → ' + (log.candidatesVetted || 0) + ' vetted';
+      '── QUERIES ──\n' +
+      (qs.length ? qs.map(function(q, i) { return (i + 1) + '. ' + q; }).join('\n') : '(none)');
     if (log.catLog && log.catLog.length) {
-      msg += '\n\nPer category:';
-      log.catLog.forEach(function(c) { msg += '\n  ' + (c.cat || '?') + ': ' + (c.raw || 0) + ' raw → ' + (c.vetted || 0) + ' vetted' + (c.error ? ' (error: ' + c.error + ')' : ''); });
+      msg += '\n\n── PER SEARCH ──';
+      log.catLog.forEach(function(c) { msg += '\n  ' + (c.cat || '?') + ': ' + (c.raw || 0) + ' raw → ' + (c.vetted || 0) + ' vetted'; });
     }
-    msg += '\n\nAfter pick: ' + (log.afterPick || 0) + ' → relevance: ' + (log.afterRelevance || 0) +
-      ' → source-match: ' + (log.afterSourceMatch || 0) + ' → dedupe: ' + (log.afterDedupe || 0);
-    if (log.drops && log.drops.length) {
-      msg += '\n\nDrops:';
-      log.drops.forEach(function(d) { msg += '\n  • ' + (d.headline || '?') + ' — ' + (d.reason || '') + (d.cat ? ' [' + d.cat + ']' : ''); });
-    }
-    msg += '\n\nHeadlines:';
+    msg += '\n\n── HEADLINES (' + items.length + ') ──';
     items.forEach(function(it) { msg += '\n  • ' + (it.headline || ''); });
+    if (log.drops && log.drops.length) {
+      msg += '\n\n── DROPS (' + log.drops.length + ') ──';
+      log.drops.forEach(function(d) { msg += '\n  • ' + (d.headline || '?').slice(0, 60) + ' — ' + (d.reason || ''); });
+    }
     alert(msg);
   } catch(err) {
     alert('Error: ' + err.message);

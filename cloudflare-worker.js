@@ -732,6 +732,41 @@ async function buildWatchlist(env, firmCode, context, cost) {
   } catch (e) {}
   var keys = ['materials','triggers','localities','regulations','competitors','groups'];
   keys.forEach(function(k) { if (!Array.isArray(wl[k])) wl[k] = []; wl[k] = wl[k].slice(0, 6); });
+  /* Locality sanity: localities should come from the firm's own context.
+     Extract city from BUSINESS: line (format: "Name | Type | Area, City").
+     Drop any locality that is itself a *different* well-known city name
+     (the model sometimes hallucinates nearby cities). Keep neighbourhood
+     names — they don't need to contain the city name. If nothing remains,
+     fall back to the city itself. */
+  var _bizLine = String(context || '').split('\n').filter(function(l){ return l.indexOf('BUSINESS:') === 0; })[0] || '';
+  var _bizCity = '';
+  var _bizParts = _bizLine.replace('BUSINESS:', '').split('|');
+  if (_bizParts.length >= 3) {
+    var _locPart = _bizParts[_bizParts.length - 1].trim();
+    var _comma = _locPart.lastIndexOf(',');
+    if (_comma !== -1) _bizCity = _locPart.slice(_comma + 1).trim();
+    else _bizCity = _locPart;
+  }
+  if (_bizCity && wl.localities.length) {
+    var _cityLower = _bizCity.toLowerCase();
+    var _contextLower = String(context || '').toLowerCase();
+    var _droppedLocs = [];
+    var _kept = wl.localities.filter(function(loc) {
+      var ll = loc.toLowerCase();
+      /* Always keep the city itself. */
+      if (ll === _cityLower) return true;
+      /* Keep if the locality text appears anywhere in the business context. */
+      if (_contextLower.indexOf(ll) !== -1) return true;
+      /* Otherwise it's a hallucinated location — drop. */
+      _droppedLocs.push(loc);
+      return false;
+    });
+    if (_droppedLocs.length) {
+      console.log(JSON.stringify({ watchlistLocalityDrop: firmCode, city: _bizCity, dropped: _droppedLocs, kept: _kept }));
+    }
+    if (_kept.length === 0) _kept = [_bizCity];
+    wl.localities = _kept;
+  }
   wl.hash = hash;
   await kvPut(env, 'market:watch:' + firmCode, JSON.stringify(wl));
   return wl;
@@ -785,10 +820,33 @@ var _stopWords = new Set([
 
 /* Source-match gate: ≥2 meaningful headline words must appear in the API's
    source title or cited text for the item's URL.
+   Non-Latin titles (Hindi etc.): compare against cited text only; if no
+   cited text, pass when URL was returned by search and is on a trusted domain.
    Returns { pass:bool, reason:string }. */
+var _hasLatinRe = /[a-z]/i;
 function sourceMatchCheck(headline, url, meta) {
   var title = meta.titles[url] || '';
   var citedArr = meta.cited[url] || [];
+  /* Non-Latin title: the word-overlap check can't work on Devanagari etc. */
+  if (title && !_hasLatinRe.test(title)) {
+    if (citedArr.length) {
+      var citedCorpus = citedArr.join(' ').toLowerCase();
+      var citedWords = String(headline || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim().split(/\s+/)
+        .filter(function(w) { return w.length > 1 && !_stopWords.has(w); });
+      var citedMatches = citedWords.filter(function(w) { return citedCorpus.indexOf(w) !== -1; });
+      if (citedMatches.length >= 2) return { pass: true };
+    }
+    /* No cited text either — trust if URL was in search results and on a trusted domain. */
+    if (meta.seen.has(url)) {
+      try {
+        var h = new URL(url).hostname.toLowerCase();
+        for (var ti = 0; ti < TRUSTED_NEWS_DOMAINS.length; ti++) {
+          if (h === TRUSTED_NEWS_DOMAINS[ti] || h.endsWith('.' + TRUSTED_NEWS_DOMAINS[ti])) return { pass: true, reason: 'non-Latin title, trusted domain' };
+        }
+      } catch (e) {}
+    }
+    return { pass: false, reason: 'non-Latin title, not on trusted domain' };
+  }
   if (!title && !citedArr.length) return { pass: false, reason: 'no API title or citation for URL' };
   var corpus = (title + ' ' + citedArr.join(' ')).toLowerCase();
   var words = String(headline || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim().split(/\s+/)
@@ -867,6 +925,8 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
                allowed_domains: TRUSTED_NEWS_DOMAINS };
   if (city) tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
 
+  var _userMsg = 'THE BUSINESS:\n' + context +
+    (told ? '\n\nALREADY TOLD — do not repeat:\n' + told : '');
   var r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
@@ -874,14 +934,36 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     body: JSON.stringify({
       model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
       system: system, tools: [tool],
-      messages: [{ role: 'user', content: 'THE BUSINESS:\n' + context +
-        (told ? '\n\nALREADY TOLD — do not repeat:\n' + told : '') }]
+      messages: [{ role: 'user', content: _userMsg }]
     })
   });
   if (!r.ok) throw new Error('search step ' + r.status + ': ' + (await r.text()).slice(0, 300));
   var data = await r.json();
   recordCost(cost, 'claude-haiku-5-5', data);
   var meta = collectSearchMeta(data);
+
+  /* If allowed_domains produced zero search results, retry once without domain restriction.
+     All existing vetting gates still apply to these results. */
+  if (meta.seen.size === 0 && tool.allowed_domains) {
+    var toolOpen = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3 };
+    if (city) toolOpen.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
+    var r2 = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+                 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
+        system: system, tools: [toolOpen],
+        messages: [{ role: 'user', content: _userMsg }]
+      })
+    });
+    if (r2.ok) {
+      data = await r2.json();
+      recordCost(cost, 'claude-haiku-5-5', data);
+      meta = collectSearchMeta(data);
+      console.log(JSON.stringify({ domainRetry: true, firm: context.slice(0, 60), resultsAfter: meta.seen.size }));
+    }
+  }
 
   var text = (data.content || []).filter(function(b){ return b.type === 'text'; })
     .map(function(b){ return b.text; }).join('');
@@ -952,6 +1034,7 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
   var system =
     'You are Scout, the business news editor for one Indian small business.\n' +
     'From the CANDIDATES below, pick 3 to 4 items that matter most to this business.\n' +
+    'You MUST return at least 2 items when there are 2 or more candidates. Never return fewer than 2.\n' +
     'For each item you keep:\n' +
     '- whyItMatters: ONE sentence, under 25 words. Name the concrete effect on the business. ' +
     'If there is no direct effect, do not include the item.\n' +
@@ -1013,6 +1096,26 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
         sourceUrl: it.sourceUrl
       });
     });
+
+  /* Minimum-2 backfill: if model returned fewer than 2 but candidates had ≥2,
+     fill from candidates not already picked. Use the candidate's whatHappened
+     as a plain whyItMatters. */
+  if (items.length < 2 && candidates.length >= 2) {
+    var pickedUrls = new Set(items.map(function(it){ return it.sourceUrl; }));
+    var backfill = candidates.filter(function(c){ return !pickedUrls.has(c.sourceUrl); });
+    for (var bi = 0; bi < backfill.length && items.length < 2; bi++) {
+      var bf = backfill[bi];
+      items.push(cleanNewsItem({
+        headline: String(bf.headline || '').slice(0, 120),
+        whatHappened: clipOneSentence(bf.whatHappened),
+        whyItMatters: clipOneSentence(bf.whatHappened),
+        whatToDo: '',
+        urgency: 'watch',
+        scope: bf.scope || 'macro',
+        sourceUrl: bf.sourceUrl
+      }));
+    }
+  }
 
   return { items: items, usage: data.usage || {} };
 }
@@ -1091,6 +1194,20 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
       Object.keys(retry.meta.titles).forEach(function(k) { if (!search.meta.titles[k]) search.meta.titles[k] = retry.meta.titles[k]; });
     }
   }
+
+  /* At most one undated item in "Your business" — dated items are more trustworthy. */
+  var _undatedCount = 0;
+  items = items.filter(function(it) {
+    var age = checkPageAge(search.meta.pageAge[it.sourceUrl], 10);
+    if (!age.dated) {
+      _undatedCount++;
+      if (_undatedCount > 1) {
+        drops.push({ headline: it.headline, reason: 'undated: only 1 undated item allowed' });
+        return false;
+      }
+    }
+    return true;
+  });
 
   /* Populate sourceTitle from API metadata — never from model claims. */
   items.forEach(function(it) {
@@ -2453,6 +2570,21 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
   await kvPut(env,'move:history:' + firmCode, JSON.stringify(nextHist));
   return move;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NAMED EXPORTS — used by scripts/news-test.mjs to test the news pipeline
+// without deploying to Cloudflare. Not used by the Worker runtime.
+// ─────────────────────────────────────────────────────────────────────────────
+export {
+  newCostAccum, recordCost, flushCost, kvPut,
+  buildWatchlist, getWatchlist, searchBusinessNews, pickAndWriteNews,
+  generateMarketBrief, buildDailyNews, generateSharedNews, personaliseNews,
+  resolveNewsPrefs, collectSearchMeta, cleanNewsItem, stripCite, clip,
+  clipOneSentence, dedupeItems, sourceMatchCheck, failsRelevanceGate,
+  checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
+  lastSharedNews, shortHash, watchlistHash, isBillingError,
+  TRUSTED_NEWS_DOMAINS, COST_TABLE, NEWS_CATS
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN HANDLER
