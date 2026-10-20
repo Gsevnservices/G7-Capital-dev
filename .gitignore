@@ -2,3 +2,5 @@
 **/.DS_Store
 .firecrawl/
 .gstack/
+# CNAME belongs only on prod branch — ignore on devlocal so merges never propagate a deletion
+CNAME
