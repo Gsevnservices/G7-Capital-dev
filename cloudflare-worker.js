@@ -1106,7 +1106,11 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
     '- When two candidates are equally relevant, prefer one from a trusted news outlet.\n' +
     '- Never invent facts beyond what the candidates state.\n' +
     '- Never write labels like "Customer 1" — use actual group names.\n' +
-    '- Do not include any item where you cannot name a concrete effect.\n\n' +
+    '- Do not include any item where you cannot name a concrete effect.\n' +
+    '- INDUSTRY MATCH: every item must be about the same industry as this business. ' +
+    'Many words are homonyms across industries (e.g. "laminates" in PCB/electronics vs decorative laminates for interiors, ' +
+    '"chips" in semiconductors vs food). Read the candidate\'s whatHappened and the business context carefully — ' +
+    'if the candidate is about a different trade\'s products or customers, DROP it.\n\n' +
     'Reply with ONLY this JSON:\n' +
     '{"items":[{"headline":"","whatHappened":"","whyItMatters":"","whatToDo":"",' +
     '"urgency":"","scope":"","sourceUrl":""}]}';
@@ -2579,10 +2583,13 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
   /* ── Generate business brief ── */
   var stale = false;
   var _genError = null;
+  var _capturedLog = null;
   let business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
   if (!business) {
     try {
       business = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
+      /* Capture _log before assembleNews re-reads from KV (where _log is not persisted). */
+      if (business && business._log) _capturedLog = business._log;
     } catch (e) {
       var bizErr = String((e && e.message) || e).slice(0, 300);
       console.log(JSON.stringify({ newsFallback: firmCode, reason: bizErr }));
@@ -2615,7 +2622,11 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
 
   /* ── Assemble from caches ── */
   var result = await assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost });
-  if (_genError && result) result._genError = _genError;
+  if (result) {
+    /* Re-attach ephemeral fields captured before assembleNews re-read from KV. */
+    if (_capturedLog) result._log = _capturedLog;
+    if (_genError) result._genError = _genError;
+  }
   return result;
 }
 
@@ -3603,13 +3614,14 @@ export default {
           }
         }
 
-        /* Firm spend and cap for admin visibility. */
+        var bizLog = (news && news._log) || null;
+        if (news) { delete news._log; delete news._genError; }
+
+        /* Flush this run's cost first, then read spend so it includes this run. */
+        await flushCost(env, day, firmCode, cost);
         var _bc = await budgetCheck(env, day, firmCode);
         var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
 
-        var bizLog = (news && news._log) || null;
-        if (news) { delete news._log; delete news._genError; }
-        ctx.waitUntil(flushCost(env, day, firmCode, cost));
         var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
