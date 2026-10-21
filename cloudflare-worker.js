@@ -1865,19 +1865,32 @@ function newsGreetingName(user, context, firmCode) {
   return dn || firmCode || 'there';
 }
 
-/* News email: renders exactly what GET /scout/news returns. */
-async function sendNewsEmail(env, firmCode, day, news) {
+/* News email: assembles today's news from cache and sends it.
+   No news param — calls assembleNews internally so it can never drift
+   from GET /scout/news or the test-email path. */
+async function sendNewsEmail(env, firmCode, day) {
   const sentKey = 'market:emailed:' + firmCode + ':' + day;
   if (await env.G7_KV.get(sentKey)) return 'already_sent';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
   if (!emailPrefs(user).news) return 'not_opted_in';
   if (!user || !user.recoveryEmail) return 'no_email';
 
+  /* Build news from cache (cacheOnly — never generate from the email path). */
+  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  var effectivePrefs;
+  try { effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs); } catch (e) { effectivePrefs = user.newsPrefs || []; }
+  var news = await assembleNews(env, firmCode, day, {
+    context: (saved && saved.context) || '',
+    city: (saved && saved.city) || '',
+    prefs: effectivePrefs,
+    cacheOnly: true
+  });
+  if (!news) return 'nothing_to_send';
+
   var body = renderNewsBody(news);
   if (!body.htmlParts.length) return 'nothing_to_send';
 
   /* Greeting uses the business name, never the firm code. */
-  const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
   const name = newsGreetingName(user, saved && saved.context, firmCode);
   const token = await unsubToken(env, firmCode);
   const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token + '&type=news';
@@ -1908,74 +1921,26 @@ async function sendNewsEmail(env, firmCode, day, news) {
   return ok ? 'sent' : 'send_failed';
 }
 
-/* Admin test email: renders today's cached news as an email and sends to
-   ADMIN_EMAIL only. No generation, no sent-flag. */
+/* Admin test email: renders today's cached news via assembleNews and sends
+   to ADMIN_EMAIL only. No generation (cacheOnly), no sent-flag. */
 async function sendTestNewsEmail(env, firmCode) {
   if (!env.ADMIN_EMAIL) return { error: 'ADMIN_EMAIL not set' };
   const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
   const day = ist.toISOString().slice(0, 10);
-  /* Assemble the same news object that GET /scout/news returns. */
-  var biz = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json')
-         || await lastMarketBrief(env, firmCode, day);
-  if (!biz) return { error: 'no cached news for ' + firmCode };
-  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
-  const effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs);
-  var chosen = (Array.isArray(effectivePrefs) ? effectivePrefs : []).filter(function(c){ return NEWS_CATS[c]; });
-  var city = '';
-  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
-  if (saved) city = saved.city || '';
-  var citySlug = city.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
-  var sections = [];
-  for (var ci = 0; ci < chosen.length; ci++) {
-    var cacheKey = 'news:' + chosen[ci] + (chosen[ci] === 'city' ? ':' + citySlug : '') + ':' + day;
-    var sec = await env.G7_KV.get(cacheKey, 'json');
-    if (!sec) sec = await lastSharedNews(env, chosen[ci], citySlug);
-    if (sec && sec.items && sec.items.length) sections.push(sec);
-  }
-  /* Read personalisation tags. */
-  var sig = await env.G7_KV.get('news:sig:' + firmCode + ':' + day, 'json') || {};
-  var all = [{ category: 'business', items: biz.items || [] }].concat(sections);
-  (all[0].items || []).forEach(function(it, ii) {
-    var v = sig['0.' + ii];
-    if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
-    if (v) { it.impact = v.impact || 'none'; it.group = v.group || ''; it.horizon = v.horizon || ''; }
-  });
-  sections.forEach(function(s, si) {
-    s.items = (s.items || []).map(function(it, ii) {
-      var v = sig[(si + 1) + '.' + ii];
-      if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
-      if (v) return Object.assign({}, it, { why: v.why || '', impact: v.impact || 'none', group: v.group || '', horizon: v.horizon || '' });
-      return Object.assign({}, it, { why: '' });
-    });
-  });
-  /* Rebuild "Also worth knowing" merge — same logic as buildDailyNews. */
-  var NO_EFFECT = 'No direct effect on your business.';
-  var _impR = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
-                competitor:3, timing:3, lead_source:2, none:0 };
-  var pool = [];
-  sections.forEach(function(s) {
-    (s.items || []).forEach(function(it) {
-      if (it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT) pool.push(it);
-    });
-  });
-  pool.sort(function(a, b) { return (_impR[b.impact] || 0) - (_impR[a.impact] || 0); });
-  var alsoSection = [];
-  if (pool.length > 0) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: pool.slice(0, 3) }];
-  /* Markets today compact lines */
-  var _mktCats = ['india_markets', 'global'];
-  var _mktItems = [];
-  _mktCats.forEach(function(mc) {
-    if (chosen.indexOf(mc) === -1) return;
-    var sec = sections.filter(function(s) { return s.category === mc; })[0];
-    if (!sec || !sec.items || !sec.items.length) return;
-    _mktItems.push(Object.assign({}, sec.items[0], { _marketLine: true }));
-  });
-  if (_mktItems.length) {
-    if (!alsoSection.length) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
-    alsoSection[0].items = alsoSection[0].items.concat(_mktItems);
-  }
 
-  var news = { business: biz, sections: alsoSection, generatedAt: biz.generatedAt || '' };
+  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
+  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  var effectivePrefs;
+  try { effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs); } catch (e) { effectivePrefs = user.newsPrefs || []; }
+
+  var news = await assembleNews(env, firmCode, day, {
+    context: (saved && saved.context) || '',
+    city: (saved && saved.city) || '',
+    prefs: effectivePrefs,
+    cacheOnly: true
+  });
+  if (!news) return { error: 'no cached news for ' + firmCode };
+
   var body = renderNewsBody(news);
   var name = newsGreetingName(user, saved && saved.context, firmCode);
   var shell = emailShell({
@@ -1990,7 +1955,9 @@ async function sendTestNewsEmail(env, firmCode) {
   });
   var subject = '[TEST] ' + firmCode + ' news email';
   var ok = await sendEmail(env, env.ADMIN_EMAIL, subject, shell.text, shell.html);
-  return ok ? { sent: true, to: env.ADMIN_EMAIL, items: (biz.items || []).length + '+' + alsoSection.reduce(function(n,s){ return n + (s.items||[]).length; }, 0) } : { error: 'send_failed' };
+  var bizCount = (news.business && news.business.items) ? news.business.items.length : 0;
+  var alsoCount = (news.sections || []).reduce(function(n,s){ return n + (s.items||[]).length; }, 0);
+  return ok ? { sent: true, to: env.ADMIN_EMAIL, items: bizCount + '+' + alsoCount } : { error: 'send_failed' };
 }
 
 /* The whole morning job for one firm: news → move → actions email → news email. */
@@ -2028,7 +1995,7 @@ async function runMorningForFirm(env, firmCode, day) {
   const st = await loadScoutState(env, firmCode);
   try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st, false, cost); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
   try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
-  if (news) { try { n = await sendNewsEmail(env, firmCode, day, news); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = 'no_news'; }
+  if (news) { try { n = await sendNewsEmail(env, firmCode, day); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = 'no_news'; }
 
   /* Flush cost to KV after the full firm run. */
   var costUsd = 0;
@@ -2442,65 +2409,66 @@ async function resolveNewsPrefs(env, firmCode, rawPrefs) {
   return isPro ? ['india_policy','india_markets','city'] : ['india_policy','city'];
 }
 
-/* Everything a firm reads today: business brief + chosen categories,
-   each item carrying a `why` line. Used by the dashboard route and email. */
-async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
+/* ── assembleNews ──
+   Reads cached business brief + shared sections + personalisation tags from KV.
+   Builds the final news object (same shape as GET /scout/news returns).
+   opts:
+     context  — business context string (needed for personaliseNews)
+     city     — firm's city
+     prefs    — array of NEWS_CATS keys
+     cost     — cost accumulator (personaliseNews may make an API call on miss)
+     cacheOnly — when true, return null if no business cache exists (never generate)
+   All three consumers — GET /scout/news, sendNewsEmail, sendTestNewsEmail —
+   call this so they can never drift. */
+async function assembleNews(env, firmCode, day, opts) {
+  var context = opts.context || '';
+  var city = opts.city || '';
+  var prefs = opts.prefs || [];
+  var cost = opts.cost || newCostAccum();
+  var cacheOnly = !!opts.cacheOnly;
+
+  /* ── Business brief ── */
+  var business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
   var stale = false;
-  let business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
   if (!business) {
-    try {
-      business = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
-    } catch (e) {
-      var bizErr = String((e && e.message) || e).slice(0, 300);
-      console.log(JSON.stringify({ newsFallback: firmCode, reason: bizErr }));
-      if (isBillingError(e)) await sendCreditAlert(env, day);
-      /* Fall back to last known good, or yesterday/day-before cache. */
-      var last = await lastMarketBrief(env, firmCode, day);
-      if (last) {
-        business = last;
-        stale = true;
-      }
-    }
+    var last = await lastMarketBrief(env, firmCode, day);
+    if (last) { business = last; stale = true; }
+    else if (cacheOnly) return null;
   }
-  const chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
-  const sections = [];
-  const errors = [];
+
+  /* ── Shared sections from cache ── */
+  var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
+  var sections = [];
+  var errors = [];
   var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
-  for (const c of chosen) {
-    try {
-      const s = await generateSharedNews(env, c, day, city, cost);
-      if (s && s.items && s.items.length) {
-        sections.push(s);
-      } else {
-        errors.push({ category: c, error: 'no items after gates' });
-      }
-    } catch (e) {
-      var errMsg = String((e && e.message) || e).slice(0, 300);
-      errors.push({ category: c, error: errMsg });
-      console.log(JSON.stringify({ newsFallback: c, reason: errMsg }));
-      if (isBillingError(e)) await sendCreditAlert(env, day);
-      /* Fall back to last known good, or yesterday/day-before cache. */
-      var lastCat = await lastSharedNews(env, c, citySlug);
-      if (lastCat) {
-        sections.push(lastCat);
-        stale = true;
-      }
-    }
+  for (var ci = 0; ci < chosen.length; ci++) {
+    var c = chosen[ci];
+    var cacheKey = 'news:' + c + (c === 'city' ? ':' + citySlug : '') + ':' + day;
+    var sec = await env.G7_KV.get(cacheKey, 'json');
+    if (!sec) sec = await lastSharedNews(env, c, citySlug);
+    if (sec && sec.items && sec.items.length) sections.push(sec);
+    else errors.push({ category: c, error: 'no cache' });
   }
-  /* Clean citation markup from cached items (covers existing caches). */
+
+  /* Clean citation markup from cached items. */
   if (business && business.items) business.items.forEach(cleanNewsItem);
   sections.forEach(function(s) { if (s.items) s.items.forEach(cleanNewsItem); });
 
-  const all = [{ category: 'business', items: (business && business.items) || [] }].concat(sections);
-  const sig = await personaliseNews(env, firmCode, day, context, all, cost);
-  /* Apply tags back — index 0 is business, 1+ are sections. */
+  /* ── Personalisation tags (cached or generated) ── */
+  var all = [{ category: 'business', items: (business && business.items) || [] }].concat(sections);
+  var sig;
+  if (cacheOnly) {
+    sig = await env.G7_KV.get('news:sig:' + firmCode + ':' + day, 'json') || {};
+  } else {
+    sig = await personaliseNews(env, firmCode, day, context, all, cost);
+  }
   (all[0].items || []).forEach(function(it, ii) {
     var v = sig['0.' + ii];
     if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
     if (v) { it.impact = v.impact || 'none'; it.group = v.group || ''; it.horizon = v.horizon || ''; }
   });
   sections.forEach(function(s, si) {
-    s.items = s.items.map(function(it, ii) {
+    s.items = (s.items || []).map(function(it, ii) {
       var v = sig[(si + 1) + '.' + ii];
       if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
       if (v) return Object.assign({}, it, { why: v.why || '', impact: v.impact || 'none', group: v.group || '', horizon: v.horizon || '' });
@@ -2508,12 +2476,10 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
     });
   });
 
-  /* A2: Merge all shared sections into ONE "Also worth knowing" section.
-     Only items with a real effect (impact != none). Max 3, ranked by impact
-     strength: demand/cost/regulation beat timing/competitor beat the rest. */
-  const NO_EFFECT = 'No direct effect on your business.';
-  const _impactRank = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
-                        competitor:3, timing:3, lead_source:2, none:0 };
+  /* ── "Also worth knowing" merge ── */
+  var NO_EFFECT = 'No direct effect on your business.';
+  var _impactRank = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
+                      competitor:3, timing:3, lead_source:2, none:0 };
   var alsoPool = [];
   sections.forEach(function(s) {
     (s.items || []).forEach(function(it) {
@@ -2530,35 +2496,66 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
     alsoSection = [{ category: 'also', label: 'Also worth knowing', items: alsoPool.slice(0, 3) }];
   }
 
-  /* Markets today — if firm chose india_markets or global, always include
-     ONE headline from each as a compact line at the end of "Also worth knowing".
-     These don't count toward the max 3. */
+  /* ── Markets today compact lines ── */
   var _marketCats = ['india_markets', 'global'];
   var _marketItems = [];
   _marketCats.forEach(function(mc) {
     if (chosen.indexOf(mc) === -1) return;
     var sec = sections.filter(function(s) { return s.category === mc; })[0];
     if (!sec || !sec.items || !sec.items.length) return;
-    var top = sec.items[0];
-    _marketItems.push(Object.assign({}, top, { _marketLine: true }));
+    _marketItems.push(Object.assign({}, sec.items[0], { _marketLine: true }));
   });
   if (_marketItems.length) {
-    if (!alsoSection.length) {
-      alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
-    }
+    if (!alsoSection.length) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
     alsoSection[0].items = alsoSection[0].items.concat(_marketItems);
   }
 
-  /* Capture _log before stripping — only used by admin regen-news route. */
+  /* ── Final object ── */
   var bizLog = (business && business._log) || null;
   if (business) delete business._log;
   var out = { business: business, sections: alsoSection, errors: errors, generatedAt: (business && business.generatedAt) || new Date().toISOString() };
-  if (stale) {
-    out.stale = true;
-    out.staleDate = (business && business.date) || '';
-  }
+  if (stale) { out.stale = true; out.staleDate = (business && business.date) || ''; }
   out._log = bizLog;
   return out;
+}
+
+/* Everything a firm reads today: generate business brief + shared categories
+   into their caches, then assemble the final object via assembleNews.
+   Used by cron, admin regen-news, GET /scout/news, GET /scout/move. */
+async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
+  /* ── Generate business brief ── */
+  var stale = false;
+  let business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
+  if (!business) {
+    try {
+      business = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
+    } catch (e) {
+      var bizErr = String((e && e.message) || e).slice(0, 300);
+      console.log(JSON.stringify({ newsFallback: firmCode, reason: bizErr }));
+      if (isBillingError(e)) await sendCreditAlert(env, day);
+    }
+  }
+
+  /* ── Generate shared sections ── */
+  var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
+  var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+  for (var ci = 0; ci < chosen.length; ci++) {
+    var c = chosen[ci];
+    var cacheKey = 'news:' + c + (c === 'city' ? ':' + citySlug : '') + ':' + day;
+    var cached = await env.G7_KV.get(cacheKey, 'json');
+    if (!cached) {
+      try {
+        await generateSharedNews(env, c, day, city, cost);
+      } catch (e) {
+        var errMsg = String((e && e.message) || e).slice(0, 300);
+        console.log(JSON.stringify({ newsFallback: c, reason: errMsg }));
+        if (isBillingError(e)) await sendCreditAlert(env, day);
+      }
+    }
+  }
+
+  /* ── Assemble from caches ── */
+  return assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost });
 }
 
 /* One decision per firm per day: the single most useful thing to do today,
@@ -2715,7 +2712,7 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
 export {
   newCostAccum, recordCost, flushCost, kvPut,
   buildWatchlist, getWatchlist, searchBusinessNews, pickAndWriteNews,
-  generateMarketBrief, buildDailyNews, generateSharedNews, personaliseNews,
+  generateMarketBrief, buildDailyNews, assembleNews, generateSharedNews, personaliseNews,
   resolveNewsPrefs, collectSearchMeta, cleanNewsItem, stripCite, clip,
   clipOneSentence, dedupeItems, sourceMatchCheck, failsRelevanceGate,
   checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
