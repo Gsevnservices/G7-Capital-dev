@@ -67,6 +67,15 @@ const TRUSTED_NEWS_DOMAINS = [
   'realty.economictimes.indiatimes.com'
 ];
 
+/* Portals and quote sites that pollute business search results.
+   Used as blocked_domains on the web_search tool. */
+const BLOCKED_SEARCH_DOMAINS = [
+  'magicbricks.com','99acres.com','housing.com','nobroker.in',
+  'commonfloor.com','makaan.com','squareyards.com',
+  'justdial.com','indiamart.com','sulekha.com',
+  'in.investing.com','tradingview.com'
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: CORS HEADERS
 // All responses must include these so GitHub Pages (a different origin)
@@ -862,6 +871,30 @@ function failsRelevanceGate(whyItMatters) {
   return _noEffectRe.test(whyItMatters || '');
 }
 
+/* Shared helper: load UA-blocked domains from KV, merge with a static list.
+   Returns a Set of domain strings that should be excluded from web_search. */
+async function getBlockedDomains(env, staticList) {
+  var uaRaw = await env.G7_KV.get('news:blocked-ua', 'json');
+  var set = new Set(Array.isArray(staticList) ? staticList : []);
+  if (Array.isArray(uaRaw)) uaRaw.forEach(function(d) { set.add(d); });
+  return set;
+}
+
+/* Shared helper: parse a 400 "domains are not accessible to our user agent"
+   error, persist newly blocked domains to KV (30 days), and return them.
+   Returns null if the error is something else. */
+async function parseAndStoreBlockedUa(env, errText) {
+  var m = errText.match(/not accessible to our user agent: \[([^\]]*)\]/);
+  if (!m) return null;
+  var rejected = m[1].split(',').map(function(s) { return s.replace(/['"\s]/g, ''); }).filter(Boolean);
+  if (!rejected.length) return null;
+  var existing = await env.G7_KV.get('news:blocked-ua', 'json');
+  var all = new Set(Array.isArray(existing) ? existing : []);
+  rejected.forEach(function(d) { all.add(d); });
+  await kvPut(env, 'news:blocked-ua', JSON.stringify(Array.from(all)), { expirationTtl: 30 * 86400 });
+  return rejected;
+}
+
 /* ── Step a: search for business news candidates (Haiku + web_search) ──
    ONE call with max_uses 3. Prompt lists three searches in order:
    (a) material/input prices, (b) demand/locality, (c) macro/regulation.
@@ -921,30 +954,53 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     '{"candidates":[{"sourceUrl":"exact URL","whatHappened":"one sentence, under 30 words",' +
     '"search":1|2|3}]}';
 
+  /* Build blocked_domains: static portals/quote sites + any UA-rejected domains. */
+  var _blocked = await getBlockedDomains(env, BLOCKED_SEARCH_DOMAINS);
   var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3,
-               allowed_domains: TRUSTED_NEWS_DOMAINS };
+               blocked_domains: Array.from(_blocked) };
   if (city) tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
 
   var _userMsg = 'THE BUSINESS:\n' + context +
     (told ? '\n\nALREADY TOLD — do not repeat:\n' + told : '');
+
+  function _bizSearchBody() {
+    return JSON.stringify({
+      model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
+      system: system, tools: [tool],
+      messages: [{ role: 'user', content: _userMsg }]
+    });
+  }
+
   var r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
-      system: system, tools: [tool],
-      messages: [{ role: 'user', content: _userMsg }]
-    })
+    body: _bizSearchBody()
   });
+
+  /* On 400 "domains not accessible to our user agent", persist + retry once. */
+  if (r.status === 400) {
+    var _errText = await r.text();
+    var _newlyBlocked = await parseAndStoreBlockedUa(env, _errText);
+    if (!_newlyBlocked) throw new Error('search step 400: ' + _errText.slice(0, 300));
+    _newlyBlocked.forEach(function(d) { _blocked.add(d); });
+    tool.blocked_domains = Array.from(_blocked);
+    console.log(JSON.stringify({ bizSearchUaBlocked: _newlyBlocked }));
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+                 'anthropic-version': '2023-06-01' },
+      body: _bizSearchBody()
+    });
+  }
   if (!r.ok) throw new Error('search step ' + r.status + ': ' + (await r.text()).slice(0, 300));
   var data = await r.json();
   recordCost(cost, 'claude-haiku-5-5', data);
   var meta = collectSearchMeta(data);
 
-  /* If allowed_domains produced zero search results, retry once without domain restriction.
+  /* Zero search results → retry once without any domain restrictions.
      All existing vetting gates still apply to these results. */
-  if (meta.seen.size === 0 && tool.allowed_domains) {
+  if (meta.seen.size === 0) {
     var toolOpen = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3 };
     if (city) toolOpen.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
     var r2 = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1047,6 +1103,7 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
     'RULES:\n' +
     '- Only events that changed recently: announced, launched, raised, cut, approved, opened, closed. No guides, explainers, "how to", rate tables.\n' +
     '- Prefer candidates marked dated:true (confirmed recent). Include an undated candidate only when it is clearly more important.\n' +
+    '- When two candidates are equally relevant, prefer one from a trusted news outlet.\n' +
     '- Never invent facts beyond what the candidates state.\n' +
     '- Never write labels like "Customer 1" — use actual group names.\n' +
     '- Do not include any item where you cannot name a concrete effect.\n\n' +
@@ -2213,11 +2270,9 @@ async function generateSharedNews(env, cat, day, city, cost) {
     '{"items":[{"headline":"under 12 words","whatHappened":"one sentence, under 30 words",' +
     '"sourceTitle":"","sourceUrl":""}]}';
 
-  /* Publishers that block AI crawlers make the whole request fail. Remember
-     each rejected domain for 30 days and retry without it, so a publisher
-     changing its policy never breaks a category. */
-  const blockedRaw = await env.G7_KV.get('news:blocked-domains', 'json');
-  const blocked = new Set(Array.isArray(blockedRaw) ? blockedRaw : []);
+  /* Filter out UA-blocked domains from the category's allowed list.
+     Uses the shared news:blocked-ua KV key (same as business search). */
+  var _uaBlocked = await getBlockedDomains(env, []);
 
   async function ask(domains) {
     const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 2 };
@@ -2234,17 +2289,15 @@ async function generateSharedNews(env, cat, day, city, cost) {
     });
   }
 
-  let domains = def.domains.filter(function(d){ return !blocked.has(d); });
+  let domains = def.domains.filter(function(d){ return !_uaBlocked.has(d); });
   let r = await ask(domains);
   if (r.status === 400) {
     const errText = await r.text();
-    const m = errText.match(/not accessible to our user agent: \[([^\]]*)\]/);
-    if (!m) throw new Error('shared ' + cat + ' 400: ' + errText.slice(0, 300));
-    const rejected = m[1].split(',').map(function(s){ return s.replace(/['"\s]/g, ''); }).filter(Boolean);
-    rejected.forEach(function(d){ blocked.add(d); });
-    await kvPut(env,'news:blocked-domains', JSON.stringify(Array.from(blocked)), { expirationTtl: 30 * 86400 });
-    domains = domains.filter(function(d){ return !blocked.has(d); });
-    console.log(JSON.stringify({ newsDomainsBlocked: rejected, category: cat, remaining: domains }));
+    var _rejected = await parseAndStoreBlockedUa(env, errText);
+    if (!_rejected) throw new Error('shared ' + cat + ' 400: ' + errText.slice(0, 300));
+    _rejected.forEach(function(d) { _uaBlocked.add(d); });
+    domains = domains.filter(function(d){ return !_uaBlocked.has(d); });
+    console.log(JSON.stringify({ newsDomainsBlocked: _rejected, category: cat, remaining: domains }));
     /* With fewer than two trusted outlets left, the category is not
        trustworthy enough to show. Return nothing rather than search the
        open web under a "trusted news" label. */
@@ -2726,7 +2779,7 @@ export {
   checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
   lastSharedNews, shortHash, watchlistHash, isBillingError,
   renderNewsBody, newsGreetingName, displayName,
-  TRUSTED_NEWS_DOMAINS, COST_TABLE, NEWS_CATS
+  TRUSTED_NEWS_DOMAINS, BLOCKED_SEARCH_DOMAINS, COST_TABLE, NEWS_CATS
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3516,6 +3569,13 @@ export default {
         const effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs);
         /* Admin regen — exempt from feature gates and budget guard. */
         var cost = newCostAccum();
+
+        /* Rebuild watchlist BEFORE search so the log always has it,
+           even when generateMarketBrief throws later. */
+        try { await getWatchlist(env, firmCode, saved.context, cost); } catch (e) {
+          console.log(JSON.stringify({ regenWatchlistError: firmCode, error: String(e && e.message || e).slice(0, 200) }));
+        }
+
         var news = null, _regenFallback = null;
         try {
           news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
