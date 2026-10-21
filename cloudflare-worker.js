@@ -2525,6 +2525,7 @@ async function assembleNews(env, firmCode, day, opts) {
 async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
   /* ── Generate business brief ── */
   var stale = false;
+  var _genError = null;
   let business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
   if (!business) {
     try {
@@ -2533,6 +2534,11 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
       var bizErr = String((e && e.message) || e).slice(0, 300);
       console.log(JSON.stringify({ newsFallback: firmCode, reason: bizErr }));
       if (isBillingError(e)) await sendCreditAlert(env, day);
+      /* Tag the error so admin regen can surface it. */
+      var _s = 'search';
+      if (/watchlist/i.test(bizErr)) _s = 'watchlist';
+      else if (/pick|write|sonnet/i.test(bizErr)) _s = 'pick';
+      _genError = { stage: _s, reason: bizErr };
     }
   }
 
@@ -2555,7 +2561,9 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
   }
 
   /* ── Assemble from caches ── */
-  return assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost });
+  var result = await assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost });
+  if (_genError && result) result._genError = _genError;
+  return result;
 }
 
 /* One decision per firm per day: the single most useful thing to do today,
@@ -3513,23 +3521,24 @@ export default {
           news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
         } catch (e) {
           var _errMsg = String((e && e.message) || e).slice(0, 300);
-          /* Infer stage from error message patterns. */
-          var _stage = 'assemble';
-          if (/watchlist/i.test(_errMsg)) _stage = 'watchlist';
-          else if (/search|web_search|tool_use/i.test(_errMsg)) _stage = 'search';
-          else if (/pick|write|sonnet/i.test(_errMsg)) _stage = 'pick';
-          _regenFallback = { fallback: true, stage: _stage, reason: _errMsg };
+          _regenFallback = { fallback: true, stage: 'assemble', reason: _errMsg };
         }
 
-        /* Detect soft failures: buildDailyNews swallows errors internally.
-           If the result is stale or placeholder-only, flag it. */
+        /* Prefer the structured _genError from buildDailyNews over guessing. */
+        if (news && news._genError && !_regenFallback) {
+          _regenFallback = { fallback: true, stage: news._genError.stage, reason: news._genError.reason };
+        }
+
+        /* Detect soft failures: stale, placeholder, _fromDay (last-good fallback), or missing. */
         if (news && !_regenFallback) {
           var _bizItems = (news.business && news.business.items) || [];
           if (news.stale) {
             _regenFallback = { fallback: true, stage: 'search', reason: 'Generation failed; showing stale cache from ' + (news.staleDate || 'earlier') };
+          } else if (_bizItems.length > 0 && _bizItems[0]._fromDay) {
+            _regenFallback = { fallback: true, stage: 'search', reason: 'No fresh items; showing last-good from ' + _bizItems[0]._fromDay };
           } else if (_bizItems.length === 1 && _bizItems[0]._placeholder) {
             _regenFallback = { fallback: true, stage: 'search', reason: 'No items survived quality gates; showing placeholder' };
-          } else if (_bizItems.length === 0 && !(news.business)) {
+          } else if (!news.business) {
             _regenFallback = { fallback: true, stage: 'search', reason: 'No business brief generated' };
           }
         }
@@ -3539,7 +3548,7 @@ export default {
         var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
 
         var bizLog = (news && news._log) || null;
-        if (news) delete news._log;
+        if (news) { delete news._log; delete news._genError; }
         ctx.waitUntil(flushCost(env, day, firmCode, cost));
         var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo };
         if (_regenFallback) resp.fallback = _regenFallback;
@@ -4676,6 +4685,7 @@ export default {
       var cost = newCostAccum();
       const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', effectivePrefs, cost);
       delete news._log;
+      delete news._genError;
       ctx.waitUntil(flushCost(env, today, session.firmCode, cost));
       return jsonResponse(news);
     }
