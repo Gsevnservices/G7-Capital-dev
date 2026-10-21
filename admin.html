@@ -877,11 +877,16 @@ async function regenNews(firmCode, shared) {
       'Regulations: ' + ((wl.regulations && wl.regulations.length) ? wl.regulations.join(', ') : '(none)') + '\n' +
       'Competitors: ' + ((wl.competitors && wl.competitors.length) ? wl.competitors.join(', ') : '(none)') + '\n' +
       'Groups: ' + ((wl.groups && wl.groups.length) ? wl.groups.join(', ') : '(none)') + '\n\n' +
-      '── QUERIES ──\n' +
-      (qs.length ? qs.map(function(q, i) { return (i + 1) + '. ' + q; }).join('\n') : '(none)');
-    if (log.catLog && log.catLog.length) {
-      msg += '\n\n── PER SEARCH ──';
-      log.catLog.forEach(function(c) { msg += '\n  ' + (c.cat || '?') + ': ' + (c.raw || 0) + ' raw → ' + (c.vetted || 0) + ' vetted'; });
+      '── QUERIES ──\n';
+    var cl = log.catLog || [];
+    var catNames = ['materials', 'demand', 'macro'];
+    if (qs.length) {
+      qs.forEach(function(q, i) {
+        var c = cl.filter(function(x){ return x.cat === catNames[i]; })[0] || cl[i] || {};
+        msg += (i + 1) + '. ' + q + '  [' + (c.raw || 0) + ' raw → ' + (c.vetted || 0) + ' vetted]\n';
+      });
+    } else {
+      msg += '(none)';
     }
     msg += '\n\n── HEADLINES (' + items.length + ') ──';
     items.forEach(function(it) { msg += '\n  • ' + (it.headline || ''); });

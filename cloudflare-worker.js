@@ -902,44 +902,64 @@ async function parseAndStoreBlockedUa(env, errText) {
    and recency (page_age), not the model's claims. */
 
 async function searchBusinessNews(env, day, context, city, watchlist, told, macroOnly, cost) {
-  /* Build the three search instructions from the watchlist. */
+  /* Build exactly 3 queries in code — one per search, rotating by day-of-year. */
 
-  /* Current month label from the IST day parameter (e.g. "2026-10-20" → "October 2026"). */
-  var _mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  /* Day-of-year for rotation. */
   var _dayDate = new Date(day + 'T12:00:00+05:30');
+  var _startOfYear = new Date(_dayDate.getFullYear(), 0, 0);
+  var _doy = Math.floor((_dayDate - _startOfYear) / 86400000);
+
+  /* Month label — only used for search 3. */
+  var _mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   var _monthLabel = _mNames[_dayDate.getMonth()] + ' ' + _dayDate.getFullYear();
+
+  /* Extract the trade/type from context BUSINESS: line for fallback queries. */
+  var _bizLine = String(context || '').split('\n').filter(function(l){ return l.indexOf('BUSINESS:') === 0; })[0] || '';
+  var _bizParts = _bizLine.replace('BUSINESS:', '').split('|');
+  var _trade = _bizParts.length >= 2 ? _bizParts[1].trim() : '';
 
   var searches = [];
   if (!macroOnly) {
-    if (watchlist.materials && watchlist.materials.length) {
-      searches.push('SEARCH 1 — MATERIAL/INPUT PRICES: ' +
-        watchlist.materials.map(function(m){ return '"' + m + ' price hike ' + _monthLabel + '"'; }).join(', '));
+    /* SEARCH 1 — one material, rotating by day-of-year. */
+    var mats = (watchlist.materials && watchlist.materials.length) ? watchlist.materials : [];
+    if (mats.length) {
+      var mat = mats[_doy % mats.length];
+      searches.push(mat + ' price increase India');
     } else {
-      searches.push('SEARCH 1 — MATERIAL/INPUT PRICES: price changes for inputs this business buys, ' + _monthLabel);
+      searches.push((_trade || 'building materials') + ' price increase India');
     }
-    var demandParts = [];
-    if (watchlist.localities && watchlist.localities.length)
-      demandParts.push(watchlist.localities.map(function(l){ return '"' + l + (city ? ' ' + city : '') + ' new project ' + _monthLabel + '"'; }).join(', '));
-    if (watchlist.triggers && watchlist.triggers.length)
-      demandParts.push(watchlist.triggers.map(function(t){ return '"' + t + ' ' + _monthLabel + '"'; }).join(', '));
-    if (watchlist.competitors && watchlist.competitors.length)
-      demandParts.push('competitor news: ' + watchlist.competitors.map(function(c){ return '"' + c + '"'; }).join(', '));
-    if (demandParts.length) {
-      searches.push('SEARCH 2 — DEMAND/LOCALITY: ' + demandParts.join('. '));
+
+    /* SEARCH 2 — one locality + trade's top trigger. No month, no city duplication. */
+    var locs = (watchlist.localities && watchlist.localities.length) ? watchlist.localities : [];
+    var triggers = (watchlist.triggers && watchlist.triggers.length) ? watchlist.triggers : [];
+    var topTrigger = triggers.length ? triggers[_doy % triggers.length] : 'new project';
+    if (locs.length) {
+      var loc = locs[_doy % locs.length];
+      /* Locality already includes city context from the watchlist; add city only if the locality doesn't contain it. */
+      var locQuery = loc;
+      if (city && loc.toLowerCase().indexOf(city.toLowerCase()) === -1) locQuery = loc + ' ' + city;
+      searches.push(locQuery + ' ' + topTrigger);
+    } else if (city) {
+      searches.push(city + ' ' + topTrigger);
     } else {
-      searches.push('SEARCH 2 — DEMAND/LOCALITY: new projects, tenders, demand changes for this trade, ' + _monthLabel);
+      searches.push((_trade || 'business') + ' demand India');
     }
   }
-  var macroParts = [];
-  if (watchlist.regulations && watchlist.regulations.length)
-    macroParts.push(watchlist.regulations.map(function(r){ return '"' + r + ' ' + _monthLabel + '"'; }).join(', '));
-  macroParts.push('"GST ' + _monthLabel + '"', '"RBI repo rate ' + _monthLabel + '"');
-  searches.push('SEARCH 3 — MACRO/REGULATION: ' + macroParts.join(', '));
+
+  /* SEARCH 3 — one regulation, rotating; fallback to RBI repo rate. */
+  var regs = (watchlist.regulations && watchlist.regulations.length) ? watchlist.regulations : [];
+  if (regs.length) {
+    var reg = regs[_doy % regs.length];
+    searches.push(reg + ' ' + _monthLabel);
+  } else {
+    searches.push('RBI repo rate home loan ' + _monthLabel);
+  }
 
   var system =
     'You are a news researcher for one Indian small business. Today is ' + day + ' (India).\n' +
-    'You MUST run ALL ' + searches.length + ' searches below, IN ORDER. Every search is mandatory.\n' +
-    searches.join('\n') + '\n\n' +
+    'You MUST run EXACTLY these ' + searches.length + ' web searches, one each, VERBATIM as written:\n' +
+    searches.map(function(q, i) { return 'SEARCH ' + (i + 1) + ': ' + q; }).join('\n') + '\n\n' +
+    'Do NOT rephrase, combine, or split these queries. Run each one as-is.\n\n' +
     (macroOnly ? 'THIS RUN: local news was empty. Search MACRO only — national economy, ' +
       'policy and prices for this trade.\n\n' : '') +
     'NOT NEWS: something that already existed. A competitor simply having a shop, or ' +
