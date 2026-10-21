@@ -1111,9 +1111,12 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
     'Many words are homonyms across industries (e.g. "laminates" in PCB/electronics vs decorative laminates for interiors, ' +
     '"chips" in semiconductors vs food). Read the candidate\'s whatHappened and the business context carefully — ' +
     'if the candidate is about a different trade\'s products or customers, DROP it.\n\n' +
+    'For every candidate you DROP, add it to "rejected" with the sourceUrl and a short reason ' +
+    '(e.g. "wrong industry", "no concrete effect", "guide not news").\n\n' +
     'Reply with ONLY this JSON:\n' +
     '{"items":[{"headline":"","whatHappened":"","whyItMatters":"","whatToDo":"",' +
-    '"urgency":"","scope":"","sourceUrl":""}]}';
+    '"urgency":"","scope":"","sourceUrl":""}],' +
+    '"rejected":[{"sourceUrl":"","reason":""}]}';
 
   var r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -1158,12 +1161,20 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
       });
     });
 
-  /* Minimum-2 backfill: if model returned fewer than 2 but candidates had ≥2,
-     fill from candidates not already picked. Use the candidate's whatHappened
-     as a plain whyItMatters. */
+  /* Collect URLs that Step b explicitly rejected (industry mismatch, etc.). */
+  var rejectedUrls = new Set();
+  (Array.isArray(parsed.rejected) ? parsed.rejected : []).forEach(function(r) {
+    if (r && r.sourceUrl) rejectedUrls.add(r.sourceUrl);
+  });
+
+  /* Minimum-2 backfill: only from candidates neither picked nor rejected.
+     If no candidates qualify, keep what we have (even if just 1 item)
+     rather than forcing a wrong one. */
   if (items.length < 2 && candidates.length >= 2) {
     var pickedUrls = new Set(items.map(function(it){ return it.sourceUrl; }));
-    var backfill = candidates.filter(function(c){ return !pickedUrls.has(c.sourceUrl); });
+    var backfill = candidates.filter(function(c){
+      return !pickedUrls.has(c.sourceUrl) && !rejectedUrls.has(c.sourceUrl);
+    });
     for (var bi = 0; bi < backfill.length && items.length < 2; bi++) {
       var bf = backfill[bi];
       items.push(cleanNewsItem({
@@ -1178,7 +1189,7 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
     }
   }
 
-  return { items: items, usage: data.usage || {} };
+  return { items: items, rejected: Array.isArray(parsed.rejected) ? parsed.rejected : [], usage: data.usage || {} };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1208,6 +1219,10 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
   /* Step b: pick and write (Sonnet, no tools). */
   var pick = await pickAndWriteNews(env, context, search.candidates, watchlist, cost);
   var afterPick = pick.items.length;
+  /* Log Step b rejections (industry mismatch, no effect, etc.). */
+  (pick.rejected || []).forEach(function(r) {
+    drops.push({ headline: (search.meta.titles[r.sourceUrl] || r.sourceUrl || '').slice(0, 80), reason: 'step-b rejected: ' + (r.reason || '?') });
+  });
 
   /* ── Quality gates ── */
   var afterRelevance = pick.items.filter(function(it) {
@@ -1240,6 +1255,9 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
     var combined = items.concat(retry.candidates);
     if (combined.length > items.length) {
       var pick2 = await pickAndWriteNews(env, context, combined, watchlist, cost);
+      (pick2.rejected || []).forEach(function(r) {
+        drops.push({ headline: (search.meta.titles[r.sourceUrl] || retry.meta.titles[r.sourceUrl] || r.sourceUrl || '').slice(0, 80), reason: 'step-b rejected: ' + (r.reason || '?') });
+      });
       /* Re-apply gates on the new pick. */
       var merged2 = pick2.items.filter(function(it) {
         if (failsRelevanceGate(it.whyItMatters)) { drops.push({ headline: it.headline, reason: 'retry-relevance' }); return false; }
