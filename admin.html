@@ -770,7 +770,8 @@ function renderFirmsTable(filter) {
       : '<button class="btn" style="font-size:9px;padding:4px 8px;background:#7BC47B;color:#0a0a0a" onclick="setPlan(\'' + fc + '\',\'paid\')">↑Paid</button>';
     var regenNewsBtn = product === 'scout'
       ? ' <button class="btn" style="font-size:9px;padding:4px 8px;background:#2a2a2a;color:#C9A84C" onclick="regenNews(\'' + fc + '\',false)">Regen News</button>' +
-        ' <button class="btn" style="font-size:9px;padding:4px 8px;background:#2a2a2a;color:#E0922F" onclick="regenNews(\'' + fc + '\',true)">Regen + Shared</button>'
+        ' <button class="btn" style="font-size:9px;padding:4px 8px;background:#2a2a2a;color:#E0922F" onclick="regenNews(\'' + fc + '\',true)">Regen + Shared</button>' +
+        ' <button class="btn" style="font-size:9px;padding:4px 8px;background:#2a2a2a;color:#7BC47B" onclick="testNewsEmail(\'' + fc + '\')">Test Email</button>'
       : '';
     html += '<td>' + planBtn + ' <button class="btn btn-danger" style="font-size:9px;padding:4px 8px" onclick="resetUsage(\'' + fc + '\',\'' + product + '\')">Reset</button>' + regenNewsBtn + '</td>';
     html += '</tr>';
@@ -881,6 +882,29 @@ async function regenNews(firmCode, shared) {
       log.drops.forEach(function(d) { msg += '\n  • ' + (d.headline || '?').slice(0, 60) + ' — ' + (d.reason || ''); });
     }
     alert(msg);
+  } catch(err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// TEST NEWS EMAIL
+// Sends today's cached news as an email to ADMIN_EMAIL only.
+// No generation — uses whatever is already in KV.
+// ─────────────────────────────────────────────────────────────
+async function testNewsEmail(firmCode) {
+  if (!confirm('Send test news email for ' + firmCode + ' to admin?')) return;
+  try {
+    const response = await fetch(WORKER + '/admin/test-news-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminPassword: adminPassword, firmCode: firmCode })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed (' + response.status + ')');
+    if (data.error) throw new Error(data.error);
+    alert('Test email sent to ' + (data.to || 'admin') + '\nItems: ' + (data.items || '0'));
   } catch(err) {
     alert('Error: ' + err.message);
   }

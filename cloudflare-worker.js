@@ -1754,7 +1754,118 @@ async function sendActionsEmail(env, firmCode, day, move) {
   return ok ? 'sent' : 'send_failed';
 }
 
-/* News email: business brief + category sections. */
+/* Shared news email renderer — single data path for both the real morning
+   email and the admin test-email. Matches the shape of GET /scout/news
+   (i.e. buildDailyNews output) exactly, including _placeholder, _fromDay
+   and _marketLine items. news.html on the frontend uses scoutNewsFlatItems
+   for the same shape, so email and web can never drift.
+   Returns { htmlParts:[], textParts:[], firstHeadline:'' }. */
+function renderNewsBody(news) {
+  var htmlParts = [];
+  var textParts = [];
+  var firstHeadline = '';
+  var noEffect = 'No direct effect on your business.';
+
+  var bizItems = (news && news.business && Array.isArray(news.business.items)) ? news.business.items : [];
+  var sections = (news && Array.isArray(news.sections)) ? news.sections : [];
+
+  /* Stale notice */
+  if (news && news.stale && news.staleDate) {
+    try {
+      var wd = new Date(news.staleDate + 'T12:00:00+05:30').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+      htmlParts.push(emailGreyRow('From ' + wd + ' \u2014 today\u2019s update is on its way.'));
+      textParts.push('From ' + wd + ' \u2014 today\u2019s update is on its way.');
+    } catch (e) {}
+  }
+
+  /* ── YOUR BUSINESS ── */
+  if (bizItems.length > 0) {
+    htmlParts.push(emailHeading('Your business'));
+    textParts.push('YOUR BUSINESS');
+    bizItems.forEach(function(it) {
+      /* Placeholder item */
+      if (it._placeholder) {
+        htmlParts.push(emailGreyRow(it.headline || ''));
+        textParts.push('  ' + (it.headline || ''));
+        return;
+      }
+      if (!firstHeadline) firstHeadline = it.headline || '';
+      var url = emailSafeUrl(it.sourceUrl || '');
+      var h = '';
+      if (it._fromDay) h += '<div style="font-size:11px;color:#999;margin-bottom:2px">From ' + escEmail(it._fromDay) + '</div>';
+      h += '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
+      if (it._marketLine) {
+        /* Markets today — compact: headline + source only */
+      } else {
+        var why = (it.why || it.whyItMatters || '').trim();
+        if (why && why !== noEffect) h += '<div style="font-size:13px;color:#555;margin-top:4px">' + escEmail(why) + '</div>';
+        if (it.whatToDo) h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo) + '</div>';
+      }
+      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
+      htmlParts.push(emailRow(h));
+      var t = (it._fromDay ? '  (From ' + it._fromDay + ') ' : '  ') + (it.headline || '');
+      if (!it._marketLine) {
+        var twhy = (it.why || it.whyItMatters || '').trim();
+        if (twhy && twhy !== noEffect) t += '\n  ' + twhy;
+        if (it.whatToDo) t += '\n  Do this: ' + it.whatToDo;
+      }
+      if (it.sourceUrl) t += '\n  Source: ' + it.sourceUrl;
+      textParts.push(t);
+    });
+  }
+
+  /* ── ALSO WORTH KNOWING (sections) ── */
+  sections.forEach(function(sec) {
+    var items = (sec.items && sec.items.length) ? sec.items : [];
+    if (!items.length) return;
+    htmlParts.push(emailHeading(sec.label || 'News'));
+    textParts.push(String(sec.label || 'NEWS').toUpperCase());
+    items.forEach(function(it) {
+      if (!firstHeadline) firstHeadline = it.headline || '';
+      var url = emailSafeUrl(it.sourceUrl || '');
+      var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
+      if (it._marketLine) {
+        /* Markets today — compact: headline + source only */
+      } else {
+        if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
+        var why = (it.why || '').trim();
+        if (why && why !== noEffect) {
+          h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
+        }
+      }
+      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
+      htmlParts.push(emailRow(h));
+      var t = '  ' + (it.headline || '');
+      if (!it._marketLine) {
+        if (it.whatHappened) t += '\n  ' + it.whatHappened;
+        var twhy = (it.why || '').trim();
+        if (twhy && twhy !== noEffect) t += '\n  For you: ' + twhy;
+      }
+      if (it.sourceUrl) t += '\n  Source: ' + it.sourceUrl;
+      textParts.push(t);
+    });
+  });
+
+  return { htmlParts: htmlParts, textParts: textParts, firstHeadline: firstHeadline };
+}
+
+/* Extract the business's display name from the context BUSINESS: line,
+   falling back to displayName(user) or firmCode. Never returns a raw code. */
+function newsGreetingName(user, context, firmCode) {
+  /* Try BUSINESS: line first — "Sharma Interiors | Interior Design | Lucknow" */
+  if (context) {
+    var bizLine = String(context).split('\n').filter(function(l){ return l.indexOf('BUSINESS:') === 0; })[0];
+    if (bizLine) {
+      var name = bizLine.replace('BUSINESS:', '').split('|')[0].trim();
+      if (name) return name;
+    }
+  }
+  /* Fall back to user.firmName (stripped of " — Scout"). */
+  var dn = displayName(user, '');
+  return dn || firmCode || 'there';
+}
+
+/* News email: renders exactly what GET /scout/news returns. */
 async function sendNewsEmail(env, firmCode, day, news) {
   const sentKey = 'market:emailed:' + firmCode + ':' + day;
   if (await env.G7_KV.get(sentKey)) return 'already_sent';
@@ -1762,79 +1873,17 @@ async function sendNewsEmail(env, firmCode, day, news) {
   if (!emailPrefs(user).news) return 'not_opted_in';
   if (!user || !user.recoveryEmail) return 'no_email';
 
-  const bizItems = (news && news.business && Array.isArray(news.business.items)) ? news.business.items : [];
-  const newsSections = (news && Array.isArray(news.sections)) ? news.sections : [];
-  var totalItems = bizItems.length;
-  newsSections.forEach(function(s) { totalItems += (s.items ? s.items.length : 0); });
-  if (!totalItems) return 'nothing_to_send';
+  var body = renderNewsBody(news);
+  if (!body.htmlParts.length) return 'nothing_to_send';
 
-  const name = displayName(user, firmCode);
+  /* Greeting uses the business name, never the firm code. */
+  const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  const name = newsGreetingName(user, saved && saved.context, firmCode);
   const token = await unsubToken(env, firmCode);
   const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token + '&type=news';
 
-  var htmlParts = [];
-  var textParts = [];
-
-  /* ── YOUR BUSINESS ── */
-  if (bizItems.length > 0) {
-    htmlParts.push(emailHeading('Your business'));
-    bizItems.forEach(function(it) {
-      var url = emailSafeUrl(it.sourceUrl || '');
-      var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
-      if (it.whyItMatters) h += '<div style="font-size:13px;color:#555;margin-top:4px">' + escEmail(it.whyItMatters) + '</div>';
-      h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo || '') + '</div>';
-      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
-      htmlParts.push(emailRow(h));
-    });
-    textParts.push('YOUR BUSINESS');
-    bizItems.forEach(function(it) {
-      textParts.push('  ' + (it.headline || '') +
-        (it.whyItMatters ? '\n  ' + it.whyItMatters : '') +
-        '\n  Do this: ' + (it.whatToDo || '') +
-        (it.sourceUrl ? '\n  Source: ' + it.sourceUrl : ''));
-    });
-  }
-
-  /* ── NEWS SECTIONS (one per category) ── */
-  newsSections.forEach(function(sec) {
-    var items = (sec.items && sec.items.length) ? sec.items : [];
-    if (!items.length) return;
-    htmlParts.push(emailHeading(sec.label || 'News'));
-    items.forEach(function(it) {
-      var url = emailSafeUrl(it.sourceUrl || '');
-      var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
-      if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
-      var why = (it.why || '').trim();
-      if (why && why !== 'No direct effect on your business.') {
-        h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
-      }
-      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
-      htmlParts.push(emailRow(h));
-    });
-    textParts.push(String(sec.label || 'NEWS').toUpperCase());
-    items.forEach(function(it) {
-      var why = (it.why || '').trim();
-      textParts.push('  ' + (it.headline || '') +
-        (it.whatHappened ? '\n  ' + it.whatHappened : '') +
-        (why && why !== 'No direct effect on your business.' ? '\n  For you: ' + why : '') +
-        (it.sourceUrl ? '\n  Source: ' + it.sourceUrl : ''));
-    });
-  });
-
-  /* ── Subject ── */
-  var firstHeadline = '';
-  if (bizItems.length > 0) {
-    firstHeadline = bizItems[0].headline || '';
-  } else {
-    for (var si = 0; si < newsSections.length; si++) {
-      if (newsSections[si].items && newsSections[si].items.length) {
-        firstHeadline = newsSections[si].items[0].headline || '';
-        break;
-      }
-    }
-  }
-  var subjectTail = String(firstHeadline).slice(0, 60);
-  if (subjectTail.length < firstHeadline.length) {
+  var subjectTail = String(body.firstHeadline).slice(0, 60);
+  if (subjectTail.length < body.firstHeadline.length) {
     var lastSpace = subjectTail.lastIndexOf(' ');
     if (lastSpace > 20) subjectTail = subjectTail.slice(0, lastSpace);
     subjectTail += '\u2026';
@@ -1845,8 +1894,8 @@ async function sendNewsEmail(env, firmCode, day, news) {
     headerLabel: 'Scout \u00b7 Your news today',
     greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>',
     textGreeting: 'Good morning, ' + name + '.\n\n',
-    htmlParts: htmlParts,
-    textParts: textParts,
+    htmlParts: body.htmlParts,
+    textParts: body.textParts,
     footerLine: 'You get this because you switched on Scout\u2019s news email.',
     unsubUrl: unsubUrl
   });
@@ -1857,6 +1906,91 @@ async function sendNewsEmail(env, firmCode, day, news) {
   });
   if (ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
   return ok ? 'sent' : 'send_failed';
+}
+
+/* Admin test email: renders today's cached news as an email and sends to
+   ADMIN_EMAIL only. No generation, no sent-flag. */
+async function sendTestNewsEmail(env, firmCode) {
+  if (!env.ADMIN_EMAIL) return { error: 'ADMIN_EMAIL not set' };
+  const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const day = ist.toISOString().slice(0, 10);
+  /* Assemble the same news object that GET /scout/news returns. */
+  var biz = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json')
+         || await lastMarketBrief(env, firmCode, day);
+  if (!biz) return { error: 'no cached news for ' + firmCode };
+  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
+  const effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs);
+  var chosen = (Array.isArray(effectivePrefs) ? effectivePrefs : []).filter(function(c){ return NEWS_CATS[c]; });
+  var city = '';
+  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  if (saved) city = saved.city || '';
+  var citySlug = city.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+  var sections = [];
+  for (var ci = 0; ci < chosen.length; ci++) {
+    var cacheKey = 'news:' + chosen[ci] + (chosen[ci] === 'city' ? ':' + citySlug : '') + ':' + day;
+    var sec = await env.G7_KV.get(cacheKey, 'json');
+    if (!sec) sec = await lastSharedNews(env, chosen[ci], citySlug);
+    if (sec && sec.items && sec.items.length) sections.push(sec);
+  }
+  /* Read personalisation tags. */
+  var sig = await env.G7_KV.get('news:sig:' + firmCode + ':' + day, 'json') || {};
+  var all = [{ category: 'business', items: biz.items || [] }].concat(sections);
+  (all[0].items || []).forEach(function(it, ii) {
+    var v = sig['0.' + ii];
+    if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
+    if (v) { it.impact = v.impact || 'none'; it.group = v.group || ''; it.horizon = v.horizon || ''; }
+  });
+  sections.forEach(function(s, si) {
+    s.items = (s.items || []).map(function(it, ii) {
+      var v = sig[(si + 1) + '.' + ii];
+      if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
+      if (v) return Object.assign({}, it, { why: v.why || '', impact: v.impact || 'none', group: v.group || '', horizon: v.horizon || '' });
+      return Object.assign({}, it, { why: '' });
+    });
+  });
+  /* Rebuild "Also worth knowing" merge — same logic as buildDailyNews. */
+  var NO_EFFECT = 'No direct effect on your business.';
+  var _impR = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
+                competitor:3, timing:3, lead_source:2, none:0 };
+  var pool = [];
+  sections.forEach(function(s) {
+    (s.items || []).forEach(function(it) {
+      if (it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT) pool.push(it);
+    });
+  });
+  pool.sort(function(a, b) { return (_impR[b.impact] || 0) - (_impR[a.impact] || 0); });
+  var alsoSection = [];
+  if (pool.length > 0) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: pool.slice(0, 3) }];
+  /* Markets today compact lines */
+  var _mktCats = ['india_markets', 'global'];
+  var _mktItems = [];
+  _mktCats.forEach(function(mc) {
+    if (chosen.indexOf(mc) === -1) return;
+    var sec = sections.filter(function(s) { return s.category === mc; })[0];
+    if (!sec || !sec.items || !sec.items.length) return;
+    _mktItems.push(Object.assign({}, sec.items[0], { _marketLine: true }));
+  });
+  if (_mktItems.length) {
+    if (!alsoSection.length) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
+    alsoSection[0].items = alsoSection[0].items.concat(_mktItems);
+  }
+
+  var news = { business: biz, sections: alsoSection, generatedAt: biz.generatedAt || '' };
+  var body = renderNewsBody(news);
+  var name = newsGreetingName(user, saved && saved.context, firmCode);
+  var shell = emailShell({
+    headerLabel: 'Scout \u00b7 TEST NEWS EMAIL',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
+              '<div style="font-size:11px;color:#B8862B;margin-top:4px">[TEST — sent to admin only]</div>',
+    textGreeting: 'Good morning, ' + name + '.\n[TEST — sent to admin only]\n\n',
+    htmlParts: body.htmlParts,
+    textParts: body.textParts,
+    footerLine: 'Test email — sent to admin only.',
+    unsubUrl: '#'
+  });
+  var subject = '[TEST] ' + firmCode + ' news email';
+  var ok = await sendEmail(env, env.ADMIN_EMAIL, subject, shell.text, shell.html);
+  return ok ? { sent: true, to: env.ADMIN_EMAIL, items: (biz.items || []).length + '+' + alsoSection.reduce(function(n,s){ return n + (s.items||[]).length; }, 0) } : { error: 'send_failed' };
 }
 
 /* The whole morning job for one firm: news → move → actions email → news email. */
@@ -2256,6 +2390,9 @@ async function personaliseNews(env, firmCode, day, context, sections, cost) {
         '- Say "No direct effect on your business." whenever the link would be a stretch. ' +
         'Never invent an effect from unrelated news (politics, celebrity, sport).\n' +
         '- Give an effect ONLY when the news changes this business\'s costs, demand, customers, rules or competitors.\n' +
+        '- Local civic issues (water supply, traffic, power cuts, crime, local politics, weather) ' +
+        'are "No direct effect on your business." unless they directly change this trade\'s costs, ' +
+        'demand, rules or site work for a named customer group in the same week.\n' +
         '- Never invent facts beyond the item. Never give investment or loan advice.\n' +
         'Reply with ONLY JSON: {"<id>":{"why":"","impact":"","group":"","horizon":""}, ...}',
       messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
@@ -2583,6 +2720,7 @@ export {
   clipOneSentence, dedupeItems, sourceMatchCheck, failsRelevanceGate,
   checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
   lastSharedNews, shortHash, watchlistHash, isBillingError,
+  renderNewsBody, newsGreetingName, displayName,
   TRUSTED_NEWS_DOMAINS, COST_TABLE, NEWS_CATS
 };
 
@@ -3182,6 +3320,25 @@ export default {
         await env.G7_KV.delete('cron:paused');
       }
       return jsonResponse({ success: true, paused: !!body.paused });
+    }
+
+    // POST /admin/test-news-email — { adminPassword, firmCode }
+    // Renders today's cached news as an email and sends to ADMIN_EMAIL only.
+    // No generation — uses whatever is already in KV.
+    if (request.method === 'POST' && path === '/admin/test-news-email') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      const firmCode = String(body.firmCode || '').toUpperCase().trim();
+      if (!firmCode) return jsonResponse({ error: 'firmCode required' }, 400);
+      try {
+        var result = await sendTestNewsEmail(env, firmCode);
+        return jsonResponse(result);
+      } catch (e) {
+        return jsonResponse({ error: String((e && e.message) || e).slice(0, 300) }, 500);
+      }
     }
 
     // ── ROUTE 9 — POST /admin/reset-password ──────────────────────────────────
