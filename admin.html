@@ -861,8 +861,16 @@ async function regenNews(firmCode, shared) {
     var items = (data.news && data.news.business && data.news.business.items) || [];
     var wl = log.watchlist || {};
     var qs = log.queryStrings || [];
-    var msg = 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n\n' +
-      '── WATCHLIST ──\n' +
+    var fb = data.fallback;
+    var sp = data.spend || {};
+    var msg = '';
+    if (fb) {
+      msg += '⚠ FAILURE — stage: ' + (fb.stage || '?') + '\n' +
+             'Reason: ' + (fb.reason || 'unknown') + '\n\n';
+    }
+    msg += 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n';
+    msg += 'Spend today: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n\n';
+    msg += '── WATCHLIST ──\n' +
       'Materials: ' + ((wl.materials && wl.materials.length) ? wl.materials.join(', ') : '(none)') + '\n' +
       'Triggers: ' + ((wl.triggers && wl.triggers.length) ? wl.triggers.join(', ') : '(none)') + '\n' +
       'Localities: ' + ((wl.localities && wl.localities.length) ? wl.localities.join(', ') : '(none)') + '\n' +

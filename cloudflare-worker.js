@@ -186,7 +186,7 @@ async function budgetCheck(env, day, firmCode, opts) {
   if (firmSpent >= firmCap) {
     return { ok: false, reason: 'firm', firmSpent: firmSpent, cap: firmCap };
   }
-  return { ok: true, firmSpent: firmSpent };
+  return { ok: true, firmSpent: firmSpent, cap: firmCap };
 }
 
 /* Shared-news cost cap — checked before generating shared categories in cron. */
@@ -3508,11 +3508,42 @@ export default {
         const effectivePrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs);
         /* Admin regen — exempt from feature gates and budget guard. */
         var cost = newCostAccum();
-        const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
+        var news = null, _regenFallback = null;
+        try {
+          news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
+        } catch (e) {
+          var _errMsg = String((e && e.message) || e).slice(0, 300);
+          /* Infer stage from error message patterns. */
+          var _stage = 'assemble';
+          if (/watchlist/i.test(_errMsg)) _stage = 'watchlist';
+          else if (/search|web_search|tool_use/i.test(_errMsg)) _stage = 'search';
+          else if (/pick|write|sonnet/i.test(_errMsg)) _stage = 'pick';
+          _regenFallback = { fallback: true, stage: _stage, reason: _errMsg };
+        }
+
+        /* Detect soft failures: buildDailyNews swallows errors internally.
+           If the result is stale or placeholder-only, flag it. */
+        if (news && !_regenFallback) {
+          var _bizItems = (news.business && news.business.items) || [];
+          if (news.stale) {
+            _regenFallback = { fallback: true, stage: 'search', reason: 'Generation failed; showing stale cache from ' + (news.staleDate || 'earlier') };
+          } else if (_bizItems.length === 1 && _bizItems[0]._placeholder) {
+            _regenFallback = { fallback: true, stage: 'search', reason: 'No items survived quality gates; showing placeholder' };
+          } else if (_bizItems.length === 0 && !(news.business)) {
+            _regenFallback = { fallback: true, stage: 'search', reason: 'No business brief generated' };
+          }
+        }
+
+        /* Firm spend and cap for admin visibility. */
+        var _bc = await budgetCheck(env, day, firmCode);
+        var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
+
         var bizLog = (news && news._log) || null;
-        delete news._log;
+        if (news) delete news._log;
         ctx.waitUntil(flushCost(env, day, firmCode, cost));
-        return jsonResponse({ news: news, log: bizLog, cost: Object.assign({}, cost) });
+        var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo };
+        if (_regenFallback) resp.fallback = _regenFallback;
+        return jsonResponse(resp);
       } catch (e) {
         ctx.waitUntil(flushCost(env, day, firmCode, cost));
         return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
