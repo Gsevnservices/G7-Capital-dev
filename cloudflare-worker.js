@@ -76,6 +76,156 @@ const BLOCKED_SEARCH_DOMAINS = [
   'in.investing.com','tradingview.com'
 ];
 
+/* ── INDUSTRIES ──
+   11 industry verticals. Each firm maps to one via resolveIndustry().
+   Industry news is generated once per day per industry and shared across
+   all firms in that industry. Each entry has rotating search queries
+   (day-of-year modulo picks one per search). */
+const INDUSTRIES = {
+  interior_design: {
+    label: 'Interior design & architecture',
+    types: ['Interior Designer / Architect'],
+    queries: [
+      'interior design material price India',
+      'modular kitchen trends India',
+      'interior design industry India news',
+      'home renovation market India'
+    ]
+  },
+  real_estate: {
+    label: 'Real estate & property',
+    types: ['Real Estate / Property Broker'],
+    queries: [
+      'real estate market India news',
+      'property registration stamp duty India',
+      'housing demand India',
+      'RERA regulation India news'
+    ]
+  },
+  food_service: {
+    label: 'Food & hospitality',
+    types: ['Restaurant / Dhaba / Cafe','Catering Business','Cloud Kitchen'],
+    queries: [
+      'restaurant food business India news',
+      'FSSAI food regulation India',
+      'food delivery market India',
+      'food cost inflation India'
+    ]
+  },
+  retail: {
+    label: 'Retail & wholesale',
+    types: ['Grocery / Supermart','Wholesale / Distribution','Pharmacy / Medical Store',
+            'Stationery / Gift Shop','Clothing / Apparel Store','Jewellery Store',
+            'Furniture / Home Decor','Electronics / Appliance Store',
+            'Hardware / Building Materials','Sweet Shop / Mithai Store',
+            'D2C Brand / Online Store'],
+    queries: [
+      'retail market India news',
+      'consumer spending India',
+      'GST rate change retail India',
+      'FMCG retail trend India'
+    ]
+  },
+  health_wellness: {
+    label: 'Health & wellness',
+    types: ['Gym / Fitness Centre','Salon / Spa / Beauty Parlour',
+            'Medical Clinic / Doctor','Ayurvedic Clinic / Wellness Centre',
+            'Diagnostic Lab / Pathology'],
+    queries: [
+      'healthcare clinic India news',
+      'fitness wellness industry India',
+      'medical regulation India news',
+      'health insurance India policy'
+    ]
+  },
+  education: {
+    label: 'Education & coaching',
+    types: ['Coaching Centre / Tuition','Driving School',
+            'Training / Corporate Learning'],
+    queries: [
+      'education coaching India news',
+      'NEP education policy India',
+      'edtech India market',
+      'skill training India news'
+    ]
+  },
+  auto_repair: {
+    label: 'Automotive & repair',
+    types: ['Automobile Workshop / Garage','Mobile / Electronics Repair'],
+    queries: [
+      'automobile aftermarket India news',
+      'vehicle repair industry India',
+      'EV electric vehicle India news',
+      'auto spare parts India'
+    ]
+  },
+  services_trade: {
+    label: 'Local services & trade',
+    types: ['Courier / Logistics','Printing / Packaging','Event Management',
+            'Photography / Videography','Travel Agency / Tour Operator',
+            'Security Agency / Manpower Supply','Tailoring / Garment Stitching'],
+    queries: [
+      'small business India news',
+      'MSME India policy news',
+      'local services market India',
+      'gig economy India news'
+    ]
+  },
+  digital_agency: {
+    label: 'Digital & marketing agencies',
+    types: ['Digital Marketing Agency'],
+    queries: [
+      'digital marketing India news',
+      'social media advertising India',
+      'Google Meta ad policy change',
+      'digital agency India market'
+    ]
+  },
+  professional: {
+    label: 'Professional services',
+    types: ['CA / Accounting Firm','Legal Firm / Lawyer',
+            'Consulting / Advisory Firm','B2B Services',
+            'Recruitment / Staffing Firm'],
+    queries: [
+      'professional services India news',
+      'income tax GST compliance India',
+      'legal regulatory India news',
+      'consulting staffing India market'
+    ]
+  },
+  tech: {
+    label: 'IT & software',
+    types: ['IT Services / Software Company','SaaS / Software Product'],
+    queries: [
+      'IT services India news',
+      'SaaS startup India',
+      'technology India policy regulation',
+      'software outsourcing India market'
+    ]
+  }
+};
+
+/* Map a business type string (from onboard.html BT_BUCKET) to an INDUSTRIES key.
+   Returns null when no match (caller should fall back to 'services_trade'). */
+function resolveIndustry(businessType) {
+  if (!businessType) return null;
+  var bt = String(businessType).trim();
+  for (var key in INDUSTRIES) {
+    if (INDUSTRIES[key].types.indexOf(bt) !== -1) return key;
+  }
+  return null;
+}
+
+/* Resolve industry for a firm from its scout state. */
+async function resolveIndustryForFirm(env, firmCode) {
+  var st = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
+  if (!st) return 'services_trade';
+  /* scout_state stores sub-keys as top-level properties. */
+  var pend = st.scout_pending_result || null;
+  var bt = (pend && pend.businessData && pend.businessData.businessType) || '';
+  return resolveIndustry(bt) || 'services_trade';
+}
+
 /* Normalise a city string that may contain neighbourhood/state parts.
    "Gomti Nagar, Lucknow, Uttar Pradesh" → "Lucknow" (second-to-last when 3+ parts).
    "Gomti Nagar, Lucknow" → "Lucknow" (last part when 2 parts).
@@ -1885,73 +2035,84 @@ function renderNewsBody(news) {
     } catch (e) {}
   }
 
-  /* ── YOUR BUSINESS ── */
-  if (bizItems.length > 0) {
-    htmlParts.push(emailHeading('Your business'));
-    textParts.push('YOUR BUSINESS');
-    bizItems.forEach(function(it) {
-      /* Placeholder item */
-      if (it._placeholder) {
-        htmlParts.push(emailGreyRow(it.headline || ''));
-        textParts.push('  ' + (it.headline || ''));
-        return;
-      }
-      if (!firstHeadline) firstHeadline = it.headline || '';
-      var url = emailSafeUrl(it.sourceUrl || '');
-      var h = '';
-      if (it._fromDay) h += '<div style="font-size:11px;color:#999;margin-bottom:2px">From ' + escEmail(it._fromDay) + '</div>';
-      h += '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
-      if (it._marketLine) {
-        /* Markets today — compact: headline + source only */
-      } else {
-        var why = (it.why || it.whyItMatters || '').trim();
-        if (why && why !== noEffect) h += '<div style="font-size:13px;color:#555;margin-top:4px">' + escEmail(why) + '</div>';
-        if (it.whatToDo) h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo) + '</div>';
-      }
-      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
-      htmlParts.push(emailRow(h));
-      var t = (it._fromDay ? '  (From ' + it._fromDay + ') ' : '  ') + (it.headline || '');
-      if (!it._marketLine) {
-        var twhy = (it.why || it.whyItMatters || '').trim();
-        if (twhy && twhy !== noEffect) t += '\n  ' + twhy;
-        if (it.whatToDo) t += '\n  Do this: ' + it.whatToDo;
-      }
-      if (it.sourceUrl) t += '\n  Source: ' + it.sourceUrl;
-      textParts.push(t);
-    });
+  /* Helper: render a business-style item (headline + why + Do this + source). */
+  function renderBizItem(it) {
+    if (!firstHeadline && !it._placeholder) firstHeadline = it.headline || '';
+    if (it._placeholder) {
+      htmlParts.push(emailGreyRow(it.headline || ''));
+      textParts.push('  ' + (it.headline || ''));
+      return;
+    }
+    var url = emailSafeUrl(it.sourceUrl || '');
+    var h = '';
+    if (it._fromDay) h += '<div style="font-size:11px;color:#999;margin-bottom:2px">From ' + escEmail(it._fromDay) + '</div>';
+    h += '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
+    if (it._marketLine) {
+      /* Markets today — compact: headline + source only */
+    } else {
+      var why = (it.why || it.whyItMatters || '').trim();
+      if (why && why !== noEffect) h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
+      if (it.whatToDo) h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo) + '</div>';
+    }
+    if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
+    htmlParts.push(emailRow(h));
+    var t = (it._fromDay ? '  (From ' + it._fromDay + ') ' : '  ') + (it.headline || '');
+    if (!it._marketLine) {
+      var twhy = (it.why || it.whyItMatters || '').trim();
+      if (twhy && twhy !== noEffect) t += '\n  For you: ' + twhy;
+      if (it.whatToDo) t += '\n  Do this: ' + it.whatToDo;
+    }
+    if (it.sourceUrl) t += '\n  Source: ' + it.sourceUrl;
+    textParts.push(t);
   }
 
-  /* ── ALSO WORTH KNOWING (sections) ── */
+  /* ── SECTIONS ──
+     Industry sections render like business items (For you + Do this).
+     Other sections render as "Also worth knowing" style (whatHappened + For you). */
   sections.forEach(function(sec) {
     var items = (sec.items && sec.items.length) ? sec.items : [];
     if (!items.length) return;
-    htmlParts.push(emailHeading(sec.label || 'News'));
-    textParts.push(String(sec.label || 'NEWS').toUpperCase());
-    items.forEach(function(it) {
-      if (!firstHeadline) firstHeadline = it.headline || '';
-      var url = emailSafeUrl(it.sourceUrl || '');
-      var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
-      if (it._marketLine) {
-        /* Markets today — compact: headline + source only */
-      } else {
-        if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
-        var why = (it.why || '').trim();
-        if (why && why !== noEffect) {
-          h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
+    if (sec.category === 'industry') {
+      /* Industry section renders like "Your business" with For you + Do this. */
+      htmlParts.push(emailHeading('Your industry'));
+      textParts.push('YOUR INDUSTRY');
+      items.forEach(renderBizItem);
+    } else {
+      htmlParts.push(emailHeading(sec.label || 'News'));
+      textParts.push(String(sec.label || 'NEWS').toUpperCase());
+      items.forEach(function(it) {
+        if (!firstHeadline) firstHeadline = it.headline || '';
+        var url = emailSafeUrl(it.sourceUrl || '');
+        var h = '<div style="font-weight:600">' + escEmail(it.headline || '') + '</div>';
+        if (it._marketLine) {
+          /* Markets today — compact: headline + source only */
+        } else {
+          if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
+          var why = (it.why || '').trim();
+          if (why && why !== noEffect) {
+            h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
+          }
         }
-      }
-      if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
-      htmlParts.push(emailRow(h));
-      var t = '  ' + (it.headline || '');
-      if (!it._marketLine) {
-        if (it.whatHappened) t += '\n  ' + it.whatHappened;
-        var twhy = (it.why || '').trim();
-        if (twhy && twhy !== noEffect) t += '\n  For you: ' + twhy;
-      }
-      if (it.sourceUrl) t += '\n  Source: ' + it.sourceUrl;
-      textParts.push(t);
-    });
+        if (url) h += '<div style="margin-top:4px"><a href="' + escEmail(url) + '" style="font-size:12px;color:#888">' + escEmail(it.sourceTitle || 'Source') + '</a></div>';
+        htmlParts.push(emailRow(h));
+        var t = '  ' + (it.headline || '');
+        if (!it._marketLine) {
+          if (it.whatHappened) t += '\n  ' + it.whatHappened;
+          var twhy = (it.why || '').trim();
+          if (twhy && twhy !== noEffect) t += '\n  For you: ' + twhy;
+        }
+        if (it.sourceUrl) t += '\n  Source: ' + it.sourceUrl;
+        textParts.push(t);
+      });
+    }
   });
+
+  /* ── YOUR AREA (weekly local business news) ── */
+  if (bizItems.length > 0) {
+    htmlParts.push(emailHeading('Your area'));
+    textParts.push('YOUR AREA');
+    bizItems.forEach(renderBizItem);
+  }
 
   return { htmlParts: htmlParts, textParts: textParts, firstHeadline: firstHeadline };
 }
@@ -2428,25 +2589,172 @@ async function generateSharedNews(env, cat, day, city, cost) {
   return result;
 }
 
+/* ── Industry news ──
+   Generated once per day per industry and shared across all firms in that
+   industry. Uses blocked_domains (not allowed_domains) like business search.
+   All quality gates from generateSharedNews apply. */
+async function generateIndustryNews(env, industryKey, day, cost) {
+  var def = INDUSTRIES[industryKey];
+  if (!def) return { items: [] };
+  var cacheKey = 'news:industry:' + industryKey + ':' + day;
+  var cached = await env.G7_KV.get(cacheKey, 'json');
+  if (cached) return cached;
+
+  /* Pick one rotating query per search (day-of-year modulo). */
+  var qs = def.queries || [];
+  if (!qs.length) return { items: [] };
+  var _d = new Date(day + 'T12:00:00+05:30');
+  var _jan1 = new Date(_d.getFullYear(), 0, 1);
+  var _doy = Math.floor((_d - _jan1) / 86400000);
+  var query = qs[_doy % qs.length];
+
+  var system =
+    'You are a careful news editor. Today is ' + day + ' (India).\n' +
+    'Find the most important recent news about: ' + def.label + '.\n\n' +
+    'RULES:\n' +
+    '- Only events from the last 48 hours: announced, launched, raised, cut, approved, opened, closed.\n' +
+    '- No guides, explainers, "how to", "what is", rate tables, checklists.\n' +
+    '- Only from pages you actually found. Never invent a fact, figure or date.\n' +
+    '- Copy every number exactly as the source states it.\n' +
+    '- Nothing older than 48 hours.\n' +
+    '- Return 3 to 5 items, most important first.\n' +
+    '- Every item must be about ' + def.label + '. Drop anything unrelated.\n' +
+    '- sourceUrl must be the article that states the fact, never a home page.\n\n' +
+    'Reply with ONLY this JSON:\n' +
+    '{"items":[{"headline":"under 12 words","whatHappened":"one sentence, under 30 words",' +
+    '"sourceTitle":"","sourceUrl":""}]}';
+
+  /* Filter out UA-blocked domains. */
+  var _uaBlocked = await getBlockedDomains(env, BLOCKED_SEARCH_DOMAINS);
+
+  async function ask() {
+    var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 3 };
+    tool.blocked_domains = Array.from(_uaBlocked);
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
+                 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
+        system: system, tools: [tool],
+        messages: [{ role: 'user', content: query }]
+      })
+    });
+  }
+
+  var r = await ask();
+  if (r.status === 400) {
+    var errText = await r.text();
+    var _rejected = await parseAndStoreBlockedUa(env, errText);
+    if (!_rejected) throw new Error('industry ' + industryKey + ' 400: ' + errText.slice(0, 300));
+    _rejected.forEach(function(d) { _uaBlocked.add(d); });
+    console.log(JSON.stringify({ industryDomainsBlocked: _rejected, industry: industryKey }));
+    r = await ask();
+  }
+  if (!r.ok) throw new Error('industry ' + industryKey + ' ' + r.status + ': ' + (await r.text()).slice(0, 300));
+  var data = await r.json();
+  recordCost(cost, 'claude-haiku-5-5', data);
+
+  /* Collect real API metadata. */
+  var meta = collectSearchMeta(data);
+
+  /* Parse JSON from text blocks. */
+  var text = (data.content || []).filter(function(b){ return b.type === 'text'; })
+    .map(function(b){ return b.text; }).join('');
+  var parsed = { items: [] };
+  try {
+    var a = text.indexOf('{'), z = text.lastIndexOf('}');
+    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+  } catch (e) {}
+
+  /* Integrity gate: URL in search results, not home page, not listing/quote, not evergreen. */
+  var drops = [];
+  var afterIntegrity = (Array.isArray(parsed.items) ? parsed.items : [])
+    .filter(function(it) {
+      if (!it || !it.headline || !it.sourceUrl) return false;
+      if (!meta.seen.has(it.sourceUrl)) { drops.push({ headline: it.headline, reason: 'URL not in search results' }); return false; }
+      if (isHomePage(it.sourceUrl)) { drops.push({ headline: it.headline, reason: 'home/section page' }); return false; }
+      if (isListingOrQuote(it.sourceUrl)) { drops.push({ headline: it.headline, reason: 'listing/quote portal' }); return false; }
+      var evg = evergreenCheck(meta.titles[it.sourceUrl] || it.headline, meta.pageAge[it.sourceUrl]);
+      if (!evg.pass) { drops.push({ headline: it.headline, reason: evg.reason }); return false; }
+      return true;
+    })
+    .slice(0, 8);
+
+  /* Source-match gate. */
+  var afterSourceMatch = afterIntegrity
+    .filter(function(it) {
+      var check = sourceMatchCheck(it.headline, it.sourceUrl, meta);
+      if (!check.pass) { drops.push({ headline: it.headline, reason: 'source-match: ' + check.reason }); return false; }
+      return true;
+    })
+    .slice(0, 5)
+    .map(function(it) {
+      return cleanNewsItem({
+        headline: String(it.headline).slice(0, 120),
+        whatHappened: clipOneSentence(it.whatHappened),
+        sourceTitle: stripCite(String(meta.titles[it.sourceUrl] || '')).slice(0, 160),
+        sourceUrl: it.sourceUrl
+      });
+    });
+
+  /* Dedupe. */
+  var kept = dedupeItems(afterSourceMatch);
+
+  if (drops.length) {
+    try { console.log(JSON.stringify({ industryNewsLog: industryKey, day: day, query: query, candidates: (parsed.items || []).length, kept: kept.length, drops: drops })); } catch(e){}
+  }
+
+  var result = { category: 'industry', industry: industryKey, label: def.label, items: kept, date: day, query: query };
+  await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
+
+  /* Persist as last-known-good. */
+  if (kept.length > 0) {
+    await kvPut(env, 'news:last:industry:' + industryKey, JSON.stringify(result));
+  }
+
+  return result;
+}
+
+/* Last-known-good industry news fallback (mirrors lastSharedNews pattern). */
+async function lastIndustryNews(env, industryKey) {
+  return env.G7_KV.get('news:last:industry:' + industryKey, 'json');
+}
+
 /* Per firm, no search: tag every item with why, impact, group, horizon.
    Cheap model — the facts are already verified. */
 async function personaliseNews(env, firmCode, day, context, sections, cost) {
   const key = 'news:sig:' + firmCode + ':' + day;
   const cached = await env.G7_KV.get(key, 'json');
   if (cached) return cached;
+  /* Mark which items are industry items — they get whatToDo too. */
+  var industryIds = new Set();
   const flat = [];
   sections.forEach(function(s, si) {
     (s.items || []).forEach(function(it, ii) {
-      flat.push({ id: si + '.' + ii, headline: it.headline, whatHappened: it.whatHappened || it.whyItMatters || '' });
+      var id = si + '.' + ii;
+      flat.push({ id: id, headline: it.headline, whatHappened: it.whatHappened || it.whyItMatters || '' });
+      if (s.category === 'industry') industryIds.add(id);
     });
   });
   if (!flat.length) return {};
+  /* Industry items get an extra field: whatToDo. */
+  var hasIndustry = industryIds.size > 0;
+  var whatToDoLine = hasIndustry
+    ? '\n  whatToDo: (ONLY for items marked [INDUSTRY]) one concrete action under 15 words ' +
+      'the owner should take this week because of this news, or "" if no action\n'
+    : '';
+  /* Tag industry items so the model knows which ones get whatToDo. */
+  var taggedFlat = flat.map(function(it) {
+    if (industryIds.has(it.id)) return Object.assign({}, it, { _industry: true });
+    return it;
+  });
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-haiku-5-5', max_tokens: 2000, thinking: { type: 'disabled' },
+      model: 'claude-haiku-5-5', max_tokens: 2500, thinking: { type: 'disabled' },
       system: 'For each news item, judge what it means for the business described.\n' +
         'Return for each id an object:\n' +
         '  why: ONE sentence under 25 words on the concrete effect on this business, ' +
@@ -2455,7 +2763,7 @@ async function personaliseNews(env, firmCode, day, context, sections, cost) {
         'competitor, regulation, timing, none\n' +
         '  group: the name of the business\'s customer group most affected, copied ' +
         'exactly from the business description, or ""\n' +
-        '  horizon: now (this week), weeks, or months\n\n' +
+        '  horizon: now (this week), weeks, or months' + whatToDoLine + '\n\n' +
         'STRICT RULES:\n' +
         '- Say "No direct effect on your business." whenever the link would be a stretch. ' +
         'Never invent an effect from unrelated news (politics, celebrity, sport).\n' +
@@ -2463,10 +2771,12 @@ async function personaliseNews(env, firmCode, day, context, sections, cost) {
         '- Local civic issues (water supply, traffic, power cuts, crime, local politics, weather) ' +
         'are "No direct effect on your business." unless they directly change this trade\'s costs, ' +
         'demand, rules or site work for a named customer group in the same week.\n' +
+        (hasIndustry ? '- Items with _industry:true are industry news. Give them a whatToDo action when the effect is real.\n' : '') +
         '- Never invent facts beyond the item. Never give investment or loan advice.\n' +
-        'Reply with ONLY JSON: {"<id>":{"why":"","impact":"","group":"","horizon":""}, ...}',
+        'Reply with ONLY JSON: {"<id>":{"why":"","impact":"","group":"","horizon":""' +
+        (hasIndustry ? ',"whatToDo":""' : '') + '}, ...}',
       messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
-        '\n\nITEMS:\n' + JSON.stringify(flat) }]
+        '\n\nITEMS:\n' + JSON.stringify(taggedFlat) }]
     })
   });
   let out = {};
@@ -2479,9 +2789,10 @@ async function personaliseNews(env, firmCode, day, context, sections, cost) {
       if (a !== -1 && z > a) out = JSON.parse(t.slice(a, z + 1));
     } catch (e) {}
   }
-  /* Strip citation markup from every why field. */
+  /* Strip citation markup from why and whatToDo fields. */
   Object.keys(out).forEach(function(k) {
     if (out[k] && out[k].why) out[k].why = stripCite(out[k].why);
+    if (out[k] && out[k].whatToDo) out[k].whatToDo = stripCite(out[k].whatToDo);
   });
   await kvPut(env,key, JSON.stringify(out), { expirationTtl: 172800 });
   return out;
@@ -2513,14 +2824,16 @@ async function resolveNewsPrefs(env, firmCode, rawPrefs) {
 }
 
 /* ── assembleNews ──
-   Reads cached business brief + shared sections + personalisation tags from KV.
-   Builds the final news object (same shape as GET /scout/news returns).
+   Reads cached industry news + weekly local + shared sections + personalisation
+   from KV. Builds the final news object.
+   Section order: Your industry → Your business (weekly local) → Also worth knowing
    opts:
-     context  — business context string (needed for personaliseNews)
-     city     — firm's city
-     prefs    — array of NEWS_CATS keys
-     cost     — cost accumulator (personaliseNews may make an API call on miss)
-     cacheOnly — when true, return null if no business cache exists (never generate)
+     context   — business context string (needed for personaliseNews)
+     city      — firm's city
+     prefs     — array of NEWS_CATS keys
+     cost      — cost accumulator
+     cacheOnly — when true, return null if nothing cached (never generate)
+     industry  — INDUSTRIES key for this firm (from resolveIndustryForFirm)
    All three consumers — GET /scout/news, sendNewsEmail, sendTestNewsEmail —
    call this so they can never drift. */
 async function assembleNews(env, firmCode, day, opts) {
@@ -2529,62 +2842,112 @@ async function assembleNews(env, firmCode, day, opts) {
   var prefs = opts.prefs || [];
   var cost = opts.cost || newCostAccum();
   var cacheOnly = !!opts.cacheOnly;
+  var industry = opts.industry || '';
 
-  /* ── Business brief ── */
-  var business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
+  /* Resolve industry if not passed. */
+  if (!industry) {
+    try { industry = await resolveIndustryForFirm(env, firmCode); } catch(e) { industry = 'services_trade'; }
+  }
+
+  var errors = [];
+
+  /* ── 1. Industry news from cache ── */
+  var industrySec = null;
+  var indCacheKey = 'news:industry:' + industry + ':' + day;
+  industrySec = await env.G7_KV.get(indCacheKey, 'json');
+  if (!industrySec) industrySec = await lastIndustryNews(env, industry);
+  if (!industrySec || !industrySec.items || !industrySec.items.length) {
+    errors.push({ category: 'industry:' + industry, error: 'no cache' });
+    industrySec = null;
+  }
+
+  /* ── 2. Weekly local (business brief) from cache ── */
+  var _dayDate = new Date(day + 'T06:00:00+05:30');
+  var _weekday = _dayDate.getUTCDay();
+  var _mondayOffset = (_weekday === 0) ? -6 : (1 - _weekday);
+  var _monday = new Date(_dayDate.getTime() + _mondayOffset * 86400000);
+  var _mondayDay = _monday.toISOString().slice(0, 10);
+  var business = await env.G7_KV.get('market:' + firmCode + ':local:' + _mondayDay, 'json')
+              || await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
   var stale = false;
   if (!business) {
     var last = await lastMarketBrief(env, firmCode, day);
     if (last) { business = last; stale = true; }
-    else if (cacheOnly) return null;
+    else if (cacheOnly && !industrySec) return null;
   }
 
-  /* ── Shared sections from cache ── */
+  /* ── 3. Shared sections from cache ── */
   var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
-  var sections = [];
-  var errors = [];
+  var sharedSections = [];
   var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
   for (var ci = 0; ci < chosen.length; ci++) {
     var c = chosen[ci];
     var cacheKey = 'news:' + c + (c === 'city' ? ':' + citySlug : '') + ':' + day;
     var sec = await env.G7_KV.get(cacheKey, 'json');
     if (!sec) sec = await lastSharedNews(env, c, citySlug);
-    if (sec && sec.items && sec.items.length) sections.push(sec);
+    if (sec && sec.items && sec.items.length) sharedSections.push(sec);
     else errors.push({ category: c, error: 'no cache' });
   }
 
-  /* Clean citation markup from cached items. */
+  /* Clean citation markup from all cached items. */
+  if (industrySec && industrySec.items) industrySec.items.forEach(cleanNewsItem);
   if (business && business.items) business.items.forEach(cleanNewsItem);
-  sections.forEach(function(s) { if (s.items) s.items.forEach(cleanNewsItem); });
+  sharedSections.forEach(function(s) { if (s.items) s.items.forEach(cleanNewsItem); });
 
-  /* ── Personalisation tags (cached or generated) ── */
-  var all = [{ category: 'business', items: (business && business.items) || [] }].concat(sections);
+  /* ── 4. Personalisation tags ──
+     Section order for personalisation: [industry, business, ...shared].
+     Industry items get whatToDo in addition to why/impact/group/horizon. */
+  var allForSig = [];
+  if (industrySec) allForSig.push(industrySec);
+  allForSig.push({ category: 'business', items: (business && business.items) || [] });
+  allForSig = allForSig.concat(sharedSections);
+
   var sig;
   if (cacheOnly) {
     sig = await env.G7_KV.get('news:sig:' + firmCode + ':' + day, 'json') || {};
   } else {
-    sig = await personaliseNews(env, firmCode, day, context, all, cost);
+    sig = await personaliseNews(env, firmCode, day, context, allForSig, cost);
   }
-  (all[0].items || []).forEach(function(it, ii) {
-    var v = sig['0.' + ii];
-    if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
-    if (v) { it.impact = v.impact || 'none'; it.group = v.group || ''; it.horizon = v.horizon || ''; }
-  });
-  sections.forEach(function(s, si) {
-    s.items = (s.items || []).map(function(it, ii) {
-      var v = sig[(si + 1) + '.' + ii];
+
+  /* Apply tags to all sections. */
+  var NO_EFFECT = 'No direct effect on your business.';
+  allForSig.forEach(function(s, si) {
+    (s.items || []).forEach(function(it, ii) {
+      var v = sig[si + '.' + ii];
       if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
-      if (v) return Object.assign({}, it, { why: v.why || '', impact: v.impact || 'none', group: v.group || '', horizon: v.horizon || '' });
-      return Object.assign({}, it, { why: '' });
+      if (v) {
+        it.why = v.why || '';
+        it.impact = v.impact || 'none';
+        it.group = v.group || '';
+        it.horizon = v.horizon || '';
+        /* Industry items get whatToDo (written as whyItMatters for business-style rendering). */
+        if (s.category === 'industry' && v.whatToDo) {
+          it.whatToDo = v.whatToDo;
+          /* Also promote why to whyItMatters for consistent rendering. */
+          if (it.why && it.why.trim() !== NO_EFFECT) it.whyItMatters = it.why;
+        }
+      }
     });
   });
 
-  /* ── "Also worth knowing" merge ── */
-  var NO_EFFECT = 'No direct effect on your business.';
+  /* ── 5. Build output sections ── */
+
+  /* 5a. "Your industry" — industry items with real effect, ranked by impact. */
   var _impactRank = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
                       competitor:3, timing:3, lead_source:2, none:0 };
+  var industryItems = [];
+  if (industrySec && industrySec.items) {
+    industryItems = industrySec.items.filter(function(it) {
+      return it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT;
+    });
+    industryItems.sort(function(a, b) {
+      return (_impactRank[b.impact] || 0) - (_impactRank[a.impact] || 0);
+    });
+  }
+
+  /* 5b. "Also worth knowing" — shared section items with real effect + market lines. */
   var alsoPool = [];
-  sections.forEach(function(s) {
+  sharedSections.forEach(function(s) {
     (s.items || []).forEach(function(it) {
       if (it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT) {
         alsoPool.push(it);
@@ -2599,12 +2962,12 @@ async function assembleNews(env, firmCode, day, opts) {
     alsoSection = [{ category: 'also', label: 'Also worth knowing', items: alsoPool.slice(0, 3) }];
   }
 
-  /* ── Markets today compact lines ── */
+  /* Markets today compact lines. */
   var _marketCats = ['india_markets', 'global'];
   var _marketItems = [];
   _marketCats.forEach(function(mc) {
     if (chosen.indexOf(mc) === -1) return;
-    var sec = sections.filter(function(s) { return s.category === mc; })[0];
+    var sec = sharedSections.filter(function(s) { return s.category === mc; })[0];
     if (!sec || !sec.items || !sec.items.length) return;
     _marketItems.push(Object.assign({}, sec.items[0], { _marketLine: true }));
   });
@@ -2613,42 +2976,88 @@ async function assembleNews(env, firmCode, day, opts) {
     alsoSection[0].items = alsoSection[0].items.concat(_marketItems);
   }
 
-  /* ── Final object ── */
+  /* 5c. Assemble final sections array:
+     [Your industry (if items)] + [Also worth knowing (if items)] */
+  var finalSections = [];
+  if (industryItems.length > 0) {
+    var indLabel = (INDUSTRIES[industry] && INDUSTRIES[industry].label) || 'Your industry';
+    finalSections.push({ category: 'industry', label: indLabel, items: industryItems.slice(0, 4) });
+  }
+  finalSections = finalSections.concat(alsoSection);
+
+  /* ── 6. Final object ── */
   var bizLog = (business && business._log) || null;
   if (business) delete business._log;
-  var out = { business: business, sections: alsoSection, errors: errors, generatedAt: (business && business.generatedAt) || new Date().toISOString() };
+  var out = {
+    business: business,
+    sections: finalSections,
+    errors: errors,
+    industry: industry,
+    generatedAt: (business && business.generatedAt) || (industrySec && industrySec.date) || new Date().toISOString()
+  };
   if (stale) { out.stale = true; out.staleDate = (business && business.date) || ''; }
   out._log = bizLog;
   return out;
 }
 
-/* Everything a firm reads today: generate business brief + shared categories
-   into their caches, then assemble the final object via assembleNews.
+/* Everything a firm reads today: industry news (shared) + weekly local
+   search + shared categories, then assemble the final object.
    Used by cron, admin regen-news, GET /scout/news, GET /scout/move. */
 async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
-  /* ── Generate business brief ── */
-  var stale = false;
   var _genError = null;
   var _capturedLog = null;
-  let business = await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
-  if (!business) {
-    try {
-      business = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
-      /* Capture _log before assembleNews re-reads from KV (where _log is not persisted). */
-      if (business && business._log) _capturedLog = business._log;
-    } catch (e) {
-      var bizErr = String((e && e.message) || e).slice(0, 300);
-      console.log(JSON.stringify({ newsFallback: firmCode, reason: bizErr }));
-      if (isBillingError(e)) await sendCreditAlert(env, day);
-      /* Tag the error so admin regen can surface it. */
-      var _s = 'search';
-      if (/watchlist/i.test(bizErr)) _s = 'watchlist';
-      else if (/pick|write|sonnet/i.test(bizErr)) _s = 'pick';
-      _genError = { stage: _s, reason: bizErr };
+
+  /* ── 1. Industry news (shared, cached by industry key) ── */
+  var industry = await resolveIndustryForFirm(env, firmCode);
+  try {
+    await generateIndustryNews(env, industry, day, cost);
+  } catch (e) {
+    var indErr = String((e && e.message) || e).slice(0, 300);
+    console.log(JSON.stringify({ industryNewsFallback: firmCode, industry: industry, reason: indErr }));
+    if (isBillingError(e)) await sendCreditAlert(env, day);
+    _genError = { stage: 'industry', reason: indErr };
+  }
+
+  /* ── 2. Weekly local search (Monday only, 7-day cache) ──
+     Uses the existing per-firm generateMarketBrief for local business news.
+     Runs on Mondays; other days read the Monday cache. */
+  var _dayDate = new Date(day + 'T06:00:00+05:30');
+  var _weekday = _dayDate.getUTCDay(); /* 0=Sun .. 6=Sat (approximate in IST) */
+  /* Find Monday of this week. */
+  var _mondayOffset = (_weekday === 0) ? -6 : (1 - _weekday);
+  var _monday = new Date(_dayDate.getTime() + _mondayOffset * 86400000);
+  var _mondayDay = _monday.toISOString().slice(0, 10);
+  var _localCacheKey = 'market:' + firmCode + ':local:' + _mondayDay;
+  var localBrief = await env.G7_KV.get(_localCacheKey, 'json');
+  if (!localBrief) {
+    /* Only generate on Monday (or if no cache exists yet for this week). */
+    var _isMonday = (day === _mondayDay);
+    if (_isMonday) {
+      try {
+        var _raw = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
+        if (_raw && _raw._log) _capturedLog = _raw._log;
+        /* Store under the weekly local key with 7-day TTL. */
+        if (_raw) {
+          delete _raw._log;
+          await kvPut(env, _localCacheKey, JSON.stringify(_raw), { expirationTtl: 7 * 86400 });
+          /* Also write to the standard daily key so assembleNews can find it. */
+          await kvPut(env, 'market:' + firmCode + ':' + day, JSON.stringify(_raw), { expirationTtl: 172800 });
+        }
+        localBrief = _raw;
+      } catch (e) {
+        var localErr = String((e && e.message) || e).slice(0, 300);
+        console.log(JSON.stringify({ localNewsFallback: firmCode, reason: localErr }));
+        if (isBillingError(e)) await sendCreditAlert(env, day);
+        if (!_genError) _genError = { stage: 'local_search', reason: localErr };
+      }
+    }
+    /* Non-Monday with no cache: try last-good. */
+    if (!localBrief) {
+      localBrief = await lastMarketBrief(env, firmCode, day);
     }
   }
 
-  /* ── Generate shared sections ── */
+  /* ── 3. Shared sections (policy, markets, city, global) ── */
   var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
   var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
   for (var ci = 0; ci < chosen.length; ci++) {
@@ -2666,10 +3075,9 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
     }
   }
 
-  /* ── Assemble from caches ── */
-  var result = await assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost });
+  /* ── 4. Assemble from caches ── */
+  var result = await assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost, industry: industry });
   if (result) {
-    /* Re-attach ephemeral fields captured before assembleNews re-read from KV. */
     if (_capturedLog) result._log = _capturedLog;
     if (_genError) result._genError = _genError;
   }
@@ -2686,21 +3094,26 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
     if (cached) return cached;
   }
 
-  /* Signals: business items plus section items with a real effect. Numbered. */
+  /* Signals: section items (industry first, then also-worth-knowing) plus
+     weekly local business items. Industry items carry whyItMatters + whatToDo. */
   const signals = [];
-  ((news && news.business && news.business.items) || []).forEach(function(it) {
-    signals.push({ i: signals.length, headline: it.headline, what: it.whatHappened, why: it.whyItMatters,
-                   impact: it.impact || 'none', group: it.group || '', horizon: it.horizon || '',
-                   sourceTitle: it.sourceTitle || '', sourceUrl: it.sourceUrl || '' });
-  });
   ((news && news.sections) || []).forEach(function(s) {
     (s.items || []).forEach(function(it) {
       if (it.impact && it.impact !== 'none') {
-        signals.push({ i: signals.length, headline: it.headline, what: it.whatHappened, why: it.why,
+        signals.push({ i: signals.length, headline: it.headline,
+                       what: it.whatHappened || '', why: it.whyItMatters || it.why || '',
+                       whatToDo: it.whatToDo || '',
                        impact: it.impact, group: it.group || '', horizon: it.horizon || '',
                        sourceTitle: it.sourceTitle || '', sourceUrl: it.sourceUrl || '' });
       }
     });
+  });
+  ((news && news.business && news.business.items) || []).forEach(function(it) {
+    if (it._placeholder || it._fromDay) return;
+    signals.push({ i: signals.length, headline: it.headline, what: it.whatHappened || '',
+                   why: it.whyItMatters || '', whatToDo: it.whatToDo || '',
+                   impact: it.impact || 'none', group: it.group || '', horizon: it.horizon || '',
+                   sourceTitle: it.sourceTitle || '', sourceUrl: it.sourceUrl || '' });
   });
 
   /* Pipeline summary — counts and the people due, never phone numbers. */
@@ -2831,12 +3244,13 @@ export {
   newCostAccum, recordCost, flushCost, kvPut,
   buildWatchlist, getWatchlist, searchBusinessNews, pickAndWriteNews,
   generateMarketBrief, buildDailyNews, assembleNews, generateSharedNews, personaliseNews,
+  generateIndustryNews, lastIndustryNews, resolveIndustry, resolveIndustryForFirm,
   resolveNewsPrefs, collectSearchMeta, cleanNewsItem, stripCite, clip,
   clipOneSentence, dedupeItems, sourceMatchCheck, failsRelevanceGate,
   checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
   lastSharedNews, shortHash, watchlistHash, isBillingError,
   renderNewsBody, newsGreetingName, displayName, normaliseCity,
-  TRUSTED_NEWS_DOMAINS, BLOCKED_SEARCH_DOMAINS, COST_TABLE, NEWS_CATS
+  TRUSTED_NEWS_DOMAINS, BLOCKED_SEARCH_DOMAINS, COST_TABLE, NEWS_CATS, INDUSTRIES
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3608,10 +4022,20 @@ export default {
       const saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
       if (!saved || !saved.context) return jsonResponse({ error: 'no_context' }, 404);
       try {
-        /* Delete business brief cache + personalisation tags + watchlist (force rebuild). */
+        /* Delete caches: weekly local + daily business brief + personalisation + watchlist. */
         await env.G7_KV.delete('market:' + firmCode + ':' + day);
         await env.G7_KV.delete('news:sig:' + firmCode + ':' + day);
         await env.G7_KV.delete('market:watch:' + firmCode);
+        /* Also clear weekly local cache for this week's Monday. */
+        var _rdDay = new Date(day + 'T06:00:00+05:30');
+        var _rdWd = _rdDay.getUTCDay();
+        var _rdMondayOff = (_rdWd === 0) ? -6 : (1 - _rdWd);
+        var _rdMonday = new Date(_rdDay.getTime() + _rdMondayOff * 86400000);
+        await env.G7_KV.delete('market:' + firmCode + ':local:' + _rdMonday.toISOString().slice(0, 10));
+        /* Clear industry cache for this firm's industry. */
+        var _regenIndustry = 'services_trade';
+        try { _regenIndustry = await resolveIndustryForFirm(env, firmCode); } catch(e){}
+        await env.G7_KV.delete('news:industry:' + _regenIndustry + ':' + day);
 
         /* Optionally nuke shared category caches too. */
         if (body.shared) {
@@ -3668,7 +4092,7 @@ export default {
         var _bc = await budgetCheck(env, day, firmCode);
         var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
 
-        var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo };
+        var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo, industry: _regenIndustry };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
       } catch (e) {
@@ -5071,9 +5495,10 @@ export default {
     report.state = 'running';
     await kvPut(env,'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
 
-    /* B6: Pre-generate shared categories only when at least one active firm
-       needs them. Collect needed categories across all firms first. */
+    /* B6: Pre-generate shared categories + industry news.
+       Scan active firms to collect needed categories and industries. */
     var _neededCats = new Set();
+    var _neededIndustries = new Set();
     var _firmCities = {};
     let cursor0;
     do {
@@ -5095,6 +5520,11 @@ export default {
         var city0 = (ctx0 && ctx0.city) || '';
         _firmCities[fc0] = city0;
         (Array.isArray(prefs0) ? prefs0 : []).forEach(function(c) { if (NEWS_CATS[c]) _neededCats.add(c); });
+        /* Collect needed industries for this firm. */
+        try {
+          var ind0 = await resolveIndustryForFirm(env, fc0);
+          _neededIndustries.add(ind0);
+        } catch (e) { _neededIndustries.add('services_trade'); }
       }
       cursor0 = pg.list_complete ? undefined : pg.cursor;
     } while (cursor0);
@@ -5106,6 +5536,15 @@ export default {
       console.log(JSON.stringify({ sharedBudgetSkip: true, spent: _sbc.spent, cap: _sbc.cap }));
     }
     var cost = newCostAccum();
+
+    /* Pre-generate industry news (one per distinct industry). */
+    for (var _ind of _neededIndustries) {
+      if (!_sbc.ok) break;
+      try { await generateIndustryNews(env, _ind, day, cost); } catch (e) {
+        console.log(JSON.stringify({ industryPregenError: _ind, error: String(e && e.message || e).slice(0, 300) }));
+      }
+    }
+
     var _distinctCities = new Set();
     Object.values(_firmCities).forEach(function(c) { if (c) _distinctCities.add(c); });
     for (var _cat of _neededCats) {
