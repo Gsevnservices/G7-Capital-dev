@@ -52,6 +52,29 @@
 // The Anthropic endpoint this worker proxies to
 const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 
+/* Shared fetch wrapper for all Anthropic API calls.
+   If the response is 403 with "Request not allowed" (region block), waits 1 s
+   and retries once. Logs the colo (from _anthropicColo, set by the fetch
+   handler) or "cron" with the error. Throws a clear message on second failure. */
+var _anthropicColo = 'cron';
+async function anthropicFetch(url, init) {
+  var r = await fetch(url, init);
+  if (r.status === 403) {
+    var body403 = await r.text();
+    if (/request not allowed/i.test(body403)) {
+      console.log(JSON.stringify({ anthropic403: true, colo: _anthropicColo, body: body403.slice(0, 200), retry: true }));
+      await new Promise(function(ok) { setTimeout(ok, 1000); });
+      r = await fetch(url, init);
+      if (r.status === 403) {
+        var body403b = await r.text();
+        console.log(JSON.stringify({ anthropic403: true, colo: _anthropicColo, body: body403b.slice(0, 200), retry: false }));
+        throw new Error('Anthropic blocked this request (' + _anthropicColo + ') \u2014 check Worker placement');
+      }
+    }
+  }
+  return r;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TRUSTED NEWS DOMAINS — used by the business news search (searchBusinessNews).
 // Edit this list when adding or removing sources.
@@ -913,7 +936,7 @@ function watchlistHash(context) {
    Small Haiku call — extracts materials, triggers, localities, etc. */
 async function buildWatchlist(env, firmCode, context, cost) {
   var hash = watchlistHash(context);
-  var r = await fetch('https://api.anthropic.com/v1/messages', {
+  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
@@ -1189,7 +1212,7 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     });
   }
 
-  var r = await fetch('https://api.anthropic.com/v1/messages', {
+  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
@@ -1204,7 +1227,7 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     _newlyBlocked.forEach(function(d) { _blocked.add(d); });
     tool.blocked_domains = Array.from(_blocked);
     console.log(JSON.stringify({ bizSearchUaBlocked: _newlyBlocked }));
-    r = await fetch('https://api.anthropic.com/v1/messages', {
+    r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                  'anthropic-version': '2023-06-01' },
@@ -1221,7 +1244,7 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
   if (meta.seen.size === 0) {
     var toolOpen = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3 };
     if (city) toolOpen.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
-    var r2 = await fetch('https://api.anthropic.com/v1/messages', {
+    var r2 = await anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                  'anthropic-version': '2023-06-01' },
@@ -1336,7 +1359,7 @@ async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
     '"urgency":"","scope":"","sourceUrl":""}],' +
     '"rejected":[{"sourceUrl":"","reason":""}]}';
 
-  var r = await fetch('https://api.anthropic.com/v1/messages', {
+  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
@@ -2342,7 +2365,7 @@ async function findBusinesses(env, query, cap, cost) {
     '{"businesses":[{"name":"","address":"area and city","phone":"exactly as printed",' +
     '"website":"","sourceUrl":"the page you read it on"}]}';
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2530,7 +2553,7 @@ async function generateSharedNews(env, cat, day, city, cost) {
   async function ask(domains) {
     const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 2 };
     if (domains.length) tool.allowed_domains = domains;
-    return fetch('https://api.anthropic.com/v1/messages', {
+    return anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                  'anthropic-version': '2023-06-01' },
@@ -2672,7 +2695,7 @@ async function generateIndustryNews(env, industryKey, day, cost) {
   async function ask() {
     var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 3 };
     tool.blocked_domains = Array.from(_uaBlocked);
-    return fetch('https://api.anthropic.com/v1/messages', {
+    return anthropicFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                  'anthropic-version': '2023-06-01' },
@@ -2804,7 +2827,7 @@ async function personaliseNews(env, firmCode, day, context, sections, cost) {
     if (industryIds.has(it.id)) return Object.assign({}, it, { _industry: true });
     return it;
   });
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
@@ -3246,7 +3269,7 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
     '\n\nTODAY\'S PLAN STEP: ' + (step ? JSON.stringify({ action: step.action, target: step.target }) : 'none') +
     '\n\nRECENT MOVES: ' + JSON.stringify(recent);
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
@@ -3312,6 +3335,9 @@ export {
 // ─────────────────────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
+
+    // Set colo for Anthropic 403 logging (cron handler sets it to 'cron').
+    _anthropicColo = (request.cf && request.cf.colo) || 'unknown';
 
     // Normalise pathname — strip trailing slash so /auth/login and
     // /auth/login/ both match
@@ -3395,7 +3421,7 @@ export default {
       // never visible to the browser
       let anthropicResponse;
       try {
-        anthropicResponse = await fetch(ANTHROPIC_ENDPOINT, {
+        anthropicResponse = await anthropicFetch(ANTHROPIC_ENDPOINT, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -4309,7 +4335,7 @@ export default {
       /* Analysis exempt from firm cost cap — existing monthly limit gate above is sufficient. */
       var cost = newCostAccum();
 
-      const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      const anthropicResponse = await anthropicFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4484,7 +4510,7 @@ export default {
       await featureIncrement(env, _fgB);
       var cost = newCostAccum();
 
-      const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      const anthropicResponse = await anthropicFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4654,7 +4680,7 @@ export default {
       }
       var cost = newCostAccum();
 
-      const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      const anthropicResponse = await anthropicFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -5541,6 +5567,7 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
+    _anthropicColo = 'cron';
     const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
     const day = ist.toISOString().slice(0, 10);
     const report = { day: day, startedAt: new Date().toISOString(), firms: [] };
