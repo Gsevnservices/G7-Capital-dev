@@ -2797,8 +2797,11 @@ async function generateIndustryNews(env, industryKey, day, cost) {
         recordCost(cost, 'claude-haiku-5-5', _j2);
         var _txt2 = (_j2.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('\n');
         var _meta2 = collectSearchMeta(_j2);
-        var _parsed2;
-        try { _parsed2 = JSON.parse(_txt2); } catch(e) { _parsed2 = { items: [] }; }
+        var _parsed2 = { items: [] };
+        try {
+          var _a2 = _txt2.indexOf('{'), _z2 = _txt2.lastIndexOf('}');
+          if (_a2 !== -1 && _z2 > _a2) _parsed2 = JSON.parse(_txt2.slice(_a2, _z2 + 1));
+        } catch(e) {}
         var _items2 = Array.isArray(_parsed2.items) ? _parsed2.items : [];
         /* Run same quality gates on retry items. */
         var _after2 = _items2.filter(function(it) {
