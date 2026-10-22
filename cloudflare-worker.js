@@ -206,24 +206,72 @@ const INDUSTRIES = {
 };
 
 /* Map a business type string (from onboard.html BT_BUCKET) to an INDUSTRIES key.
+   1. Exact match on types array.
+   2. Keyword match on type text + optional sells context.
    Returns null when no match (caller should fall back to 'services_trade'). */
-function resolveIndustry(businessType) {
-  if (!businessType) return null;
-  var bt = String(businessType).trim();
-  for (var key in INDUSTRIES) {
-    if (INDUSTRIES[key].types.indexOf(bt) !== -1) return key;
+var _INDUSTRY_KW = [
+  { key: 'interior_design', re: /interior|modular|furniture|kitchen/i },
+  { key: 'food_service',    re: /restaurant|cafe|food|catering|cloud kitchen|dhaba/i },
+  { key: 'health_wellness', re: /gym|salon|spa|clinic|doctor|fitness|wellness|diagnostic|pathology/i },
+  { key: 'education',       re: /coaching|tuition|school|training|driving school/i },
+  { key: 'professional',    re: /\bCA\b|accountant|legal|lawyer|consult|advocate|chartered/i },
+  { key: 'real_estate',     re: /property|real estate|broker|RERA/i },
+  { key: 'auto_repair',     re: /garage|repair|auto|workshop|automobile/i },
+  { key: 'tech',            re: /software|IT services|\bSaaS\b|tech company/i },
+  { key: 'digital_agency',  re: /marketing agency|digital agency/i },
+  { key: 'retail',          re: /shop|store|retail|wholesale|trader|pharmacy|jeweller|hardware/i }
+];
+
+function resolveIndustry(businessType, sells) {
+  if (!businessType && !sells) return null;
+  var bt = String(businessType || '').trim();
+  /* 1. Exact match on types array. */
+  if (bt) {
+    for (var key in INDUSTRIES) {
+      if (INDUSTRIES[key].types.indexOf(bt) !== -1) return key;
+    }
+  }
+  /* 2. Keyword match on type text + sells context. */
+  var haystack = bt + ' ' + String(sells || '');
+  for (var ki = 0; ki < _INDUSTRY_KW.length; ki++) {
+    if (_INDUSTRY_KW[ki].re.test(haystack)) return _INDUSTRY_KW[ki].key;
   }
   return null;
 }
 
-/* Resolve industry for a firm from its scout state. */
+/* Resolve industry for a firm from its scout state.
+   Caches the result as scout_industry in the firm's state so it's computed once.
+   Uses loadScoutState + st.pick() like the rest of the worker. */
 async function resolveIndustryForFirm(env, firmCode) {
-  var st = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
+  var st = await loadScoutState(env, firmCode);
   if (!st) return 'services_trade';
-  /* scout_state stores sub-keys as top-level properties. */
-  var pend = st.scout_pending_result || null;
-  var bt = (pend && pend.businessData && pend.businessData.businessType) || '';
-  return resolveIndustry(bt) || 'services_trade';
+  /* Check cached value first. */
+  var cached = st.pick('scout_industry');
+  if (cached && INDUSTRIES[cached]) {
+    return cached;
+  }
+  /* Resolve from businessType / businessTypeInput / sells. */
+  var pend = st.pick('scout_pending_result') || {};
+  var bt = (pend.businessData && pend.businessData.businessType) || '';
+  var bti = (pend.businessData && pend.businessData.businessTypeInput) || '';
+  var sells = '';
+  /* Extract SELLS: line from context if available. */
+  var ctx = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  if (ctx && ctx.context) {
+    var sellsLine = String(ctx.context).split('\n').filter(function(l){ return l.indexOf('SELLS:') === 0; })[0];
+    if (sellsLine) sells = sellsLine.replace('SELLS:', '').trim();
+  }
+  var resolved = resolveIndustry(bt, sells) || resolveIndustry(bti, sells) || 'services_trade';
+  console.log(JSON.stringify({ resolveIndustry: firmCode, type: bt || bti, sells: sells.slice(0, 80), key: resolved }));
+  /* Persist so it's computed once. */
+  try {
+    var blob = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
+    if (blob) {
+      blob.scout_industry = resolved;
+      await kvPut(env, 'firms:' + firmCode + ':scout_state', JSON.stringify(blob));
+    }
+  } catch (e) {}
+  return resolved;
 }
 
 /* Normalise a city string that may contain neighbourhood/state parts.
@@ -2050,6 +2098,7 @@ function renderNewsBody(news) {
     if (it._marketLine) {
       /* Markets today — compact: headline + source only */
     } else {
+      if (it.whatHappened) h += '<div style="font-size:13px;color:#888;margin-top:4px">' + escEmail(it.whatHappened) + '</div>';
       var why = (it.why || it.whyItMatters || '').trim();
       if (why && why !== noEffect) h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">For you</span>' + escEmail(why) + '</div>';
       if (it.whatToDo) h += '<div style="margin-top:4px"><span style="color:#B8862B;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-right:6px">Do this</span>' + escEmail(it.whatToDo) + '</div>';
@@ -2058,6 +2107,7 @@ function renderNewsBody(news) {
     htmlParts.push(emailRow(h));
     var t = (it._fromDay ? '  (From ' + it._fromDay + ') ' : '  ') + (it.headline || '');
     if (!it._marketLine) {
+      if (it.whatHappened) t += '\n  ' + it.whatHappened;
       var twhy = (it.why || it.whyItMatters || '').trim();
       if (twhy && twhy !== noEffect) t += '\n  For you: ' + twhy;
       if (it.whatToDo) t += '\n  Do this: ' + it.whatToDo;
@@ -2688,8 +2738,21 @@ async function generateIndustryNews(env, industryKey, day, cost) {
       if (!check.pass) { drops.push({ headline: it.headline, reason: 'source-match: ' + check.reason }); return false; }
       return true;
     })
-    .slice(0, 5)
-    .map(function(it) {
+    .slice(0, 6);
+
+  /* Freshness gate: drop items older than 3 days, max 1 undated. */
+  var _indUndated = 0;
+  var afterFresh = afterSourceMatch.filter(function(it) {
+    var age = checkPageAge(meta.pageAge[it.sourceUrl], 3);
+    if (age.dated && !age.pass) { drops.push({ headline: it.headline, reason: 'industry: older than 3 days' }); return false; }
+    if (!age.dated) {
+      _indUndated++;
+      if (_indUndated > 1) { drops.push({ headline: it.headline, reason: 'industry: undated cap (max 1)' }); return false; }
+    }
+    return true;
+  });
+
+  var cleaned = afterFresh.slice(0, 5).map(function(it) {
       return cleanNewsItem({
         headline: String(it.headline).slice(0, 120),
         whatHappened: clipOneSentence(it.whatHappened),
@@ -2699,7 +2762,7 @@ async function generateIndustryNews(env, industryKey, day, cost) {
     });
 
   /* Dedupe. */
-  var kept = dedupeItems(afterSourceMatch);
+  var kept = dedupeItems(cleaned);
 
   if (drops.length) {
     try { console.log(JSON.stringify({ industryNewsLog: industryKey, day: day, query: query, candidates: (parsed.items || []).length, kept: kept.length, drops: drops })); } catch(e){}
@@ -2932,14 +2995,13 @@ async function assembleNews(env, firmCode, day, opts) {
 
   /* ── 5. Build output sections ── */
 
-  /* 5a. "Your industry" — industry items with real effect, ranked by impact. */
+  /* 5a. "Your industry" — show ALL kept items (max 4), no impact filter.
+     Items with a real effect sort first; "No direct effect" items follow. */
   var _impactRank = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
                       competitor:3, timing:3, lead_source:2, none:0 };
   var industryItems = [];
   if (industrySec && industrySec.items) {
-    industryItems = industrySec.items.filter(function(it) {
-      return it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT;
-    });
+    industryItems = (industrySec.items || []).slice();
     industryItems.sort(function(a, b) {
       return (_impactRank[b.impact] || 0) - (_impactRank[a.impact] || 0);
     });
@@ -4092,7 +4154,13 @@ export default {
         var _bc = await budgetCheck(env, day, firmCode);
         var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
 
-        var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo, industry: _regenIndustry };
+        /* Read the industry query from the cached industry news result. */
+        var _indResult = await env.G7_KV.get('news:industry:' + _regenIndustry + ':' + day, 'json');
+        var _indQuery = (_indResult && _indResult.query) || '';
+        var _indItemCount = (_indResult && _indResult.items) ? _indResult.items.length : 0;
+
+        var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo,
+                     industry: _regenIndustry, industryQuery: _indQuery, industryItems: _indItemCount };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
       } catch (e) {

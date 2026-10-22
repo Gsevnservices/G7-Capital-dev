@@ -869,7 +869,12 @@ async function regenNews(firmCode, shared) {
              'Reason: ' + (fb.reason || 'unknown') + '\n\n';
     }
     msg += 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n';
-    msg += 'Spend today: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n\n';
+    msg += 'Spend today: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n';
+    if (data.industry) {
+      msg += 'Industry: ' + data.industry + (data.industryQuery ? '  →  "' + data.industryQuery + '"' : '') +
+             '  [' + (data.industryItems || 0) + ' items]\n';
+    }
+    msg += '\n';
     msg += '── WATCHLIST ──\n' +
       'Materials: ' + ((wl.materials && wl.materials.length) ? wl.materials.join(', ') : '(none)') + '\n' +
       'Triggers: ' + ((wl.triggers && wl.triggers.length) ? wl.triggers.join(', ') : '(none)') + '\n' +
