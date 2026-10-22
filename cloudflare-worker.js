@@ -76,6 +76,19 @@ const BLOCKED_SEARCH_DOMAINS = [
   'in.investing.com','tradingview.com'
 ];
 
+/* Normalise a city string that may contain neighbourhood/state parts.
+   "Gomti Nagar, Lucknow, Uttar Pradesh" → "Lucknow" (second-to-last when 3+ parts).
+   "Gomti Nagar, Lucknow" → "Lucknow" (last part when 2 parts).
+   "Lucknow" → "Lucknow" (no commas, return as-is). */
+function normaliseCity(raw) {
+  var s = String(raw || '').trim();
+  if (!s) return '';
+  var parts = s.split(',').map(function(p) { return p.trim(); }).filter(Boolean);
+  if (parts.length >= 3) return parts[parts.length - 2];
+  if (parts.length === 2) return parts[parts.length - 1];
+  return parts[0];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: CORS HEADERS
 // All responses must include these so GitHub Pages (a different origin)
@@ -748,14 +761,8 @@ async function buildWatchlist(env, firmCode, context, cost) {
      names — they don't need to contain the city name. If nothing remains,
      fall back to the city itself. */
   var _bizLine = String(context || '').split('\n').filter(function(l){ return l.indexOf('BUSINESS:') === 0; })[0] || '';
-  var _bizCity = '';
   var _bizParts = _bizLine.replace('BUSINESS:', '').split('|');
-  if (_bizParts.length >= 3) {
-    var _locPart = _bizParts[_bizParts.length - 1].trim();
-    var _comma = _locPart.lastIndexOf(',');
-    if (_comma !== -1) _bizCity = _locPart.slice(_comma + 1).trim();
-    else _bizCity = _locPart;
-  }
+  var _bizCity = _bizParts.length >= 3 ? normaliseCity(_bizParts[_bizParts.length - 1].trim()) : '';
   if (_bizCity && wl.localities.length) {
     var _cityLower = _bizCity.toLowerCase();
     var _contextLower = String(context || '').toLowerCase();
@@ -903,6 +910,7 @@ async function parseAndStoreBlockedUa(env, errText) {
 
 async function searchBusinessNews(env, day, context, city, watchlist, told, macroOnly, cost) {
   /* Build exactly 3 queries in code — one per search, rotating by day-of-year. */
+  city = normaliseCity(city);
 
   /* Day-of-year for rotation. */
   var _dayDate = new Date(day + 'T12:00:00+05:30');
@@ -2827,7 +2835,7 @@ export {
   clipOneSentence, dedupeItems, sourceMatchCheck, failsRelevanceGate,
   checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
   lastSharedNews, shortHash, watchlistHash, isBillingError,
-  renderNewsBody, newsGreetingName, displayName,
+  renderNewsBody, newsGreetingName, displayName, normaliseCity,
   TRUSTED_NEWS_DOMAINS, BLOCKED_SEARCH_DOMAINS, COST_TABLE, NEWS_CATS
 };
 
