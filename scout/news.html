@@ -115,9 +115,6 @@ window.addEventListener('DOMContentLoaded', async function() {
     wrap.innerHTML = '<div class="news-empty">No news yet \u2014 Scout is getting set up.</div>';
     return;
   }
-  /* Handle "From <weekday>" for never-empty fallback items. */
-  var _bizFromDay = (news && news.business && news.business.fromDay) || '';
-
   /* Group items by their _label, preserving order. */
   var groups = [];
   var groupMap = {};
@@ -148,14 +145,16 @@ window.addEventListener('DOMContentLoaded', async function() {
         html += '</div>';
         return;
       }
-      if (it._fromDay) {
-        html += '<div style="font-size:11px;color:var(--grey2);margin-bottom:4px">From ' + escHtml(it._fromDay) + '</div>';
-      }
       html += '<div class="news-headline">' + escHtml(it.headline || '') + '</div>';
       if (it._marketLine) {
         /* Markets today — compact: headline + source only, no "for you" line. */
-      } else if (why && why !== noEffect) {
-        html += '<div class="news-why">' + escHtml(why) + '</div>';
+      } else {
+        if (it.whatHappened) {
+          html += '<div style="font-size:13px;color:var(--grey1);margin-top:4px;line-height:1.5">' + escHtml(it.whatHappened) + '</div>';
+        }
+        if (why && why !== noEffect) {
+          html += '<div class="news-why">' + escHtml(why) + '</div>';
+        }
       }
       if (it.whatToDo && !it._marketLine) {
         html += '<div class="news-do"><b>Do this</b>' + escHtml(it.whatToDo) + '</div>';

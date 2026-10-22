@@ -1427,9 +1427,9 @@ function scoutMarketRender(items) {
 
 /* scoutNewsLoad is now in scout.js — shared with news.html */
 
-/* Dashboard: headline-only view, capped at 5 — 2 business max, then
-   first item of each section. Uses _idx from scoutNewsFlatItems so
-   anchors match news.html exactly. */
+/* Dashboard: headline-only view, capped at 5 — first item of each
+   label, up to 2 from "Your area". Uses _idx from scoutNewsFlatItems
+   so anchors match news.html exactly. */
 function scoutNewsRender(news) {
   var el = document.getElementById('ccMarket');
   if (!el) return;
@@ -1439,12 +1439,12 @@ function scoutNewsRender(news) {
     return;
   }
   var show = [];
-  var bizCount = 0;
+  var areaCount = 0;
   var seenLabel = {};
   for (var i = 0; i < flat.length && show.length < 5; i++) {
     var it = flat[i];
-    if (it._label === 'Your business') {
-      if (bizCount < 2) { show.push(it); bizCount++; }
+    if (it._label === 'Your area') {
+      if (areaCount < 2) { show.push(it); areaCount++; }
     } else {
       if (!seenLabel[it._label]) { show.push(it); seenLabel[it._label] = true; }
     }

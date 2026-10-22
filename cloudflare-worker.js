@@ -842,17 +842,18 @@ function isListingOrQuote(u) {
 /* Recency gate from page_age string (e.g. "3 days ago", "2 weeks ago",
    "5 hours ago", "2025-10-12"). Returns { recent: bool, dated: bool }. */
 function checkPageAge(pageAge, maxDays) {
-  if (!pageAge) return { recent: true, dated: false }; /* undated — keep */
+  if (!pageAge) return { recent: true, dated: false, _days: 999 }; /* undated — keep */
   var s = String(pageAge).toLowerCase().trim();
   /* Try ISO date first. */
   var d = new Date(s);
   if (!isNaN(d.getTime())) {
     var age = (Date.now() + 5.5 * 3600 * 1000) - d.getTime();
-    return { recent: age >= 0 && age <= maxDays * 86400 * 1000, dated: true };
+    var _isoDays = Math.max(0, Math.floor(age / 86400000));
+    return { recent: age >= 0 && age <= maxDays * 86400 * 1000, dated: true, _days: _isoDays };
   }
   /* Parse relative: "X unit(s) ago" */
   var m = s.match(/(\d+)\s*(second|minute|hour|day|week|month|year)/);
-  if (!m) return { recent: true, dated: false }; /* unparseable — keep */
+  if (!m) return { recent: true, dated: false, _days: 999 }; /* unparseable — keep */
   var n = parseInt(m[1], 10);
   var unit = m[2];
   var days = 0;
@@ -861,7 +862,7 @@ function checkPageAge(pageAge, maxDays) {
   else if (unit === 'week') days = n * 7;
   else if (unit === 'month') days = n * 30;
   else if (unit === 'year') days = n * 365;
-  return { recent: days <= maxDays, dated: true };
+  return { recent: days <= maxDays, dated: true, _days: days };
 }
 
 /* Same-topic dedupe: if two items share ≥3 meaningful headline words,
@@ -1293,8 +1294,8 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     if (isListingOrQuote(c.sourceUrl)) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'listing/quote portal', cat: catName }); return false; }
     if (toldUrls.has(c.sourceUrl)) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'already told', cat: catName }); return false; }
     /* Recency from API page_age — not the model's publishedDate. */
-    var age = checkPageAge(meta.pageAge[c.sourceUrl], 10);
-    if (age.dated && !age.recent) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'older than 10 days (page_age: ' + meta.pageAge[c.sourceUrl] + ')', cat: catName }); return false; }
+    var age = checkPageAge(meta.pageAge[c.sourceUrl], 30);
+    if (age.dated && !age.recent) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'older than 30 days (page_age: ' + meta.pageAge[c.sourceUrl] + ')', cat: catName }); return false; }
     /* Evergreen/guide gate: drop guides, explainers, rate tables unless very recent. */
     var evg = evergreenCheck(meta.titles[c.sourceUrl], meta.pageAge[c.sourceUrl]);
     if (!evg.pass) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: evg.reason, cat: catName }); return false; }
@@ -1302,7 +1303,7 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
     return true;
   }).map(function(c) {
     var catName = searchLabels[c.search] || 'macro';
-    var age = checkPageAge(meta.pageAge[c.sourceUrl], 10);
+    var age = checkPageAge(meta.pageAge[c.sourceUrl], 30);
     /* Headline from API title, not model — trimmed and capped. */
     var apiTitle = stripCite(String(meta.titles[c.sourceUrl] || '').trim());
     return {
@@ -1311,12 +1312,17 @@ async function searchBusinessNews(env, day, context, city, watchlist, told, macr
       sourceUrl: c.sourceUrl,
       scope: catName === 'macro' ? 'macro' : 'micro',
       dated: age.dated,
+      _ageDays: age._days,
       _cat: catName
     };
   });
 
-  /* Sort dated candidates first so Step b prefers them. */
-  vetted.sort(function(a, b) { return (b.dated ? 1 : 0) - (a.dated ? 1 : 0); });
+  /* Sort: dated first, then newest first (fewest days ago). */
+  vetted.sort(function(a, b) {
+    var d = (b.dated ? 1 : 0) - (a.dated ? 1 : 0);
+    if (d !== 0) return d;
+    return (a._ageDays || 999) - (b._ageDays || 999);
+  });
 
   var catLog = Object.keys(catRaw).map(function(k) { return { cat: k, raw: catRaw[k], vetted: catVetted[k] || 0 }; });
 
@@ -1518,7 +1524,7 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
   /* At most one undated item in "Your business" — dated items are more trustworthy. */
   var _undatedCount = 0;
   items = items.filter(function(it) {
-    var age = checkPageAge(search.meta.pageAge[it.sourceUrl], 10);
+    var age = checkPageAge(search.meta.pageAge[it.sourceUrl], 30);
     if (!age.dated) {
       _undatedCount++;
       if (_undatedCount > 1) {
@@ -1561,45 +1567,24 @@ async function generateMarketBrief(env, firmCode, day, context, city, macroOnly,
   };
   try { console.log(JSON.stringify(_newsLog)); } catch (e) {}
 
-  /* ── NEVER EMPTY: if 0 items survived, pull last-good day's items ── */
-  var _fromDay = '';
-  if (items.length === 0) {
-    var _lastGood = await lastMarketBrief(env, firmCode, day);
-    if (_lastGood && _lastGood.items && _lastGood.items.length) {
-      var _lgDate = _lastGood.date || '';
-      var _wd = '';
-      try { _wd = new Date(_lgDate + 'T12:00:00+05:30').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'Asia/Kolkata' }); } catch (e) {}
-      items = _lastGood.items.slice(0, 3).map(function(it) {
-        return Object.assign({}, it, { _fromDay: _wd || _lgDate });
-      });
-      _fromDay = _wd || _lgDate;
-      _newsLog.neverEmpty = { fromDate: _lgDate, fromDay: _wd, itemCount: items.length };
-    }
-    if (items.length === 0) {
-      items = [{ headline: 'No new changes for your trade today.', _placeholder: true }];
-      _newsLog.neverEmpty = { placeholder: true };
-    }
-  }
+  /* If nothing survived, return empty — the weekly "Your area" section is simply omitted. */
 
   const result = {
     items: items,
     date: day,
     dropped: afterPick - items.length
   };
-  if (_fromDay) result.fromDay = _fromDay;
   result.generatedAt = new Date().toISOString();
   const cacheKey = 'market:' + firmCode + ':' + day;
   await kvPut(env,cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
 
-  /* Persist as last-known-good for fallback when generation fails.
-     Don't overwrite with fallback items or placeholders. */
-  if (items.length > 0 && !_fromDay && !items[0]._placeholder) {
+  /* Persist as last-known-good. */
+  if (items.length > 0) {
     await kvPut(env,'market:last:' + firmCode, JSON.stringify(result));
   }
 
-  /* Append today's items to history, keep last 15.
-     Don't re-add last-good items — they're already in history. */
-  if (!_fromDay && !items[0]._placeholder) {
+  /* Append today's items to history, keep last 15. */
+  if (items.length > 0) {
     const nextHist = history.concat(items.map(function(it){
       return { headline: it.headline, sourceUrl: it.sourceUrl, date: day };
     })).slice(-15);
@@ -2755,16 +2740,25 @@ async function generateIndustryNews(env, industryKey, day, cost) {
     })
     .slice(0, 6);
 
-  /* Freshness gate: drop items older than 3 days, max 1 undated. */
+  /* Freshness gate: drop items older than 7 days, max 1 undated. */
   var _indUndated = 0;
   var afterFresh = afterSourceMatch.filter(function(it) {
-    var age = checkPageAge(meta.pageAge[it.sourceUrl], 3);
-    if (age.dated && !age.recent) { drops.push({ headline: it.headline, reason: 'industry: older than 3 days' }); return false; }
+    var age = checkPageAge(meta.pageAge[it.sourceUrl], 7);
+    if (age.dated && !age.recent) { drops.push({ headline: it.headline, reason: 'industry: older than 7 days' }); return false; }
     if (!age.dated) {
       _indUndated++;
       if (_indUndated > 1) { drops.push({ headline: it.headline, reason: 'industry: undated cap (max 1)' }); return false; }
     }
     return true;
+  });
+
+  /* Sort: dated first, newest first. */
+  afterFresh.sort(function(a, b) {
+    var ageA = checkPageAge(meta.pageAge[a.sourceUrl], 7);
+    var ageB = checkPageAge(meta.pageAge[b.sourceUrl], 7);
+    var d = (ageB.dated ? 1 : 0) - (ageA.dated ? 1 : 0);
+    if (d !== 0) return d;
+    return (ageA._days || 999) - (ageB._days || 999);
   });
 
   var cleaned = afterFresh.slice(0, 5).map(function(it) {
@@ -2812,7 +2806,7 @@ async function generateIndustryNews(env, industryKey, day, cost) {
           if (!evg.pass) return false;
           var sm = sourceMatchCheck(it.headline, it.sourceUrl, _meta2);
           if (!sm.pass) return false;
-          var age = checkPageAge(_meta2.pageAge[it.sourceUrl], 3);
+          var age = checkPageAge(_meta2.pageAge[it.sourceUrl], 7);
           if (age.dated && !age.recent) return false;
           return true;
         }).slice(0, 4).map(function(it) {
@@ -2898,6 +2892,8 @@ async function personaliseNews(env, firmCode, day, context, sections, cost) {
         '- Say "No direct effect on your business." whenever the link would be a stretch. ' +
         'Never invent an effect from unrelated news (politics, celebrity, sport).\n' +
         '- Give an effect ONLY when the news changes this business\'s costs, demand, customers, rules or competitors.\n' +
+        '- impact:"competitor" ONLY when the company in the news operates in the same city/region as this business. ' +
+        'A national or distant competitor is not impact "competitor" — use "none" or the real effect instead.\n' +
         '- Local civic issues (water supply, traffic, power cuts, crime, local politics, weather) ' +
         'are "No direct effect on your business." unless they directly change this trade\'s costs, ' +
         'demand, rules or site work for a named customer group in the same week.\n' +
@@ -3069,11 +3065,14 @@ async function assembleNews(env, firmCode, day, opts) {
     });
   }
 
-  /* 5b. "Also worth knowing" — shared section items with real effect + market lines. */
+  /* 5b. "Also worth knowing" — shared section items with real effect + market lines.
+     Civic items (water, traffic, power cuts, crime, local politics, weather) never appear here. */
+  var _civicRe = /\b(water supply|water cut|traffic|power cut|load.?shedding|crime|robbery|murder|theft|politics|political|weather|rain|flood|heat.?wave|cold.?wave|storm|cyclone)\b/i;
   var alsoPool = [];
   sharedSections.forEach(function(s) {
     (s.items || []).forEach(function(it) {
       if (it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT) {
+        if (_civicRe.test(it.headline || '')) return;
         alsoPool.push(it);
       }
     });
@@ -3086,14 +3085,22 @@ async function assembleNews(env, firmCode, day, opts) {
     alsoSection = [{ category: 'also', label: 'Also worth knowing', items: alsoPool.slice(0, 3) }];
   }
 
-  /* Markets today compact lines. */
+  /* Markets today compact lines — skip if the same story is already in alsoPool. */
   var _marketCats = ['india_markets', 'global'];
+  var _alsoHeadlines = alsoPool.map(function(it) { return (it.headline || '').toLowerCase(); });
   var _marketItems = [];
   _marketCats.forEach(function(mc) {
     if (chosen.indexOf(mc) === -1) return;
     var sec = sharedSections.filter(function(s) { return s.category === mc; })[0];
     if (!sec || !sec.items || !sec.items.length) return;
-    _marketItems.push(Object.assign({}, sec.items[0], { _marketLine: true }));
+    var mIt = sec.items[0];
+    /* Skip if headline words overlap enough with an existing also item (dedupe rule). */
+    var _mWords = (mIt.headline || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(function(w){ return w.length > 3; });
+    var isDupe = _alsoHeadlines.some(function(ah) {
+      var shared = _mWords.filter(function(w){ return ah.indexOf(w) !== -1; }).length;
+      return shared >= 3;
+    });
+    if (!isDupe) _marketItems.push(Object.assign({}, mIt, { _marketLine: true }));
   });
   if (_marketItems.length) {
     if (!alsoSection.length) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
