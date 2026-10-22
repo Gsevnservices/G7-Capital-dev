@@ -2779,11 +2779,60 @@ async function generateIndustryNews(env, industryKey, day, cost) {
   /* Dedupe. */
   var kept = dedupeItems(cleaned);
 
+  /* Retry: if fewer than 2 items survived, try the next rotating query once. */
+  if (kept.length < 2 && qs.length > 1) {
+    var query2 = qs[(_doy + 1) % qs.length];
+    try {
+      var _retryTool = { type: 'web_search_20250305', name: 'web_search', max_uses: 3, blocked_domains: Array.from(_uaBlocked) };
+      var _r2 = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
+          system: system, messages: [{ role: 'user', content: query2 }],
+          tools: [_retryTool]
+        })
+      });
+      if (_r2.ok) {
+        var _j2 = await _r2.json();
+        recordCost(cost, 'claude-haiku-5-5', _j2);
+        var _txt2 = (_j2.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('\n');
+        var _meta2 = collectSearchMeta(_j2);
+        var _parsed2;
+        try { _parsed2 = JSON.parse(_txt2); } catch(e) { _parsed2 = { items: [] }; }
+        var _items2 = Array.isArray(_parsed2.items) ? _parsed2.items : [];
+        /* Run same quality gates on retry items. */
+        var _after2 = _items2.filter(function(it) {
+          if (!it.headline || !it.sourceUrl || !_meta2.seen.has(it.sourceUrl)) return false;
+          if (isHomePage(it.sourceUrl)) return false;
+          if (isListingOrQuote(it.sourceUrl)) return false;
+          var evg = evergreenCheck(_meta2.titles[it.sourceUrl] || it.headline, _meta2.pageAge[it.sourceUrl]);
+          if (!evg.pass) return false;
+          var sm = sourceMatchCheck(it.headline, it.sourceUrl, _meta2);
+          if (!sm.pass) return false;
+          var age = checkPageAge(_meta2.pageAge[it.sourceUrl], 3);
+          if (age.dated && !age.recent) return false;
+          return true;
+        }).slice(0, 4).map(function(it) {
+          return cleanNewsItem({ headline: String(it.headline).slice(0, 120), whatHappened: clipOneSentence(it.whatHappened), sourceTitle: stripCite(String(_meta2.titles[it.sourceUrl] || '')).slice(0, 160), sourceUrl: it.sourceUrl });
+        });
+        /* Merge: add new items that aren't dupes of what we already have. */
+        var _existingHeadlines = kept.map(function(k){ return k.headline.toLowerCase(); });
+        _after2.forEach(function(it) {
+          if (kept.length >= 4) return;
+          if (_existingHeadlines.indexOf(it.headline.toLowerCase()) === -1) kept.push(it);
+        });
+        console.log(JSON.stringify({ industryRetry: industryKey, query2: query2, added: kept.length - cleaned.length }));
+      }
+    } catch(e) {
+      console.log(JSON.stringify({ industryRetryError: industryKey, error: String(e && e.message || e).slice(0, 200) }));
+    }
+  }
+
   if (drops.length) {
     try { console.log(JSON.stringify({ industryNewsLog: industryKey, day: day, query: query, candidates: (parsed.items || []).length, kept: kept.length, drops: drops })); } catch(e){}
   }
 
-  var result = { category: 'industry', industry: industryKey, label: def.label, items: kept, date: day, query: query };
+  var result = { category: 'industry', industry: industryKey, label: def.label, items: kept.slice(0, 4), date: day, query: query };
   await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
 
   /* Persist as last-known-good. */
@@ -2947,12 +2996,7 @@ async function assembleNews(env, firmCode, day, opts) {
   var _mondayDay = _monday.toISOString().slice(0, 10);
   var business = await env.G7_KV.get('market:' + firmCode + ':local:' + _mondayDay, 'json')
               || await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
-  var stale = false;
-  if (!business) {
-    var last = await lastMarketBrief(env, firmCode, day);
-    if (last) { business = last; stale = true; }
-    else if (cacheOnly && !industrySec) return null;
-  }
+  if (!business && cacheOnly && !industrySec) return null;
 
   /* ── 3. Shared sections from cache ── */
   var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
@@ -3072,7 +3116,6 @@ async function assembleNews(env, firmCode, day, opts) {
     industry: industry,
     generatedAt: (business && business.generatedAt) || (industrySec && industrySec.date) || new Date().toISOString()
   };
-  if (stale) { out.stale = true; out.staleDate = (business && business.date) || ''; }
   out._log = bizLog;
   return out;
 }
@@ -3080,7 +3123,8 @@ async function assembleNews(env, firmCode, day, opts) {
 /* Everything a firm reads today: industry news (shared) + weekly local
    search + shared categories, then assemble the final object.
    Used by cron, admin regen-news, GET /scout/news, GET /scout/move. */
-async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
+async function buildDailyNews(env, firmCode, day, context, city, prefs, cost, opts) {
+  var forceLocal = (opts && opts.forceLocal) || false;
   var _genError = null;
   var _capturedLog = null;
 
@@ -3109,7 +3153,7 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
   if (!localBrief) {
     /* Only generate on Monday (or if no cache exists yet for this week). */
     var _isMonday = (day === _mondayDay);
-    if (_isMonday) {
+    if (_isMonday || forceLocal) {
       try {
         var _raw = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
         if (_raw && _raw._log) _capturedLog = _raw._log;
@@ -3127,10 +3171,6 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
         if (isBillingError(e)) await sendCreditAlert(env, day);
         if (!_genError) _genError = { stage: 'local_search', reason: localErr };
       }
-    }
-    /* Non-Monday with no cache: try last-good. */
-    if (!localBrief) {
-      localBrief = await lastMarketBrief(env, firmCode, day);
     }
   }
 
@@ -4141,7 +4181,7 @@ export default {
 
         var news = null, _regenFallback = null;
         try {
-          news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
+          news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost, { forceLocal: true });
         } catch (e) {
           var _errMsg = String((e && e.message) || e).slice(0, 300);
           _regenFallback = { fallback: true, stage: 'assemble', reason: _errMsg };
@@ -4152,19 +4192,7 @@ export default {
           _regenFallback = { fallback: true, stage: news._genError.stage, reason: news._genError.reason };
         }
 
-        /* Detect soft failures: stale, placeholder, _fromDay (last-good fallback), or missing. */
-        if (news && !_regenFallback) {
-          var _bizItems = (news.business && news.business.items) || [];
-          if (news.stale) {
-            _regenFallback = { fallback: true, stage: 'search', reason: 'Generation failed; showing stale cache from ' + (news.staleDate || 'earlier') };
-          } else if (_bizItems.length > 0 && _bizItems[0]._fromDay) {
-            _regenFallback = { fallback: true, stage: 'search', reason: 'No fresh items; showing last-good from ' + _bizItems[0]._fromDay };
-          } else if (_bizItems.length === 1 && _bizItems[0]._placeholder) {
-            _regenFallback = { fallback: true, stage: 'search', reason: 'No items survived quality gates; showing placeholder' };
-          } else if (!news.business) {
-            _regenFallback = { fallback: true, stage: 'search', reason: 'No business brief generated' };
-          }
-        }
+        /* _genError is already captured above; no additional soft-failure detection needed. */
 
         var bizLog = (news && news._log) || null;
         if (news) { delete news._log; delete news._genError; }
@@ -4179,8 +4207,18 @@ export default {
         var _indQuery = (_indResult && _indResult.query) || '';
         var _indItemCount = (_indResult && _indResult.items) ? _indResult.items.length : 0;
 
+        /* Count items per section for the admin popup. */
+        var _localItems = (news && news.business && news.business.items) ? news.business.items.filter(function(it){ return !it._placeholder; }).length : 0;
+        var _alsoItems = 0;
+        if (news && news.sections) {
+          news.sections.forEach(function(s) {
+            if (s.category === 'also' && s.items) _alsoItems += s.items.length;
+          });
+        }
+
         var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo,
-                     industry: _regenIndustry, industryQuery: _indQuery, industryItems: _indItemCount };
+                     industry: _regenIndustry, industryQuery: _indQuery, industryItems: _indItemCount,
+                     localItems: _localItems, alsoItems: _alsoItems };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
       } catch (e) {

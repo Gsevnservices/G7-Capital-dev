@@ -857,47 +857,23 @@ async function regenNews(firmCode, shared) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Regen failed (' + response.status + ')');
-    var log = data.log || {};
-    var items = (data.news && data.news.business && data.news.business.items) || [];
-    var wl = log.watchlist || {};
-    var qs = log.queryStrings || [];
-    var fb = data.fallback;
     var sp = data.spend || {};
-    var msg = '';
-    if (fb) {
-      msg += '⚠ FAILURE — stage: ' + (fb.stage || '?') + '\n' +
-             'Reason: ' + (fb.reason || 'unknown') + '\n\n';
-    }
-    msg += 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n';
-    msg += 'Spend today: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n';
-    if (data.industry) {
-      msg += 'Industry: ' + data.industry + (data.industryQuery ? '  →  "' + data.industryQuery + '"' : '') +
-             '  [' + (data.industryItems || 0) + ' items]\n';
-    }
+    var msg = 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n';
+    msg += 'Spend: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n\n';
+    /* Industry line */
+    msg += 'Industry: ' + (data.industryItems || 0) + ' items';
+    if (data.industry) msg += '  (' + data.industry;
+    if (data.industryQuery) msg += ' → "' + data.industryQuery + '"';
+    if (data.industry) msg += ')';
     msg += '\n';
-    msg += '── WATCHLIST ──\n' +
-      'Materials: ' + ((wl.materials && wl.materials.length) ? wl.materials.join(', ') : '(none)') + '\n' +
-      'Triggers: ' + ((wl.triggers && wl.triggers.length) ? wl.triggers.join(', ') : '(none)') + '\n' +
-      'Localities: ' + ((wl.localities && wl.localities.length) ? wl.localities.join(', ') : '(none)') + '\n' +
-      'Regulations: ' + ((wl.regulations && wl.regulations.length) ? wl.regulations.join(', ') : '(none)') + '\n' +
-      'Competitors: ' + ((wl.competitors && wl.competitors.length) ? wl.competitors.join(', ') : '(none)') + '\n' +
-      'Groups: ' + ((wl.groups && wl.groups.length) ? wl.groups.join(', ') : '(none)') + '\n\n' +
-      '── QUERIES ──\n';
-    var cl = log.catLog || [];
-    var catNames = ['materials', 'demand', 'macro'];
-    if (qs.length) {
-      qs.forEach(function(q, i) {
-        var c = cl.filter(function(x){ return x.cat === catNames[i]; })[0] || cl[i] || {};
-        msg += (i + 1) + '. ' + q + '  [' + (c.raw || 0) + ' raw → ' + (c.vetted || 0) + ' vetted]\n';
-      });
-    } else {
-      msg += '(none)';
-    }
-    msg += '\n\n── HEADLINES (' + items.length + ') ──';
-    items.forEach(function(it) { msg += '\n  • ' + (it.headline || ''); });
-    if (log.drops && log.drops.length) {
-      msg += '\n\n── DROPS (' + log.drops.length + ') ──';
-      log.drops.forEach(function(d) { msg += '\n  • ' + (d.headline || '?').slice(0, 60) + ' — ' + (d.reason || ''); });
+    /* Your area line */
+    var _localN = data.localItems || 0;
+    msg += 'Your area: ' + (_localN > 0 ? _localN + ' items' : 'none') + '\n';
+    /* Also worth knowing line */
+    msg += 'Also worth knowing: ' + (data.alsoItems || 0) + ' items\n';
+    /* Fallback / warning from _genError */
+    if (data.fallback) {
+      msg += '\n⚠ ' + (data.fallback.stage || '?') + ': ' + (data.fallback.reason || 'unknown') + '\n';
     }
     alert(msg);
   } catch(err) {
