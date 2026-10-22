@@ -240,17 +240,15 @@ function resolveIndustry(businessType, sells) {
 }
 
 /* Resolve industry for a firm from its scout state.
-   Caches the result as scout_industry in the firm's state so it's computed once.
+   Cached in its own KV key scout:industry:{FIRM} (no TTL) so it's computed once.
    Uses loadScoutState + st.pick() like the rest of the worker. */
 async function resolveIndustryForFirm(env, firmCode) {
+  /* Check dedicated KV key first. */
+  var cached = await env.G7_KV.get('scout:industry:' + firmCode);
+  if (cached && INDUSTRIES[cached]) return cached;
+  /* Resolve from businessType / businessTypeInput / sells. */
   var st = await loadScoutState(env, firmCode);
   if (!st) return 'services_trade';
-  /* Check cached value first. */
-  var cached = st.pick('scout_industry');
-  if (cached && INDUSTRIES[cached]) {
-    return cached;
-  }
-  /* Resolve from businessType / businessTypeInput / sells. */
   var pend = st.pick('scout_pending_result') || {};
   var bt = (pend.businessData && pend.businessData.businessType) || '';
   var bti = (pend.businessData && pend.businessData.businessTypeInput) || '';
@@ -263,14 +261,8 @@ async function resolveIndustryForFirm(env, firmCode) {
   }
   var resolved = resolveIndustry(bt, sells) || resolveIndustry(bti, sells) || 'services_trade';
   console.log(JSON.stringify({ resolveIndustry: firmCode, type: bt || bti, sells: sells.slice(0, 80), key: resolved }));
-  /* Persist so it's computed once. */
-  try {
-    var blob = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
-    if (blob) {
-      blob.scout_industry = resolved;
-      await kvPut(env, 'firms:' + firmCode + ':scout_state', JSON.stringify(blob));
-    }
-  } catch (e) {}
+  /* Persist in own KV key (no TTL — settings can change it later). */
+  try { await kvPut(env, 'scout:industry:' + firmCode, resolved); } catch (e) {}
   return resolved;
 }
 
@@ -2744,7 +2736,7 @@ async function generateIndustryNews(env, industryKey, day, cost) {
   var _indUndated = 0;
   var afterFresh = afterSourceMatch.filter(function(it) {
     var age = checkPageAge(meta.pageAge[it.sourceUrl], 3);
-    if (age.dated && !age.pass) { drops.push({ headline: it.headline, reason: 'industry: older than 3 days' }); return false; }
+    if (age.dated && !age.recent) { drops.push({ headline: it.headline, reason: 'industry: older than 3 days' }); return false; }
     if (!age.dated) {
       _indUndated++;
       if (_indUndated > 1) { drops.push({ headline: it.headline, reason: 'industry: undated cap (max 1)' }); return false; }
@@ -4094,7 +4086,9 @@ export default {
         var _rdMondayOff = (_rdWd === 0) ? -6 : (1 - _rdWd);
         var _rdMonday = new Date(_rdDay.getTime() + _rdMondayOff * 86400000);
         await env.G7_KV.delete('market:' + firmCode + ':local:' + _rdMonday.toISOString().slice(0, 10));
-        /* Clear industry cache for this firm's industry. */
+        /* Clear industry: delete cached resolution so it re-resolves fresh,
+           then resolve and delete the industry news cache for this day. */
+        await env.G7_KV.delete('scout:industry:' + firmCode);
         var _regenIndustry = 'services_trade';
         try { _regenIndustry = await resolveIndustryForFirm(env, firmCode); } catch(e){}
         await env.G7_KV.delete('news:industry:' + _regenIndustry + ':' + day);
