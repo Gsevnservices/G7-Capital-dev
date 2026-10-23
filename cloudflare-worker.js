@@ -2993,8 +2993,7 @@ async function assembleNews(env, firmCode, day, opts) {
   var _mondayOffset = (_weekday === 0) ? -6 : (1 - _weekday);
   var _monday = new Date(_dayDate.getTime() + _mondayOffset * 86400000);
   var _mondayDay = _monday.toISOString().slice(0, 10);
-  var business = await env.G7_KV.get('market:' + firmCode + ':local:' + _mondayDay, 'json')
-              || await env.G7_KV.get('market:' + firmCode + ':' + day, 'json');
+  var business = await env.G7_KV.get('market:' + firmCode + ':local:' + _mondayDay, 'json');
   if (!business && cacheOnly && !industrySec) return null;
 
   /* ── 3. Shared sections from cache ── */
