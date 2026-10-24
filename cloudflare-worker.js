@@ -76,7 +76,7 @@ async function anthropicFetch(url, init) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRUSTED NEWS DOMAINS — used by the business news search (searchBusinessNews).
+// TRUSTED NEWS DOMAINS — used for source verification.
 // Edit this list when adding or removing sources.
 // Shared-news categories (NEWS_CATS) keep their own domain lists.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,38 +101,35 @@ const BLOCKED_SEARCH_DOMAINS = [
 
 /* ── INDUSTRIES ──
    11 industry verticals. Each firm maps to one via resolveIndustry().
-   Industry news is generated once per day per industry and shared across
-   all firms in that industry. Each entry has rotating search queries
-   (day-of-year modulo picks one per search). */
+   Industry news is fetched from Google News RSS once per day per industry
+   and shared across all firms in that industry.
+   feeds = array of Google News search queries (4–6 per industry). */
 const INDUSTRIES = {
   interior_design: {
     label: 'Interior design & architecture',
     types: ['Interior Designer / Architect'],
-    queries: [
-      'interior design material price India',
-      'modular kitchen trends India',
-      'interior design industry India news',
-      'home renovation market India'
+    feeds: [
+      'plywood price India', 'modular kitchen India',
+      'home furnishing India', 'housing sales India',
+      'building materials prices India'
     ]
   },
   real_estate: {
     label: 'Real estate & property',
     types: ['Real Estate / Property Broker'],
-    queries: [
-      'real estate market India news',
-      'property registration stamp duty India',
-      'housing demand India',
-      'RERA regulation India news'
+    feeds: [
+      'real estate India', 'property registration India',
+      'housing demand India', 'RERA India',
+      'stamp duty India', 'home loan rates India'
     ]
   },
   food_service: {
     label: 'Food & hospitality',
     types: ['Restaurant / Dhaba / Cafe','Catering Business','Cloud Kitchen'],
-    queries: [
-      'restaurant food business India news',
-      'FSSAI food regulation India',
-      'food delivery market India',
-      'food cost inflation India'
+    feeds: [
+      'restaurant India', 'FSSAI regulation India',
+      'food delivery India', 'food prices India',
+      'Zomato Swiggy India'
     ]
   },
   retail: {
@@ -142,11 +139,10 @@ const INDUSTRIES = {
             'Furniture / Home Decor','Electronics / Appliance Store',
             'Hardware / Building Materials','Sweet Shop / Mithai Store',
             'D2C Brand / Online Store'],
-    queries: [
-      'retail market India news',
-      'consumer spending India',
-      'GST rate change retail India',
-      'FMCG retail trend India'
+    feeds: [
+      'retail India', 'consumer spending India',
+      'FMCG India', 'GST rate India',
+      'ecommerce India retail'
     ]
   },
   health_wellness: {
@@ -154,32 +150,29 @@ const INDUSTRIES = {
     types: ['Gym / Fitness Centre','Salon / Spa / Beauty Parlour',
             'Medical Clinic / Doctor','Ayurvedic Clinic / Wellness Centre',
             'Diagnostic Lab / Pathology'],
-    queries: [
-      'healthcare clinic India news',
-      'fitness wellness industry India',
-      'medical regulation India news',
-      'health insurance India policy'
+    feeds: [
+      'fitness industry India', 'healthcare India',
+      'medical regulation India', 'gym wellness India',
+      'health insurance India'
     ]
   },
   education: {
     label: 'Education & coaching',
     types: ['Coaching Centre / Tuition','Driving School',
             'Training / Corporate Learning'],
-    queries: [
-      'education coaching India news',
-      'NEP education policy India',
-      'edtech India market',
-      'skill training India news'
+    feeds: [
+      'education India', 'coaching institute India',
+      'NEP education policy', 'edtech India',
+      'skill training India'
     ]
   },
   auto_repair: {
     label: 'Automotive & repair',
     types: ['Automobile Workshop / Garage','Mobile / Electronics Repair'],
-    queries: [
-      'automobile aftermarket India news',
-      'vehicle repair industry India',
-      'EV electric vehicle India news',
-      'auto spare parts India'
+    feeds: [
+      'automobile India', 'auto spare parts India',
+      'electric vehicle India', 'vehicle sales India',
+      'auto repair aftermarket India'
     ]
   },
   services_trade: {
@@ -187,21 +180,19 @@ const INDUSTRIES = {
     types: ['Courier / Logistics','Printing / Packaging','Event Management',
             'Photography / Videography','Travel Agency / Tour Operator',
             'Security Agency / Manpower Supply','Tailoring / Garment Stitching'],
-    queries: [
-      'small business India news',
-      'MSME India policy news',
-      'local services market India',
-      'gig economy India news'
+    feeds: [
+      'small business India', 'MSME India',
+      'gig economy India', 'logistics India',
+      'services sector India'
     ]
   },
   digital_agency: {
     label: 'Digital & marketing agencies',
     types: ['Digital Marketing Agency'],
-    queries: [
-      'digital marketing India news',
-      'social media advertising India',
-      'Google Meta ad policy change',
-      'digital agency India market'
+    feeds: [
+      'digital marketing India', 'social media advertising India',
+      'Google Meta ad policy', 'digital agency India',
+      'influencer marketing India'
     ]
   },
   professional: {
@@ -209,22 +200,48 @@ const INDUSTRIES = {
     types: ['CA / Accounting Firm','Legal Firm / Lawyer',
             'Consulting / Advisory Firm','B2B Services',
             'Recruitment / Staffing Firm'],
-    queries: [
-      'professional services India news',
-      'income tax GST compliance India',
-      'legal regulatory India news',
-      'consulting staffing India market'
+    feeds: [
+      'income tax India', 'GST compliance India',
+      'legal regulation India', 'consulting India',
+      'chartered accountant India'
     ]
   },
   tech: {
     label: 'IT & software',
     types: ['IT Services / Software Company','SaaS / Software Product'],
-    queries: [
-      'IT services India news',
-      'SaaS startup India',
-      'technology India policy regulation',
-      'software outsourcing India market'
+    feeds: [
+      'IT services India', 'SaaS India',
+      'technology policy India', 'software outsourcing India',
+      'startup funding India'
     ]
+  }
+};
+
+/* ── FEED CATEGORIES ──
+   Shared feed queries for policy, markets, global, and city news.
+   Each maps to a user pref key (india_policy, india_markets, global, city).
+   days = max age in days for feed items. */
+const FEED_CATS = {
+  india_policy: {
+    label: 'India \u2014 politics & policy',
+    feeds: ['GST India', 'RBI policy India', 'India government business policy'],
+    days: 2
+  },
+  india_markets: {
+    label: 'Indian stock market',
+    feeds: ['Sensex Nifty'],
+    days: 2
+  },
+  global: {
+    label: 'Global markets',
+    feeds: ['Brent crude oil price', 'Dow Jones market'],
+    days: 2
+  },
+  city: {
+    label: 'Your city',
+    /* feeds built dynamically: ["<City> development", "<City> real estate"] */
+    feeds: [],
+    days: 7
   }
 };
 
@@ -628,36 +645,6 @@ async function sendCreditAlert(env, day) {
     '<p>Scout couldn\'t generate today\'s news (' + day + '): Anthropic returned a billing/credit error.</p><p>Firms with recent news are seeing it with a \u201cFrom ' + day + '\u201d note; firms without see \u201cNo news yet\u201d. Top up to resume.</p>');
 }
 
-/* Try market:last:{firm}, then yesterday's and day-before's daily cache.
-   Returns the best available result or null. */
-async function lastMarketBrief(env, firmCode, today) {
-  var last = await env.G7_KV.get('market:last:' + firmCode, 'json');
-  if (last && last.items && last.items.length) return last;
-  for (var d = 1; d <= 2; d++) {
-    var prev = new Date(new Date(today + 'T12:00:00+05:30').getTime() - d * 86400000).toISOString().slice(0, 10);
-    var old = await env.G7_KV.get('market:' + firmCode + ':' + prev, 'json');
-    if (old && old.items && old.items.length) return old;
-  }
-  return null;
-}
-
-/* Try news:last:{cat}, then yesterday's and day-before's daily cache.
-   Returns the best available result or null. */
-async function lastSharedNews(env, cat, citySlug) {
-  var lastKey = 'news:last:' + cat + (cat === 'city' ? ':' + citySlug : '');
-  var last = await env.G7_KV.get(lastKey, 'json');
-  if (last && last.items && last.items.length) return last;
-  var ist = new Date(Date.now() + 5.5 * 3600 * 1000);
-  var today = ist.toISOString().slice(0, 10);
-  for (var d = 1; d <= 2; d++) {
-    var prev = new Date(new Date(today + 'T12:00:00+05:30').getTime() - d * 86400000).toISOString().slice(0, 10);
-    var cacheKey = 'news:' + cat + (cat === 'city' ? ':' + citySlug : '') + ':' + prev;
-    var old = await env.G7_KV.get(cacheKey, 'json');
-    if (old && old.items && old.items.length) return old;
-  }
-  return null;
-}
-
 /* Where reset links may point. Built from the request's Origin, but only
    ever one of these — never a caller-supplied host, which would let an
    attacker email a user a link to a site they control. */
@@ -707,7 +694,7 @@ async function validateSession(request, env) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED HELPERS — used by generateMarketBrief and generateSharedNews.
+// SHARED HELPERS — used by news pipeline and email renderer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /* Sentence-boundary trimmer for prose fields. */
@@ -919,125 +906,9 @@ function shortHash(str) {
      SCOUT ASSESSMENT: ...              ← changes every analysis
      PREFERRED LANGUAGE: ...            ← irrelevant to watchlist
    We hash only the lines that would change what the watchlist should contain. */
-var _watchlistKeys = ['BUSINESS:','SELLS:','BEST EXISTING CUSTOMERS:','BEST MONTHS:',
-  'WORST MONTHS:','LOCAL EVENTS:','WHAT HAS WORKED:','WHAT HAS FAILED:',
-  'COMPETITORS:','CUSTOMER GROUPS:'];
-function watchlistHash(context) {
-  var lines = String(context || '').split('\n');
-  var stable = lines.filter(function(l) {
-    for (var i = 0; i < _watchlistKeys.length; i++) {
-      if (l.indexOf(_watchlistKeys[i]) === 0) return true;
-    }
-    return false;
-  });
-  return shortHash(stable.join('\n'));
-}
-
-/* Build a per-firm watchlist from the business context.
-   Small Haiku call — extracts materials, triggers, localities, etc. */
-async function buildWatchlist(env, firmCode, context, cost) {
-  var hash = watchlistHash(context);
-  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-               'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-haiku-5-5', max_tokens: 1000, thinking: { type: 'disabled' },
-      system: 'Extract a watchlist from this business description. Return ONLY JSON:\n' +
-        '{"materials":[],"triggers":[],"localities":[],"regulations":[],"competitors":[],"groups":[]}\n' +
-        'Each array: 2–6 short items.\n' +
-        'materials = inputs the business buys (raw materials, goods, supplies).\n' +
-        'triggers = events/situations that make customers need this business.\n' +
-        'localities = specific areas, landmarks, neighbourhoods mentioned.\n' +
-        'regulations = licences, rules, taxes that apply to this trade.\n' +
-        'competitors = any competitor names mentioned.\n' +
-        'groups = the named customer segments/types.\n' +
-        'If a category has nothing, return an empty array.',
-      messages: [{ role: 'user', content: context }]
-    })
-  });
-  if (!r.ok) throw new Error('watchlist ' + r.status);
-  var data = await r.json();
-  recordCost(cost, 'claude-haiku-5-5', data);
-  var text = (data.content || []).filter(function(b){ return b.type === 'text'; })
-    .map(function(b){ return b.text; }).join('');
-  var wl = { materials: [], triggers: [], localities: [], regulations: [], competitors: [], groups: [] };
-  try {
-    var a = text.indexOf('{'), z = text.lastIndexOf('}');
-    if (a !== -1 && z > a) wl = JSON.parse(text.slice(a, z + 1));
-  } catch (e) {}
-  var keys = ['materials','triggers','localities','regulations','competitors','groups'];
-  keys.forEach(function(k) { if (!Array.isArray(wl[k])) wl[k] = []; wl[k] = wl[k].slice(0, 6); });
-  /* Locality sanity: localities should come from the firm's own context.
-     Extract city from BUSINESS: line (format: "Name | Type | Area, City").
-     Drop any locality that is itself a *different* well-known city name
-     (the model sometimes hallucinates nearby cities). Keep neighbourhood
-     names — they don't need to contain the city name. If nothing remains,
-     fall back to the city itself. */
-  var _bizLine = String(context || '').split('\n').filter(function(l){ return l.indexOf('BUSINESS:') === 0; })[0] || '';
-  var _bizParts = _bizLine.replace('BUSINESS:', '').split('|');
-  var _bizCity = _bizParts.length >= 3 ? normaliseCity(_bizParts[_bizParts.length - 1].trim()) : '';
-  if (_bizCity && wl.localities.length) {
-    var _cityLower = _bizCity.toLowerCase();
-    var _contextLower = String(context || '').toLowerCase();
-    var _droppedLocs = [];
-    var _kept = wl.localities.filter(function(loc) {
-      var ll = loc.toLowerCase();
-      /* Always keep the city itself. */
-      if (ll === _cityLower) return true;
-      /* Keep if the locality text appears anywhere in the business context. */
-      if (_contextLower.indexOf(ll) !== -1) return true;
-      /* Otherwise it's a hallucinated location — drop. */
-      _droppedLocs.push(loc);
-      return false;
-    });
-    if (_droppedLocs.length) {
-      console.log(JSON.stringify({ watchlistLocalityDrop: firmCode, city: _bizCity, dropped: _droppedLocs, kept: _kept }));
-    }
-    if (_kept.length === 0) _kept = [_bizCity];
-    wl.localities = _kept;
-  }
-  wl.hash = hash;
-  await kvPut(env, 'market:watch:' + firmCode, JSON.stringify(wl));
-  return wl;
-}
-
-/* Read or lazily build the watchlist. Rebuilds only when the stable-input hash changes. */
-async function getWatchlist(env, firmCode, context, cost) {
-  var hash = watchlistHash(context);
-  var cached = await env.G7_KV.get('market:watch:' + firmCode, 'json');
-  if (cached && cached.hash === hash) return cached;
-  return buildWatchlist(env, firmCode, context, cost);
-}
 
 /* Extract real metadata from an API response: URL→title from search results,
    URL→page_age, URL→[citedText] from citations. Never trust the model's JSON. */
-function collectSearchMeta(data) {
-  var titles = {};
-  var cited = {};
-  var seen = new Set();
-  var pageAge = {};
-  (data.content || []).forEach(function(b) {
-    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
-      b.content.forEach(function(res) {
-        if (res && res.url) {
-          seen.add(res.url);
-          if (res.title) titles[res.url] = res.title;
-          if (res.page_age) pageAge[res.url] = res.page_age;
-        }
-      });
-    }
-    if (b.type === 'text' && Array.isArray(b.citations)) {
-      b.citations.forEach(function(c) {
-        if (c && c.url && c.cited_text) {
-          if (!cited[c.url]) cited[c.url] = [];
-          cited[c.url].push(c.cited_text);
-        }
-      });
-    }
-  });
-  return { seen: seen, titles: titles, cited: cited, pageAge: pageAge };
-}
 
 /* Stopwords for headline matching — common English words with no meaning. */
 var _stopWords = new Set([
@@ -1086,516 +957,6 @@ function sourceMatchCheck(headline, url, meta) {
   return { pass: false, reason: 'only ' + matches.length + ' headline word(s) matched: [' + matches.join(', ') + '] of [' + words.join(', ') + ']' };
 }
 
-/* Relevance gate: true if whyItMatters implies no direct effect. */
-var _noEffectRe = /no direct effect|no immediate impact|does not affect|not directly|unlikely to affect|no specific impact|does not directly|no clear effect/i;
-function failsRelevanceGate(whyItMatters) {
-  return _noEffectRe.test(whyItMatters || '');
-}
-
-/* Shared helper: load UA-blocked domains from KV, merge with a static list.
-   Returns a Set of domain strings that should be excluded from web_search. */
-async function getBlockedDomains(env, staticList) {
-  var uaRaw = await env.G7_KV.get('news:blocked-ua', 'json');
-  var set = new Set(Array.isArray(staticList) ? staticList : []);
-  if (Array.isArray(uaRaw)) uaRaw.forEach(function(d) { set.add(d); });
-  return set;
-}
-
-/* Shared helper: parse a 400 "domains are not accessible to our user agent"
-   error, persist newly blocked domains to KV (30 days), and return them.
-   Returns null if the error is something else. */
-async function parseAndStoreBlockedUa(env, errText) {
-  var m = errText.match(/not accessible to our user agent: \[([^\]]*)\]/);
-  if (!m) return null;
-  var rejected = m[1].split(',').map(function(s) { return s.replace(/['"\s]/g, ''); }).filter(Boolean);
-  if (!rejected.length) return null;
-  var existing = await env.G7_KV.get('news:blocked-ua', 'json');
-  var all = new Set(Array.isArray(existing) ? existing : []);
-  rejected.forEach(function(d) { all.add(d); });
-  await kvPut(env, 'news:blocked-ua', JSON.stringify(Array.from(all)), { expirationTtl: 30 * 86400 });
-  return rejected;
-}
-
-/* ── Step a: search for business news candidates (Haiku + web_search) ──
-   ONE call with max_uses 3. Prompt lists three searches in order:
-   (a) material/input prices, (b) demand/locality, (c) macro/regulation.
-   Model returns up to 10 candidates; we vet using API data for headline
-   and recency (page_age), not the model's claims. */
-
-async function searchBusinessNews(env, day, context, city, watchlist, told, macroOnly, cost) {
-  /* Build exactly 3 queries in code — one per search, rotating by day-of-year. */
-  city = normaliseCity(city);
-
-  /* Day-of-year for rotation. */
-  var _dayDate = new Date(day + 'T12:00:00+05:30');
-  var _startOfYear = new Date(_dayDate.getFullYear(), 0, 0);
-  var _doy = Math.floor((_dayDate - _startOfYear) / 86400000);
-
-  /* Month label — only used for search 3. */
-  var _mNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  var _monthLabel = _mNames[_dayDate.getMonth()] + ' ' + _dayDate.getFullYear();
-
-  /* Extract the trade/type from context BUSINESS: line for fallback queries. */
-  var _bizLine = String(context || '').split('\n').filter(function(l){ return l.indexOf('BUSINESS:') === 0; })[0] || '';
-  var _bizParts = _bizLine.replace('BUSINESS:', '').split('|');
-  var _trade = _bizParts.length >= 2 ? _bizParts[1].trim() : '';
-
-  var searches = [];
-  if (!macroOnly) {
-    /* SEARCH 1 — one material, rotating by day-of-year. */
-    var mats = (watchlist.materials && watchlist.materials.length) ? watchlist.materials : [];
-    if (mats.length) {
-      var mat = mats[_doy % mats.length];
-      searches.push(mat + ' price increase India');
-    } else {
-      searches.push((_trade || 'building materials') + ' price increase India');
-    }
-
-    /* SEARCH 2 — one locality + trade's top trigger. No month, no city duplication. */
-    var locs = (watchlist.localities && watchlist.localities.length) ? watchlist.localities : [];
-    var triggers = (watchlist.triggers && watchlist.triggers.length) ? watchlist.triggers : [];
-    var topTrigger = triggers.length ? triggers[_doy % triggers.length] : 'new project';
-    if (locs.length) {
-      var loc = locs[_doy % locs.length];
-      /* Locality already includes city context from the watchlist; add city only if the locality doesn't contain it. */
-      var locQuery = loc;
-      if (city && loc.toLowerCase().indexOf(city.toLowerCase()) === -1) locQuery = loc + ' ' + city;
-      searches.push(locQuery + ' ' + topTrigger);
-    } else if (city) {
-      searches.push(city + ' ' + topTrigger);
-    } else {
-      searches.push((_trade || 'business') + ' demand India');
-    }
-  }
-
-  /* SEARCH 3 — one regulation, rotating; fallback to RBI repo rate. */
-  var regs = (watchlist.regulations && watchlist.regulations.length) ? watchlist.regulations : [];
-  if (regs.length) {
-    var reg = regs[_doy % regs.length];
-    searches.push(reg + ' ' + _monthLabel);
-  } else {
-    searches.push('RBI repo rate home loan ' + _monthLabel);
-  }
-
-  var system =
-    'You are a news researcher for one Indian small business. Today is ' + day + ' (India).\n' +
-    'You MUST run EXACTLY these ' + searches.length + ' web searches, one each, VERBATIM as written:\n' +
-    searches.map(function(q, i) { return 'SEARCH ' + (i + 1) + ': ' + q; }).join('\n') + '\n\n' +
-    'Do NOT rephrase, combine, or split these queries. Run each one as-is.\n\n' +
-    (macroOnly ? 'THIS RUN: local news was empty. Search MACRO only — national economy, ' +
-      'policy and prices for this trade.\n\n' : '') +
-    'NOT NEWS: something that already existed. A competitor simply having a shop, or ' +
-    'a yearly festival, is not a change.\n\n' +
-    'RULES:\n' +
-    '- Return EVERY result relevant to this business — up to 10 candidates, at least 2 per search when available.\n' +
-    '- Every item must come from a page you actually found with web search.\n' +
-    '- Never invent a development, competitor, date or number.\n' +
-    '- sourceUrl must be the article page, not a home page or listing.\n' +
-    '- "search" must be the number (1, 2 or 3) of the search that found it.\n\n' +
-    'Reply with ONLY this JSON:\n' +
-    '{"candidates":[{"sourceUrl":"exact URL","whatHappened":"one sentence, under 30 words",' +
-    '"search":1|2|3}]}';
-
-  /* Build blocked_domains: static portals/quote sites + any UA-rejected domains. */
-  var _blocked = await getBlockedDomains(env, BLOCKED_SEARCH_DOMAINS);
-  var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3,
-               blocked_domains: Array.from(_blocked) };
-  if (city) tool.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
-
-  var _userMsg = 'THE BUSINESS:\n' + context +
-    (told ? '\n\nALREADY TOLD — do not repeat:\n' + told : '');
-
-  function _bizSearchBody() {
-    return JSON.stringify({
-      model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
-      system: system, tools: [tool],
-      messages: [{ role: 'user', content: _userMsg }]
-    });
-  }
-
-  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-               'anthropic-version': '2023-06-01' },
-    body: _bizSearchBody()
-  });
-
-  /* On 400 "domains not accessible to our user agent", persist + retry once. */
-  if (r.status === 400) {
-    var _errText = await r.text();
-    var _newlyBlocked = await parseAndStoreBlockedUa(env, _errText);
-    if (!_newlyBlocked) throw new Error('search step 400: ' + _errText.slice(0, 300));
-    _newlyBlocked.forEach(function(d) { _blocked.add(d); });
-    tool.blocked_domains = Array.from(_blocked);
-    console.log(JSON.stringify({ bizSearchUaBlocked: _newlyBlocked }));
-    r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-                 'anthropic-version': '2023-06-01' },
-      body: _bizSearchBody()
-    });
-  }
-  if (!r.ok) throw new Error('search step ' + r.status + ': ' + (await r.text()).slice(0, 300));
-  var data = await r.json();
-  recordCost(cost, 'claude-haiku-5-5', data);
-  var meta = collectSearchMeta(data);
-
-  /* Zero search results → retry once without any domain restrictions.
-     All existing vetting gates still apply to these results. */
-  if (meta.seen.size === 0) {
-    var toolOpen = { type: 'web_search_20250305', name: 'web_search', max_uses: macroOnly ? 1 : 3 };
-    if (city) toolOpen.user_location = { type: 'approximate', city: city, country: 'IN', timezone: 'Asia/Kolkata' };
-    var r2 = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-                 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
-        system: system, tools: [toolOpen],
-        messages: [{ role: 'user', content: _userMsg }]
-      })
-    });
-    if (r2.ok) {
-      data = await r2.json();
-      recordCost(cost, 'claude-haiku-5-5', data);
-      meta = collectSearchMeta(data);
-      console.log(JSON.stringify({ domainRetry: true, firm: context.slice(0, 60), resultsAfter: meta.seen.size }));
-    }
-  }
-
-  var text = (data.content || []).filter(function(b){ return b.type === 'text'; })
-    .map(function(b){ return b.text; }).join('');
-  var parsed = { candidates: [] };
-  try {
-    var a = text.indexOf('{'), z = text.lastIndexOf('}');
-    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
-  } catch (e) {}
-
-  /* Build told-URL set from the formatted history string. */
-  var toldUrls = new Set();
-  if (told) told.split('\n').forEach(function(line) {
-    var m = line.match(/\((https?:\/\/[^)]+)\)/);
-    if (m) toldUrls.add(m[1]);
-  });
-
-  /* Per-search counters for logging. */
-  var searchLabels = { 1: 'materials', 2: 'demand', 3: 'macro' };
-  var catRaw = { materials: 0, demand: 0, macro: 0 };
-  var catVetted = { materials: 0, demand: 0, macro: 0 };
-  var drops = [];
-
-  var raw = Array.isArray(parsed.candidates) ? parsed.candidates : [];
-  var vetted = raw.filter(function(c) {
-    if (!c || !c.sourceUrl) return false;
-    var catName = searchLabels[c.search] || 'macro';
-    catRaw[catName] = (catRaw[catName] || 0) + 1;
-    if (!meta.seen.has(c.sourceUrl)) { drops.push({ headline: meta.titles[c.sourceUrl] || c.sourceUrl, url: c.sourceUrl, reason: 'URL not in search results', cat: catName }); return false; }
-    if (isHomePage(c.sourceUrl)) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'home/section page', cat: catName }); return false; }
-    if (isListingOrQuote(c.sourceUrl)) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'listing/quote portal', cat: catName }); return false; }
-    if (toldUrls.has(c.sourceUrl)) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'already told', cat: catName }); return false; }
-    /* Recency from API page_age — not the model's publishedDate. */
-    var age = checkPageAge(meta.pageAge[c.sourceUrl], 30);
-    if (age.dated && !age.recent) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: 'older than 30 days (page_age: ' + meta.pageAge[c.sourceUrl] + ')', cat: catName }); return false; }
-    /* Evergreen/guide gate: drop guides, explainers, rate tables unless very recent. */
-    var evg = evergreenCheck(meta.titles[c.sourceUrl], meta.pageAge[c.sourceUrl]);
-    if (!evg.pass) { drops.push({ headline: meta.titles[c.sourceUrl] || '?', url: c.sourceUrl, reason: evg.reason, cat: catName }); return false; }
-    catVetted[catName] = (catVetted[catName] || 0) + 1;
-    return true;
-  }).map(function(c) {
-    var catName = searchLabels[c.search] || 'macro';
-    var age = checkPageAge(meta.pageAge[c.sourceUrl], 30);
-    /* Headline from API title, not model — trimmed and capped. */
-    var apiTitle = stripCite(String(meta.titles[c.sourceUrl] || '').trim());
-    return {
-      headline: apiTitle.slice(0, 120) || stripCite(String(c.whatHappened || '')).slice(0, 120),
-      whatHappened: clipOneSentence(stripCite(c.whatHappened)),
-      sourceUrl: c.sourceUrl,
-      scope: catName === 'macro' ? 'macro' : 'micro',
-      dated: age.dated,
-      _ageDays: age._days,
-      _cat: catName
-    };
-  });
-
-  /* Sort: dated first, then newest first (fewest days ago). */
-  vetted.sort(function(a, b) {
-    var d = (b.dated ? 1 : 0) - (a.dated ? 1 : 0);
-    if (d !== 0) return d;
-    return (a._ageDays || 999) - (b._ageDays || 999);
-  });
-
-  var catLog = Object.keys(catRaw).map(function(k) { return { cat: k, raw: catRaw[k], vetted: catVetted[k] || 0 }; });
-
-  return { candidates: vetted, meta: meta, usage: data.usage || {}, rawCount: raw.length, catLog: catLog, drops: drops, searches: searches };
-}
-
-/* ── Step b: pick and write final items (Sonnet, no tools) ── */
-async function pickAndWriteNews(env, context, candidates, watchlist, cost) {
-  if (!candidates.length) return { items: [], usage: {} };
-  var groupList = (watchlist.groups || []).join(', ') || 'the customer groups described';
-
-  var system =
-    'You are Scout, the business news editor for one Indian small business.\n' +
-    'From the CANDIDATES below, pick 3 to 4 items that matter most to this business.\n' +
-    'You MUST return at least 2 items when there are 2 or more candidates. Never return fewer than 2.\n' +
-    'For each item you keep:\n' +
-    '- whyItMatters: ONE sentence, under 25 words. Name the concrete effect on the business. ' +
-    'If there is no direct effect, do not include the item.\n' +
-    '- whatToDo: ONE sentence, under 25 words. One action this week, tied to one of these ' +
-    'customer groups by name: ' + groupList + '.\n' +
-    '- urgency: today | this_week | watch\n' +
-    '- scope: micro | macro\n' +
-    '- headline: rewrite in under 10 words, plain English, using facts from the candidate\'s title and whatHappened. No clickbait.\n' +
-    '- Copy sourceUrl EXACTLY from the candidate. Never change a URL.\n\n' +
-    'RULES:\n' +
-    '- Only events that changed recently: announced, launched, raised, cut, approved, opened, closed. No guides, explainers, "how to", rate tables.\n' +
-    '- Prefer candidates marked dated:true (confirmed recent). Include an undated candidate only when it is clearly more important.\n' +
-    '- When two candidates are equally relevant, prefer one from a trusted news outlet.\n' +
-    '- Never invent facts beyond what the candidates state.\n' +
-    '- Never write labels like "Customer 1" — use actual group names.\n' +
-    '- Do not include any item where you cannot name a concrete effect.\n' +
-    '- INDUSTRY MATCH: every item must be about the same industry as this business. ' +
-    'Many words are homonyms across industries (e.g. "laminates" in PCB/electronics vs decorative laminates for interiors, ' +
-    '"chips" in semiconductors vs food). Read the candidate\'s whatHappened and the business context carefully — ' +
-    'if the candidate is about a different trade\'s products or customers, DROP it.\n\n' +
-    'For every candidate you DROP, add it to "rejected" with the sourceUrl and a short reason ' +
-    '(e.g. "wrong industry", "no concrete effect", "guide not news").\n\n' +
-    'Reply with ONLY this JSON:\n' +
-    '{"items":[{"headline":"","whatHappened":"","whyItMatters":"","whatToDo":"",' +
-    '"urgency":"","scope":"","sourceUrl":""}],' +
-    '"rejected":[{"sourceUrl":"","reason":""}]}';
-
-  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-               'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-5-5', max_tokens: 3000,
-      thinking: { type: 'between_tools' },
-      system: system,
-      messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
-        '\n\nCANDIDATES:\n' + JSON.stringify(candidates) }]
-    })
-  });
-  if (!r.ok) throw new Error('pick step ' + r.status + ': ' + (await r.text()).slice(0, 300));
-  var data = await r.json();
-  recordCost(cost, 'claude-sonnet-5-5', data);
-
-  var text = (data.content || []).filter(function(b){ return b.type === 'text'; })
-    .map(function(b){ return b.text; }).join('');
-  var parsed = { items: [] };
-  try {
-    var a = text.indexOf('{'), z = text.lastIndexOf('}');
-    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
-  } catch (e) {}
-
-  /* URL must be exactly one of the candidates — drop fabricated URLs. */
-  var candidateUrls = new Set(candidates.map(function(c){ return c.sourceUrl; }));
-  var items = (Array.isArray(parsed.items) ? parsed.items : [])
-    .filter(function(it) {
-      return it && it.headline && it.sourceUrl && candidateUrls.has(it.sourceUrl);
-    })
-    .slice(0, 4)
-    .map(function(it) {
-      return cleanNewsItem({
-        headline: String(it.headline).slice(0, 120),
-        whatHappened: clipOneSentence(it.whatHappened),
-        whyItMatters: clip(it.whyItMatters, 400),
-        whatToDo: clip(it.whatToDo, 400),
-        urgency: ['today','this_week','watch'].indexOf(it.urgency) !== -1 ? it.urgency : 'watch',
-        scope: it.scope === 'micro' ? 'micro' : 'macro',
-        sourceUrl: it.sourceUrl
-      });
-    });
-
-  /* Collect URLs that Step b explicitly rejected (industry mismatch, etc.). */
-  var rejectedUrls = new Set();
-  (Array.isArray(parsed.rejected) ? parsed.rejected : []).forEach(function(r) {
-    if (r && r.sourceUrl) rejectedUrls.add(r.sourceUrl);
-  });
-
-  /* Minimum-2 backfill: only from candidates neither picked nor rejected.
-     If no candidates qualify, keep what we have (even if just 1 item)
-     rather than forcing a wrong one. */
-  if (items.length < 2 && candidates.length >= 2) {
-    var pickedUrls = new Set(items.map(function(it){ return it.sourceUrl; }));
-    var backfill = candidates.filter(function(c){
-      return !pickedUrls.has(c.sourceUrl) && !rejectedUrls.has(c.sourceUrl);
-    });
-    for (var bi = 0; bi < backfill.length && items.length < 2; bi++) {
-      var bf = backfill[bi];
-      items.push(cleanNewsItem({
-        headline: String(bf.headline || '').slice(0, 120),
-        whatHappened: clipOneSentence(bf.whatHappened),
-        whyItMatters: clipOneSentence(bf.whatHappened),
-        whatToDo: '',
-        urgency: 'watch',
-        scope: bf.scope || 'macro',
-        sourceUrl: bf.sourceUrl
-      }));
-    }
-  }
-
-  return { items: items, rejected: Array.isArray(parsed.rejected) ? parsed.rejected : [], usage: data.usage || {} };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARKET BRIEF GENERATOR — two-step: search (Haiku) → pick-and-write (Sonnet).
-// ─────────────────────────────────────────────────────────────────────────────
-async function generateMarketBrief(env, firmCode, day, context, city, macroOnly, _retried, cost) {
-  /* History — what Scout already told this owner in the last two weeks. */
-  const histKey = 'market:history:' + firmCode;
-  const history = (await env.G7_KV.get(histKey, 'json')) || [];
-  const told = history.map(function(h){ return '- ' + h.headline + ' (' + h.sourceUrl + ')'; }).join('\n');
-
-  /* Watchlist — drives search queries. Rebuilt only when context changes. */
-  var watchlist = { materials: [], triggers: [], localities: [], regulations: [], competitors: [], groups: [] };
-  try { watchlist = await getWatchlist(env, firmCode, context, cost); } catch (e) {
-    console.log(JSON.stringify({ watchlistError: firmCode, error: String(e && e.message || e).slice(0, 300) }));
-  }
-
-  /* Step a: search for candidates (Haiku + web_search, up to 3 searches). */
-  var search = await searchBusinessNews(env, day, context, city, watchlist, told, macroOnly, cost);
-  var drops = (search.drops || []).slice();
-
-  /* Retry macro-only when model returned nothing parseable (first call only). */
-  if (search.candidates.length === 0 && search.rawCount === 0 && !macroOnly && !_retried) {
-    return generateMarketBrief(env, firmCode, day, context, city, true, true, cost);
-  }
-
-  /* Step b: pick and write (Sonnet, no tools). */
-  var pick = await pickAndWriteNews(env, context, search.candidates, watchlist, cost);
-  var afterPick = pick.items.length;
-  /* Log Step b rejections (industry mismatch, no effect, etc.). */
-  (pick.rejected || []).forEach(function(r) {
-    drops.push({ headline: (search.meta.titles[r.sourceUrl] || r.sourceUrl || '').slice(0, 80), reason: 'step-b rejected: ' + (r.reason || '?') });
-  });
-
-  /* ── Quality gates ── */
-  var afterRelevance = pick.items.filter(function(it) {
-    if (failsRelevanceGate(it.whyItMatters)) {
-      drops.push({ headline: it.headline, reason: 'relevance: ' + it.whyItMatters });
-      return false;
-    }
-    return true;
-  });
-  var afterSourceMatch = afterRelevance.filter(function(it) {
-    var check = sourceMatchCheck(it.headline, it.sourceUrl, search.meta);
-    if (!check.pass) {
-      drops.push({ headline: it.headline, reason: 'source-match: ' + check.reason });
-      return false;
-    }
-    return true;
-  });
-  var items = dedupeItems(afterSourceMatch);
-  if (items.length < afterSourceMatch.length) {
-    var deduped = afterSourceMatch.filter(function(it) { return items.indexOf(it) === -1; });
-    deduped.forEach(function(it) { drops.push({ headline: it.headline, reason: 'dedupe: duplicate topic' }); });
-  }
-
-  /* ── A1: Retry once with macro search if < 2 items survived gates ── */
-  if (items.length < 2 && !_retried && !macroOnly) {
-    var retry = await searchBusinessNews(env, day, context, city, watchlist, told, true, cost);
-    console.log(JSON.stringify({ retried: true, firm: firmCode, retryRaw: retry.rawCount, retryCandidates: retry.candidates.length, itemsBefore: items.length }));
-    drops = drops.concat(retry.drops || []);
-    /* Merge new candidates with existing survivors, re-run Step b. */
-    var combined = items.concat(retry.candidates);
-    if (combined.length > items.length) {
-      var pick2 = await pickAndWriteNews(env, context, combined, watchlist, cost);
-      (pick2.rejected || []).forEach(function(r) {
-        drops.push({ headline: (search.meta.titles[r.sourceUrl] || retry.meta.titles[r.sourceUrl] || r.sourceUrl || '').slice(0, 80), reason: 'step-b rejected: ' + (r.reason || '?') });
-      });
-      /* Re-apply gates on the new pick. */
-      var merged2 = pick2.items.filter(function(it) {
-        if (failsRelevanceGate(it.whyItMatters)) { drops.push({ headline: it.headline, reason: 'retry-relevance' }); return false; }
-        var cm = sourceMatchCheck(it.headline, it.sourceUrl, search.meta);
-        /* Also check retry meta for new URLs. */
-        if (!cm.pass) cm = sourceMatchCheck(it.headline, it.sourceUrl, retry.meta);
-        if (!cm.pass) { drops.push({ headline: it.headline, reason: 'retry-source-match' }); return false; }
-        return true;
-      });
-      items = dedupeItems(merged2);
-      afterPick = pick2.items.length;
-      /* Merge search metadata. */
-      Object.keys(retry.meta.titles).forEach(function(k) { if (!search.meta.titles[k]) search.meta.titles[k] = retry.meta.titles[k]; });
-    }
-  }
-
-  /* At most one undated item in "Your business" — dated items are more trustworthy. */
-  var _undatedCount = 0;
-  items = items.filter(function(it) {
-    var age = checkPageAge(search.meta.pageAge[it.sourceUrl], 30);
-    if (!age.dated) {
-      _undatedCount++;
-      if (_undatedCount > 1) {
-        drops.push({ headline: it.headline, reason: 'undated: only 1 undated item allowed' });
-        return false;
-      }
-    }
-    return true;
-  });
-
-  /* Populate sourceTitle from API metadata — never from model claims. */
-  items.forEach(function(it) {
-    it.sourceTitle = String(search.meta.titles[it.sourceUrl] || '').slice(0, 160);
-  });
-
-  /* Log per firm. */
-  var _newsLog = {
-    newsLog: firmCode, day: day, macroOnly: !!macroOnly, retried: !!_retried,
-    watchlistHit: !!(watchlist && watchlist.hash),
-    watchlist: {
-      materials: (watchlist && watchlist.materials) || [],
-      triggers: (watchlist && watchlist.triggers) || [],
-      localities: (watchlist && watchlist.localities) || [],
-      regulations: (watchlist && watchlist.regulations) || [],
-      competitors: (watchlist && watchlist.competitors) || [],
-      groups: (watchlist && watchlist.groups) || []
-    },
-    queryStrings: search.searches || [],
-    searches: (search.usage.server_tool_use && search.usage.server_tool_use.web_search_requests) || 0,
-    step1Tokens: { input: search.usage.input_tokens || 0, output: search.usage.output_tokens || 0 },
-    step2Tokens: { input: pick.usage.input_tokens || 0, output: pick.usage.output_tokens || 0 },
-    candidatesRaw: search.rawCount,
-    candidatesVetted: search.candidates.length,
-    catLog: search.catLog || [],
-    afterPick: afterPick,
-    afterRelevance: afterRelevance.length,
-    afterSourceMatch: afterSourceMatch.length,
-    afterDedupe: items.length,
-    drops: drops
-  };
-  try { console.log(JSON.stringify(_newsLog)); } catch (e) {}
-
-  /* If nothing survived, return empty — the weekly "Your area" section is simply omitted. */
-
-  const result = {
-    items: items,
-    date: day,
-    dropped: afterPick - items.length
-  };
-  result.generatedAt = new Date().toISOString();
-  const cacheKey = 'market:' + firmCode + ':' + day;
-  await kvPut(env,cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
-
-  /* Persist as last-known-good. */
-  if (items.length > 0) {
-    await kvPut(env,'market:last:' + firmCode, JSON.stringify(result));
-  }
-
-  /* Append today's items to history, keep last 15. */
-  if (items.length > 0) {
-    const nextHist = history.concat(items.map(function(it){
-      return { headline: it.headline, sourceUrl: it.sourceUrl, date: day };
-    })).slice(-15);
-    await kvPut(env,histKey, JSON.stringify(nextHist));
-  }
-
-  /* _log is ephemeral — never persisted to KV or sent to clients.
-     Attached after KV writes so callers (admin regen) can read it. */
-  result._log = _newsLog;
-  return result;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MORNING EMAIL HELPERS
@@ -2464,9 +1825,10 @@ async function findBusinesses(env, query, cap, cost) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NEWS CATEGORIES — optional feeds shared across firms.
+// NEWS PIPELINE — Google News RSS feeds → one Haiku picker call per firm.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/* Keep NEWS_CATS as a reference for resolveNewsPrefs — maps user pref keys. */
 const NEWS_CATS = {
   india_policy: {
     label: 'India \u2014 politics & policy',
@@ -2504,429 +1866,307 @@ const NEWS_CATS = {
   }
 };
 
-/* Facts only, generated once per day per category and shared by every firm
-   that chose it (city news once per city). No personal relevance here —
-   that is added per firm by personaliseNews. */
-async function generateSharedNews(env, cat, day, city, cost) {
-  const def = NEWS_CATS[cat];
-  if (!def) return { items: [] };
-  const citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
-  if (cat === 'city' && !citySlug) return { items: [] };
-  const cacheKey = 'news:' + cat + (cat === 'city' ? ':' + citySlug : '') + ':' + day;
-  const cached = await env.G7_KV.get(cacheKey, 'json');
-  if (cached) return cached;
-
-  const system =
-    'You are a careful news editor for Indian small-business owners. Today is ' + day + ' (India).\n' +
-    def.ask + (cat === 'city' ? '\nCITY: ' + city : '') + '\n\n' +
-    'RULES:\n' +
-    '- Only events that changed recently: announced, launched, raised, cut, approved, opened, closed.\n' +
-    '- No guides, explainers, "how to", "what is", rate tables, checklists.\n' +
-    '- Only from pages you actually found. Never invent a fact, figure or date.\n' +
-    '- Copy every number exactly as the source states it.\n' +
-    '- Nothing older than 48 hours.\n' +
-    '- Return 2 to 4 items, most important first.\n' +
-    '- sourceUrl must be the article that states the fact, never a home page.\n\n' +
-    'Reply with ONLY this JSON:\n' +
-    '{"items":[{"headline":"under 12 words","whatHappened":"one sentence, under 30 words",' +
-    '"sourceTitle":"","sourceUrl":""}]}';
-
-  /* Filter out UA-blocked domains from the category's allowed list.
-     Uses the shared news:blocked-ua KV key (same as business search). */
-  var _uaBlocked = await getBlockedDomains(env, []);
-
-  async function ask(domains) {
-    const tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 2 };
-    if (domains.length) tool.allowed_domains = domains;
-    return anthropicFetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-                 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
-        system: system, tools: [tool],
-        messages: [{ role: 'user', content: 'Today\'s ' + def.label + ' news.' }]
-      })
+/* ── Google News RSS feed fetcher ──
+   Fetches https://news.google.com/rss/search?q=<query>+when:<days>d&hl=en-IN&gl=IN&ceid=IN:en
+   Parses items: title (stripped of " - Source"), link, pubDate, source.
+   Dedupes by normalised title. Drops guide/listing titles. */
+var _guideTitleRe = /\bguide\b|\bhow to\b|\bexplained\b|\bwhat is\b|\beverything you need\b|\bchecklist\b|\brates list\b|\btips\b|\bbest \d/i;
+async function fetchNewsFeed(query, days) {
+  var url = 'https://news.google.com/rss/search?q=' +
+    encodeURIComponent(query + ' when:' + days + 'd') +
+    '&hl=en-IN&gl=IN&ceid=IN:en';
+  var r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; G7Scout/1.0)' } });
+  if (!r.ok) throw new Error('Google News RSS ' + r.status + ' for "' + query + '"');
+  var xml = await r.text();
+  /* Parse <item> blocks from RSS XML. */
+  var items = [];
+  var seen = new Set();
+  var _itemRe = /<item>([\s\S]*?)<\/item>/g;
+  var match;
+  while ((match = _itemRe.exec(xml)) !== null) {
+    var block = match[1];
+    var _t = (block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+    var _l = (block.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
+    var _d = (block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
+    var _s = (block.match(/<source[^>]*>([\s\S]*?)<\/source>/) || [])[1] || '';
+    /* Strip " - Source Name" suffix from title. */
+    _t = _t.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+    _l = _l.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+    _s = _s.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+    var _dashIdx = _t.lastIndexOf(' - ');
+    if (_dashIdx > 20) {
+      if (!_s) _s = _t.slice(_dashIdx + 3).trim();
+      _t = _t.slice(0, _dashIdx).trim();
+    }
+    if (!_t || !_l) continue;
+    /* Drop guide/listing titles. */
+    if (_guideTitleRe.test(_t)) continue;
+    /* Dedupe by normalised title (lowercase, stripped of punctuation). */
+    var _norm = _t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (seen.has(_norm)) continue;
+    seen.add(_norm);
+    items.push({
+      title: _t.slice(0, 150),
+      link: _l,
+      pubDate: _d ? new Date(_d).toISOString() : '',
+      source: _s.slice(0, 80)
     });
   }
-
-  let domains = def.domains.filter(function(d){ return !_uaBlocked.has(d); });
-  let r = await ask(domains);
-  if (r.status === 400) {
-    const errText = await r.text();
-    var _rejected = await parseAndStoreBlockedUa(env, errText);
-    if (!_rejected) throw new Error('shared ' + cat + ' 400: ' + errText.slice(0, 300));
-    _rejected.forEach(function(d) { _uaBlocked.add(d); });
-    domains = domains.filter(function(d){ return !_uaBlocked.has(d); });
-    console.log(JSON.stringify({ newsDomainsBlocked: _rejected, category: cat, remaining: domains }));
-    /* With fewer than two trusted outlets left, the category is not
-       trustworthy enough to show. Return nothing rather than search the
-       open web under a "trusted news" label. */
-    if (domains.length < 2) return { category: cat, label: def.label, items: [], date: day };
-    r = await ask(domains);
-  }
-  if (!r.ok) throw new Error('shared ' + cat + ' ' + r.status + ': ' + (await r.text()).slice(0, 300));
-  const data = await r.json();
-  recordCost(cost, 'claude-haiku-5-5', data);
-
-  /* Collect real API metadata: URLs, titles, cited text. */
-  const sharedMeta = collectSearchMeta(data);
-
-  /* Join text blocks, parse outermost JSON. */
-  const text = (data.content || []).filter(function(b){ return b.type === 'text'; })
-    .map(function(b){ return b.text; }).join('');
-  let parsed = { items: [] };
-  try {
-    const a = text.indexOf('{'), z = text.lastIndexOf('}');
-    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
-  } catch (e) {}
-
-  /* Integrity gate: URL was returned by web_search, not a home page,
-     not a listing/quote portal, not an evergreen guide. */
-  var sharedDrops = [];
-  const afterIntegrity = (Array.isArray(parsed.items) ? parsed.items : [])
-    .filter(function(it) {
-      if (!it || !it.headline || !it.sourceUrl) return false;
-      if (!sharedMeta.seen.has(it.sourceUrl)) { sharedDrops.push({ headline: it.headline, reason: 'URL not in search results' }); return false; }
-      if (isHomePage(it.sourceUrl)) { sharedDrops.push({ headline: it.headline, url: it.sourceUrl, reason: 'home/section page' }); return false; }
-      if (isListingOrQuote(it.sourceUrl)) { sharedDrops.push({ headline: it.headline, url: it.sourceUrl, reason: 'listing/quote portal' }); return false; }
-      var evg = evergreenCheck(sharedMeta.titles[it.sourceUrl] || it.headline, sharedMeta.pageAge[it.sourceUrl]);
-      if (!evg.pass) { sharedDrops.push({ headline: it.headline, url: it.sourceUrl, reason: evg.reason }); return false; }
-      return true;
-    })
-    .slice(0, 6);
-
-  /* Source-match gate: ≥2 meaningful headline words in API title/cited text. */
-  const afterSourceMatch = afterIntegrity
-    .filter(function(it) {
-      var check = sourceMatchCheck(it.headline, it.sourceUrl, sharedMeta);
-      if (!check.pass) {
-        sharedDrops.push({ headline: it.headline, reason: 'source-match: ' + check.reason });
-        return false;
-      }
-      return true;
-    })
-    .slice(0, 4)
-    .map(function(it) {
-      return cleanNewsItem({
-        headline: String(it.headline).slice(0, 120),
-        whatHappened: clipOneSentence(it.whatHappened),
-        sourceTitle: stripCite(String(sharedMeta.titles[it.sourceUrl] || '')).slice(0, 160),
-        sourceUrl: it.sourceUrl
-      });
-    });
-
-  /* Same-topic dedupe within the section. */
-  const kept = dedupeItems(afterSourceMatch);
-  if (kept.length < afterSourceMatch.length) {
-    afterSourceMatch.filter(function(it) { return kept.indexOf(it) === -1; })
-      .forEach(function(it) { sharedDrops.push({ headline: it.headline, reason: 'dedupe: duplicate topic' }); });
-  }
-
-  if (sharedDrops.length) {
-    try { console.log(JSON.stringify({ sharedNewsLog: cat, day: day, candidates: (parsed.items || []).length, kept: kept.length, drops: sharedDrops })); } catch(e){}
-  }
-
-  const result = { category: cat, label: def.label, items: kept, date: day };
-  await kvPut(env,cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
-
-  /* Persist as last-known-good for fallback when generation fails. */
-  if (kept.length > 0) {
-    var lastKey = 'news:last:' + cat + (cat === 'city' ? ':' + citySlug : '');
-    await kvPut(env,lastKey, JSON.stringify(result));
-  }
-
-  return result;
+  return items;
 }
 
-/* ── Industry news ──
-   Generated once per day per industry and shared across all firms in that
-   industry. Uses blocked_domains (not allowed_domains) like business search.
-   All quality gates from generateSharedNews apply. */
-async function generateIndustryNews(env, industryKey, day, cost) {
+/* Fetch all feeds for an industry, merge, dedupe, drop stale (>7d).
+   Cached in KV at news:industry:<KEY>:<day> with 48h TTL. */
+async function fetchIndustryFeeds(env, industryKey, day) {
   var def = INDUSTRIES[industryKey];
-  if (!def) return { items: [] };
+  if (!def || !def.feeds || !def.feeds.length) return { category: 'industry', industry: industryKey, label: (def && def.label) || '', items: [], date: day };
   var cacheKey = 'news:industry:' + industryKey + ':' + day;
   var cached = await env.G7_KV.get(cacheKey, 'json');
   if (cached) return cached;
 
-  /* Pick one rotating query per search (day-of-year modulo). */
-  var qs = def.queries || [];
-  if (!qs.length) return { items: [] };
-  var _d = new Date(day + 'T12:00:00+05:30');
-  var _jan1 = new Date(_d.getFullYear(), 0, 1);
-  var _doy = Math.floor((_d - _jan1) / 86400000);
-  var query = qs[_doy % qs.length];
-
-  var system =
-    'You are a careful news editor. Today is ' + day + ' (India).\n' +
-    'Find the most important recent news about: ' + def.label + '.\n\n' +
-    'RULES:\n' +
-    '- Only events from the last 48 hours: announced, launched, raised, cut, approved, opened, closed.\n' +
-    '- No guides, explainers, "how to", "what is", rate tables, checklists.\n' +
-    '- Only from pages you actually found. Never invent a fact, figure or date.\n' +
-    '- Copy every number exactly as the source states it.\n' +
-    '- Nothing older than 48 hours.\n' +
-    '- Return 3 to 5 items, most important first.\n' +
-    '- Every item must be about ' + def.label + '. Drop anything unrelated.\n' +
-    '- sourceUrl must be the article that states the fact, never a home page.\n\n' +
-    'Reply with ONLY this JSON:\n' +
-    '{"items":[{"headline":"under 12 words","whatHappened":"one sentence, under 30 words",' +
-    '"sourceTitle":"","sourceUrl":""}]}';
-
-  /* Filter out UA-blocked domains. */
-  var _uaBlocked = await getBlockedDomains(env, BLOCKED_SEARCH_DOMAINS);
-
-  async function ask() {
-    var tool = { type: 'web_search_20250305', name: 'web_search', max_uses: 3 };
-    tool.blocked_domains = Array.from(_uaBlocked);
-    return anthropicFetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
-                 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
-        system: system, tools: [tool],
-        messages: [{ role: 'user', content: query }]
-      })
-    });
-  }
-
-  var r = await ask();
-  if (r.status === 400) {
-    var errText = await r.text();
-    var _rejected = await parseAndStoreBlockedUa(env, errText);
-    if (!_rejected) throw new Error('industry ' + industryKey + ' 400: ' + errText.slice(0, 300));
-    _rejected.forEach(function(d) { _uaBlocked.add(d); });
-    console.log(JSON.stringify({ industryDomainsBlocked: _rejected, industry: industryKey }));
-    r = await ask();
-  }
-  if (!r.ok) throw new Error('industry ' + industryKey + ' ' + r.status + ': ' + (await r.text()).slice(0, 300));
-  var data = await r.json();
-  recordCost(cost, 'claude-haiku-5-5', data);
-
-  /* Collect real API metadata. */
-  var meta = collectSearchMeta(data);
-
-  /* Parse JSON from text blocks. */
-  var text = (data.content || []).filter(function(b){ return b.type === 'text'; })
-    .map(function(b){ return b.text; }).join('');
-  var parsed = { items: [] };
-  try {
-    var a = text.indexOf('{'), z = text.lastIndexOf('}');
-    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
-  } catch (e) {}
-
-  /* Integrity gate: URL in search results, not home page, not listing/quote, not evergreen. */
-  var drops = [];
-  var afterIntegrity = (Array.isArray(parsed.items) ? parsed.items : [])
-    .filter(function(it) {
-      if (!it || !it.headline || !it.sourceUrl) return false;
-      if (!meta.seen.has(it.sourceUrl)) { drops.push({ headline: it.headline, reason: 'URL not in search results' }); return false; }
-      if (isHomePage(it.sourceUrl)) { drops.push({ headline: it.headline, reason: 'home/section page' }); return false; }
-      if (isListingOrQuote(it.sourceUrl)) { drops.push({ headline: it.headline, reason: 'listing/quote portal' }); return false; }
-      var evg = evergreenCheck(meta.titles[it.sourceUrl] || it.headline, meta.pageAge[it.sourceUrl]);
-      if (!evg.pass) { drops.push({ headline: it.headline, reason: evg.reason }); return false; }
-      return true;
-    })
-    .slice(0, 8);
-
-  /* Source-match gate. */
-  var afterSourceMatch = afterIntegrity
-    .filter(function(it) {
-      var check = sourceMatchCheck(it.headline, it.sourceUrl, meta);
-      if (!check.pass) { drops.push({ headline: it.headline, reason: 'source-match: ' + check.reason }); return false; }
-      return true;
-    })
-    .slice(0, 6);
-
-  /* Freshness gate: drop items older than 7 days, max 1 undated. */
-  var _indUndated = 0;
-  var afterFresh = afterSourceMatch.filter(function(it) {
-    var age = checkPageAge(meta.pageAge[it.sourceUrl], 7);
-    if (age.dated && !age.recent) { drops.push({ headline: it.headline, reason: 'industry: older than 7 days' }); return false; }
-    if (!age.dated) {
-      _indUndated++;
-      if (_indUndated > 1) { drops.push({ headline: it.headline, reason: 'industry: undated cap (max 1)' }); return false; }
-    }
-    return true;
-  });
-
-  /* Sort: dated first, newest first. */
-  afterFresh.sort(function(a, b) {
-    var ageA = checkPageAge(meta.pageAge[a.sourceUrl], 7);
-    var ageB = checkPageAge(meta.pageAge[b.sourceUrl], 7);
-    var d = (ageB.dated ? 1 : 0) - (ageA.dated ? 1 : 0);
-    if (d !== 0) return d;
-    return (ageA._days || 999) - (ageB._days || 999);
-  });
-
-  var cleaned = afterFresh.slice(0, 5).map(function(it) {
-      return cleanNewsItem({
-        headline: String(it.headline).slice(0, 120),
-        whatHappened: clipOneSentence(it.whatHappened),
-        sourceTitle: stripCite(String(meta.titles[it.sourceUrl] || '')).slice(0, 160),
-        sourceUrl: it.sourceUrl
-      });
-    });
-
-  /* Dedupe. */
-  var kept = dedupeItems(cleaned);
-
-  /* Retry: if fewer than 2 items survived, try the next rotating query once. */
-  if (kept.length < 2 && qs.length > 1) {
-    var query2 = qs[(_doy + 1) % qs.length];
+  var all = [];
+  var errors = [];
+  for (var fi = 0; fi < def.feeds.length; fi++) {
     try {
-      var _retryTool = { type: 'web_search_20250305', name: 'web_search', max_uses: 3, blocked_domains: Array.from(_uaBlocked) };
-      var _r2 = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 6000, thinking: { type: 'disabled' },
-          system: system, messages: [{ role: 'user', content: query2 }],
-          tools: [_retryTool]
-        })
-      });
-      if (_r2.ok) {
-        var _j2 = await _r2.json();
-        recordCost(cost, 'claude-haiku-5-5', _j2);
-        var _txt2 = (_j2.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('\n');
-        var _meta2 = collectSearchMeta(_j2);
-        var _parsed2 = { items: [] };
-        try {
-          var _a2 = _txt2.indexOf('{'), _z2 = _txt2.lastIndexOf('}');
-          if (_a2 !== -1 && _z2 > _a2) _parsed2 = JSON.parse(_txt2.slice(_a2, _z2 + 1));
-        } catch(e) {}
-        var _items2 = Array.isArray(_parsed2.items) ? _parsed2.items : [];
-        /* Run same quality gates on retry items. */
-        var _after2 = _items2.filter(function(it) {
-          if (!it.headline || !it.sourceUrl || !_meta2.seen.has(it.sourceUrl)) return false;
-          if (isHomePage(it.sourceUrl)) return false;
-          if (isListingOrQuote(it.sourceUrl)) return false;
-          var evg = evergreenCheck(_meta2.titles[it.sourceUrl] || it.headline, _meta2.pageAge[it.sourceUrl]);
-          if (!evg.pass) return false;
-          var sm = sourceMatchCheck(it.headline, it.sourceUrl, _meta2);
-          if (!sm.pass) return false;
-          var age = checkPageAge(_meta2.pageAge[it.sourceUrl], 7);
-          if (age.dated && !age.recent) return false;
-          return true;
-        }).slice(0, 4).map(function(it) {
-          return cleanNewsItem({ headline: String(it.headline).slice(0, 120), whatHappened: clipOneSentence(it.whatHappened), sourceTitle: stripCite(String(_meta2.titles[it.sourceUrl] || '')).slice(0, 160), sourceUrl: it.sourceUrl });
-        });
-        /* Merge: add new items that aren't dupes of what we already have. */
-        var _existingHeadlines = kept.map(function(k){ return k.headline.toLowerCase(); });
-        _after2.forEach(function(it) {
-          if (kept.length >= 4) return;
-          if (_existingHeadlines.indexOf(it.headline.toLowerCase()) === -1) kept.push(it);
-        });
-        console.log(JSON.stringify({ industryRetry: industryKey, query2: query2, added: kept.length - cleaned.length }));
-      }
-    } catch(e) {
-      console.log(JSON.stringify({ industryRetryError: industryKey, error: String(e && e.message || e).slice(0, 200) }));
+      var items = await fetchNewsFeed(def.feeds[fi], 7);
+      all = all.concat(items);
+    } catch (e) {
+      errors.push({ query: def.feeds[fi], error: String(e && e.message || e).slice(0, 200) });
     }
   }
 
-  if (drops.length) {
-    try { console.log(JSON.stringify({ industryNewsLog: industryKey, day: day, query: query, candidates: (parsed.items || []).length, kept: kept.length, drops: drops })); } catch(e){}
-  }
+  /* Dedupe across all feeds by normalised title. */
+  var seen = new Set();
+  var merged = [];
+  var now = Date.now();
+  all.forEach(function(it) {
+    var norm = it.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (seen.has(norm)) return;
+    seen.add(norm);
+    /* Drop items older than 7 days. */
+    if (it.pubDate) {
+      var age = now - new Date(it.pubDate).getTime();
+      if (age > 7 * 86400000) return;
+    }
+    merged.push(it);
+  });
 
-  var result = { category: 'industry', industry: industryKey, label: def.label, items: kept.slice(0, 4), date: day, query: query };
+  /* Sort newest first. */
+  merged.sort(function(a, b) {
+    return (b.pubDate || '').localeCompare(a.pubDate || '');
+  });
+
+  /* Final dedupe by headline words (same as dedupeItems but on title field). */
+  var cleaned = merged.slice(0, 30).map(function(it) {
+    return { headline: it.title, sourceUrl: it.link, sourceTitle: it.source, pubDate: it.pubDate };
+  });
+  cleaned = dedupeItems(cleaned);
+
+  var result = { category: 'industry', industry: industryKey, label: def.label, items: cleaned.slice(0, 15), date: day };
+  if (errors.length) {
+    console.log(JSON.stringify({ industryFeedErrors: industryKey, errors: errors }));
+    result._feedErrors = errors;
+  }
   await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
-
-  /* Persist as last-known-good. */
-  if (kept.length > 0) {
-    await kvPut(env, 'news:last:industry:' + industryKey, JSON.stringify(result));
-  }
-
   return result;
 }
 
-/* Last-known-good industry news fallback (mirrors lastSharedNews pattern). */
-async function lastIndustryNews(env, industryKey) {
-  return env.G7_KV.get('news:last:industry:' + industryKey, 'json');
+/* Fetch feeds for a shared category (policy, markets, global, city).
+   Cached in KV at news:<cat>[:<citySlug>]:<day> with 48h TTL. */
+async function fetchCategoryFeeds(env, cat, day, city) {
+  var def = FEED_CATS[cat];
+  if (!def) return { category: cat, label: cat, items: [], date: day };
+  var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+  var cacheKey = 'news:' + cat + (cat === 'city' ? ':' + citySlug : '') + ':' + day;
+  var cached = await env.G7_KV.get(cacheKey, 'json');
+  if (cached) return cached;
+
+  /* Build feed queries. City uses dynamic queries. */
+  var feedQueries = [];
+  if (cat === 'city') {
+    var normCity = normaliseCity(city);
+    if (!normCity) return { category: cat, label: 'Your city', items: [], date: day };
+    feedQueries = [normCity + ' development', normCity + ' real estate'];
+  } else {
+    feedQueries = def.feeds || [];
+  }
+
+  var all = [];
+  var errors = [];
+  for (var fi = 0; fi < feedQueries.length; fi++) {
+    try {
+      var items = await fetchNewsFeed(feedQueries[fi], def.days);
+      all = all.concat(items);
+    } catch (e) {
+      errors.push({ query: feedQueries[fi], error: String(e && e.message || e).slice(0, 200) });
+    }
+  }
+
+  /* Dedupe, drop stale. */
+  var seen = new Set();
+  var merged = [];
+  var now = Date.now();
+  all.forEach(function(it) {
+    var norm = it.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (seen.has(norm)) return;
+    seen.add(norm);
+    if (it.pubDate) {
+      var age = now - new Date(it.pubDate).getTime();
+      if (age > def.days * 86400000) return;
+    }
+    merged.push(it);
+  });
+
+  merged.sort(function(a, b) {
+    return (b.pubDate || '').localeCompare(a.pubDate || '');
+  });
+
+  var cleaned = merged.slice(0, 20).map(function(it) {
+    return { headline: it.title, sourceUrl: it.link, sourceTitle: it.source, pubDate: it.pubDate };
+  });
+  cleaned = dedupeItems(cleaned);
+
+  var result = { category: cat, label: def.label || cat, items: cleaned.slice(0, 10), date: day };
+  if (errors.length) result._feedErrors = errors;
+  await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
+  return result;
 }
 
-/* Per firm, no search: tag every item with why, impact, group, horizon.
-   Cheap model — the facts are already verified. */
-async function personaliseNews(env, firmCode, day, context, sections, cost) {
-  const key = 'news:sig:' + firmCode + ':' + day;
-  const cached = await env.G7_KV.get(key, 'json');
+/* Civic topics — never show in "Also worth knowing". */
+var _civicRe = /\b(water supply|water cut|traffic|power cut|load.?shedding|crime|robbery|murder|theft|politics|political|weather|rain|flood|heat.?wave|cold.?wave|storm|cyclone)\b/i;
+
+/* ── NEWS PICKER ──
+   One Haiku call per firm: receives numbered candidate titles + context,
+   returns indexes + For you / Do this for each picked item. */
+async function pickNewsForFirm(env, firmCode, day, context, industryCandidates, categoryCandidates, cost) {
+  var cacheKey = 'news:firm:' + firmCode + ':' + day;
+  var cached = await env.G7_KV.get(cacheKey, 'json');
   if (cached) return cached;
-  /* Mark which items are industry items — they get whatToDo too. */
-  var industryIds = new Set();
-  const flat = [];
-  sections.forEach(function(s, si) {
-    (s.items || []).forEach(function(it, ii) {
-      var id = si + '.' + ii;
-      flat.push({ id: id, headline: it.headline, whatHappened: it.whatHappened || it.whyItMatters || '' });
-      if (s.category === 'industry') industryIds.add(id);
+
+  /* Number all candidates so the model picks by index. */
+  var numbered = [];
+  var indexMap = {}; /* index → { source: 'industry'|cat, item } */
+
+  industryCandidates.forEach(function(it, i) {
+    var idx = numbered.length;
+    numbered.push({ idx: idx, headline: it.headline, source: it.sourceTitle || '' });
+    indexMap[idx] = { source: 'industry', item: it };
+  });
+
+  var catItems = {};
+  Object.keys(categoryCandidates).forEach(function(cat) {
+    catItems[cat] = [];
+    (categoryCandidates[cat] || []).forEach(function(it) {
+      var idx = numbered.length;
+      numbered.push({ idx: idx, headline: it.headline, source: it.sourceTitle || '', category: cat });
+      indexMap[idx] = { source: cat, item: it };
+      catItems[cat].push(idx);
     });
   });
-  if (!flat.length) return {};
-  /* Industry items get an extra field: whatToDo. */
-  var hasIndustry = industryIds.size > 0;
-  var whatToDoLine = hasIndustry
-    ? '\n  whatToDo: (ONLY for items marked [INDUSTRY]) one concrete action under 15 words ' +
-      'the owner should take this week because of this news, or "" if no action\n'
-    : '';
-  /* Tag industry items so the model knows which ones get whatToDo. */
-  var taggedFlat = flat.map(function(it) {
-    if (industryIds.has(it.id)) return Object.assign({}, it, { _industry: true });
-    return it;
-  });
-  const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+
+  if (!numbered.length) {
+    var empty = { industry: [], also: [], markets: null, generatedAt: new Date().toISOString() };
+    await kvPut(env, cacheKey, JSON.stringify(empty), { expirationTtl: 172800 });
+    return empty;
+  }
+
+  var system =
+    'You pick the most useful news for one Indian small business.\n\n' +
+    'RULES:\n' +
+    '- Pick 3–4 items for "industry" (items 0–' + (industryCandidates.length - 1) + ' are industry news).\n' +
+    '- Pick up to 3 items for "also" from the remaining categories (policy, city). ' +
+    'Skip civic topics (water, traffic, power cuts, crime, weather, local politics) unless they directly affect this trade.\n' +
+    '- For each pick: why (one sentence, under 25 words, concrete effect on this business, ' +
+    'or exactly "No direct effect on your business.") and whatToDo (one concrete action under 15 words, or "").\n' +
+    '- impact: one of demand_up, demand_down, cost_up, cost_down, lead_source, ' +
+    'competitor, regulation, timing, none.\n' +
+    '- impact "competitor" ONLY when the company in the news operates in the same city/region.\n' +
+    '- You may ONLY choose from the given indexes. Copy them exactly.\n' +
+    '- If a markets or global item exists, pick the single best one as "markets" (compact line, no why/whatToDo).\n\n' +
+    'Reply with ONLY this JSON:\n' +
+    '{"industry":[{"idx":N,"why":"","whatToDo":"","impact":""},...],\n' +
+    ' "also":[{"idx":N,"why":"","whatToDo":"","impact":""},...],\n' +
+    ' "markets":{"idx":N} or null}';
+
+  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY,
                'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-haiku-5-5', max_tokens: 2500, thinking: { type: 'disabled' },
-      system: 'For each news item, judge what it means for the business described.\n' +
-        'Return for each id an object:\n' +
-        '  why: ONE sentence under 25 words on the concrete effect on this business, ' +
-        'or exactly "No direct effect on your business."\n' +
-        '  impact: one of demand_up, demand_down, cost_up, cost_down, lead_source, ' +
-        'competitor, regulation, timing, none\n' +
-        '  group: the name of the business\'s customer group most affected, copied ' +
-        'exactly from the business description, or ""\n' +
-        '  horizon: now (this week), weeks, or months' + whatToDoLine + '\n\n' +
-        'STRICT RULES:\n' +
-        '- Say "No direct effect on your business." whenever the link would be a stretch. ' +
-        'Never invent an effect from unrelated news (politics, celebrity, sport).\n' +
-        '- Give an effect ONLY when the news changes this business\'s costs, demand, customers, rules or competitors.\n' +
-        '- impact:"competitor" ONLY when the company in the news operates in the same city/region as this business. ' +
-        'A national or distant competitor is not impact "competitor" — use "none" or the real effect instead.\n' +
-        '- Local civic issues (water supply, traffic, power cuts, crime, local politics, weather) ' +
-        'are "No direct effect on your business." unless they directly change this trade\'s costs, ' +
-        'demand, rules or site work for a named customer group in the same week.\n' +
-        (hasIndustry ? '- Items with _industry:true are industry news. Give them a whatToDo action when the effect is real.\n' : '') +
-        '- Never invent facts beyond the item. Never give investment or loan advice.\n' +
-        'Reply with ONLY JSON: {"<id>":{"why":"","impact":"","group":"","horizon":""' +
-        (hasIndustry ? ',"whatToDo":""' : '') + '}, ...}',
+      model: 'claude-haiku-5-5', max_tokens: 2000, thinking: { type: 'disabled' },
+      system: system,
       messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
-        '\n\nITEMS:\n' + JSON.stringify(taggedFlat) }]
+        '\n\nCANDIDATES:\n' + JSON.stringify(numbered) }]
     })
   });
-  let out = {};
+
+  var picks = { industry: [], also: [], markets: null };
   if (r.ok) {
+    var d = await r.json();
+    recordCost(cost, 'claude-haiku-5-5', d);
+    var t = (d.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('');
     try {
-      const d = await r.json();
-      recordCost(cost, 'claude-haiku-5-5', d);
-      const t = (d.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('');
-      const a = t.indexOf('{'), z = t.lastIndexOf('}');
-      if (a !== -1 && z > a) out = JSON.parse(t.slice(a, z + 1));
+      var a = t.indexOf('{'), z = t.lastIndexOf('}');
+      if (a !== -1 && z > a) picks = JSON.parse(t.slice(a, z + 1));
     } catch (e) {}
+  } else {
+    var errText = await r.text();
+    throw new Error('Haiku picker ' + r.status + ': ' + errText.slice(0, 300));
   }
-  /* Strip citation markup from why and whatToDo fields. */
-  Object.keys(out).forEach(function(k) {
-    if (out[k] && out[k].why) out[k].why = stripCite(out[k].why);
-    if (out[k] && out[k].whatToDo) out[k].whatToDo = stripCite(out[k].whatToDo);
-  });
-  await kvPut(env,key, JSON.stringify(out), { expirationTtl: 172800 });
-  return out;
+
+  /* Resolve indexes to real items. Drop any invalid index. */
+  var NO_EFFECT = 'No direct effect on your business.';
+  function resolvePickedItems(arr, maxCount) {
+    var out = [];
+    (Array.isArray(arr) ? arr : []).forEach(function(p) {
+      if (out.length >= maxCount) return;
+      var idx = (typeof p === 'object' && p !== null) ? p.idx : p;
+      if (typeof idx !== 'number' || !indexMap[idx]) return;
+      var src = indexMap[idx];
+      var it = Object.assign({}, src.item);
+      if (p.why) it.why = String(p.why);
+      if (p.whatToDo) it.whatToDo = String(p.whatToDo);
+      if (p.impact) it.impact = String(p.impact);
+      if (p.why && p.why !== NO_EFFECT) it.whyItMatters = p.why;
+      out.push(it);
+    });
+    return out;
+  }
+
+  var industryPicked = resolvePickedItems(picks.industry, 4);
+  var alsoPicked = resolvePickedItems(picks.also, 3);
+
+  /* Fallback: if fewer than 2 industry items picked but candidates exist,
+     take the newest remaining ones without For you / Do this. */
+  if (industryPicked.length < 2 && industryCandidates.length > 0) {
+    var pickedUrls = new Set(industryPicked.map(function(it){ return it.sourceUrl; }));
+    for (var fi = 0; fi < industryCandidates.length && industryPicked.length < 2; fi++) {
+      if (!pickedUrls.has(industryCandidates[fi].sourceUrl)) {
+        industryPicked.push(Object.assign({}, industryCandidates[fi]));
+      }
+    }
+  }
+
+  /* Filter civic items from also. */
+  alsoPicked = alsoPicked.filter(function(it) { return !_civicRe.test(it.headline || ''); });
+
+  /* Markets line. */
+  var marketsItem = null;
+  if (picks.markets && typeof picks.markets.idx === 'number' && indexMap[picks.markets.idx]) {
+    marketsItem = Object.assign({}, indexMap[picks.markets.idx].item, { _marketLine: true });
+  }
+
+  var result = {
+    industry: industryPicked,
+    also: alsoPicked,
+    markets: marketsItem,
+    generatedAt: new Date().toISOString()
+  };
+  await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
+  return result;
 }
 
-/* Resolve effective news prefs. undefined (never chosen) → smart defaults
-   by business type bucket. [] (explicitly saved empty) → respected as-is.
-   Returns an array of NEWS_CATS keys. */
+/* Professional business types that get india_markets in their default prefs. */
 const NEWS_PRO_TYPES = [
   'Training / Corporate Learning','Digital Marketing Agency','CA / Accounting Firm',
   'Legal Firm / Lawyer','IT Services / Software Company','SaaS / Software Product',
@@ -2950,13 +2190,12 @@ async function resolveNewsPrefs(env, firmCode, rawPrefs) {
 }
 
 /* ── assembleNews ──
-   Reads cached industry news + weekly local + shared sections + personalisation
-   from KV. Builds the final news object.
-   Section order: Your industry → Your business (weekly local) → Also worth knowing
+   Reads cached feeds + picker result from KV. Builds the final news object.
+   Section order: Your industry → Also worth knowing → (no "Your area" section)
    opts:
-     context   — business context string (needed for personaliseNews)
+     context   — business context string (needed for picker)
      city      — firm's city
-     prefs     — array of NEWS_CATS keys
+     prefs     — array of NEWS_CATS keys (india_policy, india_markets, global, city)
      cost      — cost accumulator
      cacheOnly — when true, return null if nothing cached (never generate)
      industry  — INDUSTRIES key for this firm (from resolveIndustryForFirm)
@@ -2966,249 +2205,127 @@ async function assembleNews(env, firmCode, day, opts) {
   var context = opts.context || '';
   var city = opts.city || '';
   var prefs = opts.prefs || [];
-  var cost = opts.cost || newCostAccum();
-  var cacheOnly = !!opts.cacheOnly;
-  var industry = opts.industry || '';
-
-  /* Resolve industry if not passed. */
-  if (!industry) {
-    try { industry = await resolveIndustryForFirm(env, firmCode); } catch(e) { industry = 'services_trade'; }
-  }
-
+  var cost = opts.cost || null;
+  var cacheOnly = opts.cacheOnly || false;
+  var industry = opts.industry || 'services_trade';
   var errors = [];
 
-  /* ── 1. Industry news from cache ── */
-  var industrySec = null;
-  var indCacheKey = 'news:industry:' + industry + ':' + day;
-  industrySec = await env.G7_KV.get(indCacheKey, 'json');
-  if (!industrySec) industrySec = await lastIndustryNews(env, industry);
-  if (!industrySec || !industrySec.items || !industrySec.items.length) {
-    errors.push({ category: 'industry:' + industry, error: 'no cache' });
-    industrySec = null;
+  /* ── 1. Industry feed from cache ── */
+  var industrySec = await env.G7_KV.get('news:industry:' + industry + ':' + day, 'json');
+  if (!industrySec && !cacheOnly) {
+    try { industrySec = await fetchIndustryFeeds(env, industry, day); } catch (e) {
+      errors.push({ stage: 'industry', error: String(e && e.message || e).slice(0, 200) });
+    }
   }
 
-  /* ── 2. Weekly local (business brief) from cache ── */
-  var _dayDate = new Date(day + 'T06:00:00+05:30');
-  var _weekday = _dayDate.getUTCDay();
-  var _mondayOffset = (_weekday === 0) ? -6 : (1 - _weekday);
-  var _monday = new Date(_dayDate.getTime() + _mondayOffset * 86400000);
-  var _mondayDay = _monday.toISOString().slice(0, 10);
-  var business = await env.G7_KV.get('market:' + firmCode + ':local:' + _mondayDay, 'json');
-  if (!business && cacheOnly && !industrySec) return null;
-
-  /* ── 3. Shared sections from cache ── */
-  var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
-  var sharedSections = [];
-  var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+  /* ── 2. Category feeds from cache ── */
+  var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return FEED_CATS[c]; });
+  var catFeeds = {};
   for (var ci = 0; ci < chosen.length; ci++) {
     var c = chosen[ci];
-    var cacheKey = 'news:' + c + (c === 'city' ? ':' + citySlug : '') + ':' + day;
-    var sec = await env.G7_KV.get(cacheKey, 'json');
-    if (!sec) sec = await lastSharedNews(env, c, citySlug);
-    if (sec && sec.items && sec.items.length) sharedSections.push(sec);
-    else errors.push({ category: c, error: 'no cache' });
+    var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+    var catKey = 'news:' + c + (c === 'city' ? ':' + citySlug : '') + ':' + day;
+    var sec = await env.G7_KV.get(catKey, 'json');
+    if (!sec && !cacheOnly) {
+      try { sec = await fetchCategoryFeeds(env, c, day, city); } catch (e) {
+        errors.push({ stage: c, error: String(e && e.message || e).slice(0, 200) });
+      }
+    }
+    if (sec && sec.items && sec.items.length) catFeeds[c] = sec.items;
   }
 
-  /* Clean citation markup from all cached items. */
-  if (industrySec && industrySec.items) industrySec.items.forEach(cleanNewsItem);
-  if (business && business.items) business.items.forEach(cleanNewsItem);
-  sharedSections.forEach(function(s) { if (s.items) s.items.forEach(cleanNewsItem); });
-
-  /* ── 4. Personalisation tags ──
-     Section order for personalisation: [industry, business, ...shared].
-     Industry items get whatToDo in addition to why/impact/group/horizon. */
-  var allForSig = [];
-  if (industrySec) allForSig.push(industrySec);
-  allForSig.push({ category: 'business', items: (business && business.items) || [] });
-  allForSig = allForSig.concat(sharedSections);
-
-  var sig;
+  /* ── 3. Picker: one Haiku call per firm ── */
+  var industryCandidates = (industrySec && industrySec.items) || [];
+  var pickerResult;
   if (cacheOnly) {
-    sig = await env.G7_KV.get('news:sig:' + firmCode + ':' + day, 'json') || {};
+    pickerResult = await env.G7_KV.get('news:firm:' + firmCode + ':' + day, 'json');
+    if (!pickerResult && !industryCandidates.length && !Object.keys(catFeeds).length) return null;
+    if (!pickerResult) pickerResult = { industry: [], also: [], markets: null };
   } else {
-    sig = await personaliseNews(env, firmCode, day, context, allForSig, cost);
+    pickerResult = await pickNewsForFirm(env, firmCode, day, context, industryCandidates, catFeeds, cost);
   }
 
-  /* Apply tags to all sections. */
+  /* ── 4. Build output sections ── */
   var NO_EFFECT = 'No direct effect on your business.';
-  allForSig.forEach(function(s, si) {
-    (s.items || []).forEach(function(it, ii) {
-      var v = sig[si + '.' + ii];
-      if (typeof v === 'string') v = { why: v, impact: 'none', group: '', horizon: '' };
-      if (v) {
-        it.why = v.why || '';
-        it.impact = v.impact || 'none';
-        it.group = v.group || '';
-        it.horizon = v.horizon || '';
-        /* Industry items get whatToDo (written as whyItMatters for business-style rendering). */
-        if (s.category === 'industry' && v.whatToDo) {
-          it.whatToDo = v.whatToDo;
-          /* Also promote why to whyItMatters for consistent rendering. */
-          if (it.why && it.why.trim() !== NO_EFFECT) it.whyItMatters = it.why;
-        }
-      }
-    });
-  });
 
-  /* ── 5. Build output sections ── */
-
-  /* 5a. "Your industry" — show ALL kept items (max 4), no impact filter.
-     Items with a real effect sort first; "No direct effect" items follow. */
-  var _impactRank = { demand_up:5, demand_down:5, cost_up:4, cost_down:4, regulation:4,
-                      competitor:3, timing:3, lead_source:2, none:0 };
-  var industryItems = [];
-  if (industrySec && industrySec.items) {
-    industryItems = (industrySec.items || []).slice();
-    industryItems.sort(function(a, b) {
-      return (_impactRank[b.impact] || 0) - (_impactRank[a.impact] || 0);
-    });
+  /* 4a. Industry section */
+  var finalSections = [];
+  if (pickerResult.industry && pickerResult.industry.length > 0) {
+    var indLabel = (INDUSTRIES[industry] && INDUSTRIES[industry].label) || 'Your industry';
+    finalSections.push({ category: 'industry', label: indLabel, items: pickerResult.industry });
   }
 
-  /* 5b. "Also worth knowing" — shared section items with real effect + market lines.
-     Civic items (water, traffic, power cuts, crime, local politics, weather) never appear here. */
-  var _civicRe = /\b(water supply|water cut|traffic|power cut|load.?shedding|crime|robbery|murder|theft|politics|political|weather|rain|flood|heat.?wave|cold.?wave|storm|cyclone)\b/i;
-  var alsoPool = [];
-  sharedSections.forEach(function(s) {
-    (s.items || []).forEach(function(it) {
-      if (it.impact && it.impact !== 'none' && it.why && it.why.trim() !== NO_EFFECT) {
-        if (_civicRe.test(it.headline || '')) return;
-        alsoPool.push(it);
-      }
-    });
+  /* 4b. Also worth knowing */
+  var alsoItems = (pickerResult.also || []).filter(function(it) {
+    /* Drop civic topics. */
+    if (_civicRe.test(it.headline || '')) return false;
+    return true;
   });
-  alsoPool.sort(function(a, b) {
-    return (_impactRank[b.impact] || 0) - (_impactRank[a.impact] || 0);
-  });
-  var alsoSection = [];
-  if (alsoPool.length > 0) {
-    alsoSection = [{ category: 'also', label: 'Also worth knowing', items: alsoPool.slice(0, 3) }];
-  }
 
-  /* Markets today compact lines — skip if the same story is already in alsoPool. */
-  var _marketCats = ['india_markets', 'global'];
-  var _alsoHeadlines = alsoPool.map(function(it) { return (it.headline || '').toLowerCase(); });
-  var _marketItems = [];
-  _marketCats.forEach(function(mc) {
-    if (chosen.indexOf(mc) === -1) return;
-    var sec = sharedSections.filter(function(s) { return s.category === mc; })[0];
-    if (!sec || !sec.items || !sec.items.length) return;
-    var mIt = sec.items[0];
-    /* Skip if headline words overlap enough with an existing also item (dedupe rule). */
-    var _mWords = (mIt.headline || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(function(w){ return w.length > 3; });
-    var isDupe = _alsoHeadlines.some(function(ah) {
+  /* 4c. Markets / global compact line */
+  if (pickerResult.markets) {
+    /* Check if market headline is a dupe of an also item. */
+    var mHeadline = (pickerResult.markets.headline || '').toLowerCase();
+    var _mWords = mHeadline.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(function(w){ return w.length > 3; });
+    var isDupe = alsoItems.some(function(it) {
+      var ah = (it.headline || '').toLowerCase();
       var shared = _mWords.filter(function(w){ return ah.indexOf(w) !== -1; }).length;
       return shared >= 3;
     });
-    if (!isDupe) _marketItems.push(Object.assign({}, mIt, { _marketLine: true }));
-  });
-  if (_marketItems.length) {
-    if (!alsoSection.length) alsoSection = [{ category: 'also', label: 'Also worth knowing', items: [] }];
-    alsoSection[0].items = alsoSection[0].items.concat(_marketItems);
+    if (!isDupe) alsoItems.push(pickerResult.markets);
   }
 
-  /* 5c. Assemble final sections array:
-     [Your industry (if items)] + [Also worth knowing (if items)] */
-  var finalSections = [];
-  if (industryItems.length > 0) {
-    var indLabel = (INDUSTRIES[industry] && INDUSTRIES[industry].label) || 'Your industry';
-    finalSections.push({ category: 'industry', label: indLabel, items: industryItems.slice(0, 4) });
+  if (alsoItems.length > 0) {
+    finalSections.push({ category: 'also', label: 'Also worth knowing', items: alsoItems });
   }
-  finalSections = finalSections.concat(alsoSection);
 
-  /* ── 6. Final object ── */
-  var bizLog = (business && business._log) || null;
-  if (business) delete business._log;
+  /* ── 5. Final object (same shape as before — business is always empty now) ── */
   var out = {
-    business: business,
+    business: { items: [] },
     sections: finalSections,
     errors: errors,
     industry: industry,
-    generatedAt: (business && business.generatedAt) || (industrySec && industrySec.date) || new Date().toISOString()
+    generatedAt: pickerResult.generatedAt || new Date().toISOString()
   };
-  out._log = bizLog;
   return out;
 }
 
-/* Everything a firm reads today: industry news (shared) + weekly local
-   search + shared categories, then assemble the final object.
-   Used by cron, admin regen-news, GET /scout/news, GET /scout/move. */
+/* Everything a firm reads today: fetch industry + category feeds (shared),
+   then pick per firm. Used by cron, admin regen-news, GET /scout/news. */
 async function buildDailyNews(env, firmCode, day, context, city, prefs, cost, opts) {
-  var forceLocal = (opts && opts.forceLocal) || false;
   var _genError = null;
-  var _capturedLog = null;
 
-  /* ── 1. Industry news (shared, cached by industry key) ── */
+  /* ── 1. Industry feeds (shared, cached by industry key) ── */
   var industry = await resolveIndustryForFirm(env, firmCode);
   try {
-    await generateIndustryNews(env, industry, day, cost);
+    await fetchIndustryFeeds(env, industry, day);
   } catch (e) {
     var indErr = String((e && e.message) || e).slice(0, 300);
-    console.log(JSON.stringify({ industryNewsFallback: firmCode, industry: industry, reason: indErr }));
-    if (isBillingError(e)) await sendCreditAlert(env, day);
-    _genError = { stage: 'industry', reason: indErr };
+    console.log(JSON.stringify({ industryFeedFallback: firmCode, industry: industry, reason: indErr }));
+    _genError = { stage: 'industry_feed', reason: indErr };
   }
 
-  /* ── 2. Weekly local search (Monday only, 7-day cache) ──
-     Uses the existing per-firm generateMarketBrief for local business news.
-     Runs on Mondays; other days read the Monday cache. */
-  var _dayDate = new Date(day + 'T06:00:00+05:30');
-  var _weekday = _dayDate.getUTCDay(); /* 0=Sun .. 6=Sat (approximate in IST) */
-  /* Find Monday of this week. */
-  var _mondayOffset = (_weekday === 0) ? -6 : (1 - _weekday);
-  var _monday = new Date(_dayDate.getTime() + _mondayOffset * 86400000);
-  var _mondayDay = _monday.toISOString().slice(0, 10);
-  var _localCacheKey = 'market:' + firmCode + ':local:' + _mondayDay;
-  var localBrief = await env.G7_KV.get(_localCacheKey, 'json');
-  if (!localBrief) {
-    /* Only generate on Monday (or if no cache exists yet for this week). */
-    var _isMonday = (day === _mondayDay);
-    if (_isMonday || forceLocal) {
-      try {
-        var _raw = await generateMarketBrief(env, firmCode, day, context, city, false, false, cost);
-        if (_raw && _raw._log) _capturedLog = _raw._log;
-        /* Store under the weekly local key with 7-day TTL. */
-        if (_raw) {
-          delete _raw._log;
-          await kvPut(env, _localCacheKey, JSON.stringify(_raw), { expirationTtl: 7 * 86400 });
-          /* Also write to the standard daily key so assembleNews can find it. */
-          await kvPut(env, 'market:' + firmCode + ':' + day, JSON.stringify(_raw), { expirationTtl: 172800 });
-        }
-        localBrief = _raw;
-      } catch (e) {
-        var localErr = String((e && e.message) || e).slice(0, 300);
-        console.log(JSON.stringify({ localNewsFallback: firmCode, reason: localErr }));
-        if (isBillingError(e)) await sendCreditAlert(env, day);
-        if (!_genError) _genError = { stage: 'local_search', reason: localErr };
-      }
-    }
-  }
-
-  /* ── 3. Shared sections (policy, markets, city, global) ── */
-  var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return NEWS_CATS[c]; });
-  var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+  /* ── 2. Category feeds (shared, cached) ── */
+  var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return FEED_CATS[c]; });
   for (var ci = 0; ci < chosen.length; ci++) {
     var c = chosen[ci];
-    var cacheKey = 'news:' + c + (c === 'city' ? ':' + citySlug : '') + ':' + day;
-    var cached = await env.G7_KV.get(cacheKey, 'json');
-    if (!cached) {
-      try {
-        await generateSharedNews(env, c, day, city, cost);
-      } catch (e) {
-        var errMsg = String((e && e.message) || e).slice(0, 300);
-        console.log(JSON.stringify({ newsFallback: c, reason: errMsg }));
-        if (isBillingError(e)) await sendCreditAlert(env, day);
-      }
+    try {
+      await fetchCategoryFeeds(env, c, day, city);
+    } catch (e) {
+      var catErr = String((e && e.message) || e).slice(0, 300);
+      console.log(JSON.stringify({ catFeedFallback: c, reason: catErr }));
+      if (!_genError) _genError = { stage: c + '_feed', reason: catErr };
     }
   }
 
-  /* ── 4. Assemble from caches ── */
+  /* ── 3. Assemble from caches + run picker ── */
   var result = await assembleNews(env, firmCode, day, { context: context, city: city, prefs: prefs, cost: cost, industry: industry });
   if (result) {
-    if (_capturedLog) result._log = _capturedLog;
     if (_genError) result._genError = _genError;
   }
   return result;
 }
+
 
 /* One decision per firm per day: the single most useful thing to do today,
    built from news signals, the pipeline, the plan and past moves. No web
@@ -3368,15 +2485,15 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
 // ─────────────────────────────────────────────────────────────────────────────
 export {
   newCostAccum, recordCost, flushCost, kvPut,
-  buildWatchlist, getWatchlist, searchBusinessNews, pickAndWriteNews,
-  generateMarketBrief, buildDailyNews, assembleNews, generateSharedNews, personaliseNews,
-  generateIndustryNews, lastIndustryNews, resolveIndustry, resolveIndustryForFirm,
-  resolveNewsPrefs, collectSearchMeta, cleanNewsItem, stripCite, clip,
-  clipOneSentence, dedupeItems, sourceMatchCheck, failsRelevanceGate,
-  checkPageAge, evergreenCheck, isHomePage, isListingOrQuote, lastMarketBrief,
-  lastSharedNews, shortHash, watchlistHash, isBillingError,
+  buildDailyNews, assembleNews, pickNewsForFirm,
+  fetchNewsFeed, fetchIndustryFeeds, fetchCategoryFeeds,
+  resolveIndustry, resolveIndustryForFirm,
+  resolveNewsPrefs, cleanNewsItem, stripCite, clip,
+  clipOneSentence, dedupeItems, sourceMatchCheck,
+  checkPageAge, evergreenCheck, isHomePage, isListingOrQuote,
+  shortHash, isBillingError,
   renderNewsBody, newsGreetingName, displayName, normaliseCity,
-  TRUSTED_NEWS_DOMAINS, BLOCKED_SEARCH_DOMAINS, COST_TABLE, NEWS_CATS, INDUSTRIES
+  TRUSTED_NEWS_DOMAINS, BLOCKED_SEARCH_DOMAINS, COST_TABLE, NEWS_CATS, INDUSTRIES, FEED_CATS
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4182,12 +3299,6 @@ export default {
         /* Admin regen — exempt from feature gates and budget guard. */
         var cost = newCostAccum();
 
-        /* Rebuild watchlist BEFORE search so the log always has it,
-           even when generateMarketBrief throws later. */
-        try { await getWatchlist(env, firmCode, saved.context, cost); } catch (e) {
-          console.log(JSON.stringify({ regenWatchlistError: firmCode, error: String(e && e.message || e).slice(0, 200) }));
-        }
-
         var news = null, _regenFallback = null;
         try {
           news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost, { forceLocal: true });
@@ -4211,23 +3322,18 @@ export default {
         var _bc = await budgetCheck(env, day, firmCode);
         var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
 
-        /* Read the industry query from the cached industry news result. */
-        var _indResult = await env.G7_KV.get('news:industry:' + _regenIndustry + ':' + day, 'json');
-        var _indQuery = (_indResult && _indResult.query) || '';
-        var _indItemCount = (_indResult && _indResult.items) ? _indResult.items.length : 0;
-
         /* Count items per section for the admin popup. */
-        var _localItems = (news && news.business && news.business.items) ? news.business.items.filter(function(it){ return !it._placeholder; }).length : 0;
-        var _alsoItems = 0;
+        var _indItems = 0, _alsoItems = 0;
         if (news && news.sections) {
           news.sections.forEach(function(s) {
+            if (s.category === 'industry' && s.items) _indItems += s.items.length;
             if (s.category === 'also' && s.items) _alsoItems += s.items.length;
           });
         }
 
         var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo,
-                     industry: _regenIndustry, industryQuery: _indQuery, industryItems: _indItemCount,
-                     localItems: _localItems, alsoItems: _alsoItems };
+                     industry: _regenIndustry, industryItems: _indItems,
+                     alsoItems: _alsoItems };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
       } catch (e) {
@@ -4588,13 +3694,10 @@ export default {
 
     // ─────────────────────────────────────────────────────────────
     // POST /scout/market
-    // Daily market brief: up to three things that changed in this
-    // business's market, each with why it matters and what to do.
+    // Daily news: industry + category news from Google News RSS,
+    // picked per firm by a single Haiku call.
     // Body: { context, city }
-    //   context — the compact business summary from scoutContext()
-    //   city    — the business's city, for search location
-    // Cached per firm per IST day. Every item must cite a URL that
-    // web search actually returned; anything else is dropped.
+    // Cached per firm per IST day.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'POST' && path === '/scout/market') {
       const session = await validateSession(request, env);
@@ -4614,68 +3717,55 @@ export default {
         await kvPut(env,'market:ctx:' + session.firmCode,
           JSON.stringify({ context: context, city: city }),
           { expirationTtl: 7 * 86400 });
-        /* Build/refresh watchlist in background — only calls Haiku when
-           the context hash has changed (or watchlist is missing). */
-        ctx.waitUntil(getWatchlist(env, session.firmCode, context, null).catch(function(){}));
       }
 
       /* IST date — the brief belongs to the owner's day, not UTC's. */
       const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
       const day = ist.toISOString().slice(0, 10);
-      const cacheKey = 'market:' + session.firmCode + ':' + day;
 
-      const cached = await env.G7_KV.get(cacheKey, 'json');
-      if (cached) return jsonResponse(cached);
+      /* Try cache-only assembly first (cron pre-fetches feeds + picker runs). */
+      var user2 = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      var prefs2 = await resolveNewsPrefs(env, session.firmCode, user2.newsPrefs);
+      var ind2 = 'services_trade';
+      try { ind2 = await resolveIndustryForFirm(env, session.firmCode); } catch(e){}
+      var cached2 = await assembleNews(env, session.firmCode, day, { context: context, city: city, prefs: prefs2, cacheOnly: true, industry: ind2 });
+      if (cached2) return jsonResponse(cached2);
 
-      if (!context) return jsonResponse({ items: [], date: day });
+      if (!context) return jsonResponse({ business: { items: [] }, sections: [], date: day });
 
       /* Firm money backstop */
       var _bcM = await budgetCheck(env, day, session.firmCode);
       if (!_bcM.ok) {
         ctx.waitUntil(sendBudgetEmail(env, day, session.firmCode, _bcM.firmSpent, _bcM.cap));
-        var _lbM = await lastMarketBrief(env, session.firmCode, day);
-        if (_lbM) return jsonResponse(Object.assign({}, _lbM, { stale: true, staleDate: _lbM.date || '', budgetPaused: true }));
-        return jsonResponse({ items: [], date: day, budgetPaused: true });
+        return jsonResponse({ business: { items: [] }, sections: [], date: day, budgetPaused: true });
       }
 
       /* Concurrency lock — prevents duplicate generation if two tabs load
          at the same time. Auto-expires after 120 s as a safety net. */
       const lockKey = 'market:lock:' + session.firmCode + ':' + day;
-      if (await env.G7_KV.get(lockKey)) return jsonResponse({ items: [], date: day, pending: true });
+      if (await env.G7_KV.get(lockKey)) return jsonResponse({ business: { items: [] }, sections: [], date: day, pending: true });
       await kvPut(env,lockKey, '1', { expirationTtl: 120 });
 
-      /* Three generation attempts per firm per day. A failure writes no
-         cache, so without this a broken call would retry on every load. */
+      /* Three generation attempts per firm per day. */
       const attemptKey = 'market:attempts:' + session.firmCode + ':' + day;
       const attempts = parseInt((await env.G7_KV.get(attemptKey)) || '0', 10);
       if (attempts >= 3) {
         await env.G7_KV.delete(lockKey);
-        /* All attempts exhausted — serve last known good if available. */
-        var lastBrief = await lastMarketBrief(env, session.firmCode, day);
-        if (lastBrief) {
-          console.log(JSON.stringify({ newsFallback: session.firmCode, reason: 'attempts exhausted' }));
-          return jsonResponse(Object.assign({}, lastBrief, { stale: true, staleDate: lastBrief.date || '' }));
-        }
-        return jsonResponse({ items: [], date: day, limited: true });
+        return jsonResponse({ business: { items: [] }, sections: [], date: day, limited: true });
       }
       await kvPut(env,attemptKey, String(attempts + 1), { expirationTtl: 172800 });
 
       var cost = newCostAccum();
       try {
-        const result = await generateMarketBrief(env, session.firmCode, day, context, city, false, false, cost);
+        const result = await buildDailyNews(env, session.firmCode, day, context, city, prefs2, cost);
         await env.G7_KV.delete(lockKey);
         ctx.waitUntil(flushCost(env, day, session.firmCode, cost));
-        return jsonResponse(result);
+        return jsonResponse(result || { business: { items: [] }, sections: [] });
       } catch (e) {
         await env.G7_KV.delete(lockKey);
         ctx.waitUntil(flushCost(env, day, session.firmCode, cost));
         console.log(JSON.stringify({ newsFallback: session.firmCode, reason: String(e.message || '').slice(0, 300) }));
         if (isBillingError(e)) await sendCreditAlert(env, day);
-        /* Fall back to last known good, or yesterday/day-before cache. */
-        var lastOnErr = await lastMarketBrief(env, session.firmCode, day);
-        if (lastOnErr) {
-          return jsonResponse(Object.assign({}, lastOnErr, { stale: true, staleDate: lastOnErr.date || '' }));
-        }
         return jsonResponse({ error: 'market_failed', detail: String(e.message || '').slice(0, 500) }, 502);
       }
     }
@@ -5334,37 +4424,32 @@ export default {
       }
       const saved = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
       if (!saved || !saved.context) {
-        /* No context saved yet — still try fallback from previous days. */
-        var lastBiz = await lastMarketBrief(env, session.firmCode, today);
-        if (!lastBiz) return jsonResponse({ business: { items: [] }, sections: [] });
+        /* No context saved — try cache-only assembly from previous cron run. */
         var user0 = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
         var prefs0 = await resolveNewsPrefs(env, session.firmCode, user0.newsPrefs);
-        var citySlug0 = '';
-        var sections0 = [];
-        var chosen0 = (Array.isArray(prefs0) ? prefs0 : []).filter(function(c){ return NEWS_CATS[c]; });
-        for (var ci = 0; ci < chosen0.length; ci++) {
-          var lc = await lastSharedNews(env, chosen0[ci], citySlug0);
-          if (lc) sections0.push(lc);
-        }
-        return jsonResponse({ business: lastBiz, sections: sections0, stale: true, staleDate: lastBiz.date || '' });
+        var ind0 = 'services_trade';
+        try { ind0 = await resolveIndustryForFirm(env, session.firmCode); } catch(e){}
+        var cached0 = await assembleNews(env, session.firmCode, today, { prefs: prefs0, cacheOnly: true, industry: ind0 });
+        if (cached0) return jsonResponse(cached0);
+        return jsonResponse({ business: { items: [] }, sections: [] });
       }
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
       const effectivePrefs = await resolveNewsPrefs(env, session.firmCode, user.newsPrefs);
-      /* Firm money backstop — serve cache/last-good when over cap. */
+      /* Firm money backstop — serve cache when over cap. */
       var _bc1 = await budgetCheck(env, today, session.firmCode);
       if (!_bc1.ok) {
         ctx.waitUntil(sendBudgetEmail(env, today, session.firmCode, _bc1.firmSpent, _bc1.cap));
-        var _cachedBiz = await env.G7_KV.get('market:' + session.firmCode + ':' + today, 'json')
-                      || await lastMarketBrief(env, session.firmCode, today);
-        if (_cachedBiz) return jsonResponse({ business: _cachedBiz, sections: [], budgetPaused: true });
+        var ind1 = 'services_trade';
+        try { ind1 = await resolveIndustryForFirm(env, session.firmCode); } catch(e){}
+        var cached1 = await assembleNews(env, session.firmCode, today, { city: saved.city || '', prefs: effectivePrefs, cacheOnly: true, industry: ind1 });
+        if (cached1) return jsonResponse(Object.assign({}, cached1, { budgetPaused: true }));
         return jsonResponse({ business: { items: [] }, sections: [], budgetPaused: true });
       }
       var cost = newCostAccum();
       const news = await buildDailyNews(env, session.firmCode, today, saved.context, saved.city || '', effectivePrefs, cost);
-      delete news._log;
-      delete news._genError;
+      if (news) { delete news._log; delete news._genError; }
       ctx.waitUntil(flushCost(env, today, session.firmCode, cost));
-      return jsonResponse(news);
+      return jsonResponse(news || { business: { items: [] }, sections: [] });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -5673,10 +4758,10 @@ export default {
     }
     var cost = newCostAccum();
 
-    /* Pre-generate industry news (one per distinct industry). */
+    /* Pre-fetch industry RSS feeds (one per distinct industry). */
     for (var _ind of _neededIndustries) {
       if (!_sbc.ok) break;
-      try { await generateIndustryNews(env, _ind, day, cost); } catch (e) {
+      try { await fetchIndustryFeeds(env, _ind, day); } catch (e) {
         console.log(JSON.stringify({ industryPregenError: _ind, error: String(e && e.message || e).slice(0, 300) }));
       }
     }
@@ -5687,12 +4772,12 @@ export default {
       if (!_sbc.ok) break;
       if (_cat === 'city') {
         for (var _city of _distinctCities) {
-          try { await generateSharedNews(env, _cat, day, _city, cost); } catch (e) {
+          try { await fetchCategoryFeeds(env, _cat, day, _city); } catch (e) {
             console.log(JSON.stringify({ sharedPregenError: _cat, city: _city, error: String(e && e.message || e).slice(0, 300) }));
           }
         }
       } else {
-        try { await generateSharedNews(env, _cat, day, '', cost); } catch (e) {
+        try { await fetchCategoryFeeds(env, _cat, day, ''); } catch (e) {
           console.log(JSON.stringify({ sharedPregenError: _cat, error: String(e && e.message || e).slice(0, 300) }));
         }
       }
