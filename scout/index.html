@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=18"></script>
-<script src="../assets/scout.js?v=35"></script>
+<script src="../assets/scout.js?v=36"></script>
 <script src="../assets/pipeline.js?v=21"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -1380,7 +1380,8 @@ function scoutMarketLoad() {
         await new Promise(function(res){ setTimeout(res, 25000); });
         j = await ask();
       }
-      var items = (j && Array.isArray(j.items)) ? j.items : [];
+      /* Server returns { business, sections } — flatten to item array for voice context. */
+      var items = (j && !j.pending) ? scoutNewsFlatItems(j) : [];
       if (j && !j.pending) {
         try {
           localStorage.setItem(localKey, JSON.stringify({ items: items }));
@@ -1402,34 +1403,10 @@ function scoutMarketLoad() {
 }
 window.scoutMarketLoad = scoutMarketLoad;
 
-/* scoutSafeUrl is now in scout.js */
-
-function scoutMarketRender(items) {
-  var el = document.getElementById('ccMarket');
-  if (!el) return;
-  if (!items || !items.length) {
-    el.innerHTML = '<div class="cc-task-why">Nothing has changed in your market today that needs you. Scout checks again tomorrow.</div>';
-    return;
-  }
-  var dot = { today: '#E0922F', this_week: 'var(--gold)', watch: 'var(--grey2)' };
-  el.innerHTML = items.map(function(it) {
-    var url = scoutSafeUrl(it.sourceUrl);
-    return '<div class="cc-mk">' +
-      '<div class="cc-mk-head"><span class="cc-feed-dot" style="background:' + (dot[it.urgency] || dot.watch) + '"></span>' +
-      '<span>' + escHtml(it.headline) + '</span></div>' +
-      (it.whyItMatters ? '<div class="cc-mk-why">' + escHtml(it.whyItMatters) + '</div>' : '') +
-      '<div class="cc-mk-do"><b>Do this</b> ' + escHtml(it.whatToDo) + '</div>' +
-      (url ? '<a class="cc-mk-src" href="' + escHtml(url) + '" target="_blank" rel="noopener noreferrer">' +
-             escHtml(it.sourceTitle || 'Source') + ' \u2197</a>' : '') +
-      '</div>';
-  }).join('');
-}
-
 /* scoutNewsLoad is now in scout.js — shared with news.html */
 
-/* Dashboard: headline-only view, capped at 5 — first item of each
-   label, up to 2 from "Your area". Uses _idx from scoutNewsFlatItems
-   so anchors match news.html exactly. */
+/* Dashboard: headline-only view, capped at 5. Uses _idx from
+   scoutNewsFlatItems so anchors match news.html exactly. */
 function scoutNewsRender(news) {
   var el = document.getElementById('ccMarket');
   if (!el) return;
@@ -1438,16 +1415,16 @@ function scoutNewsRender(news) {
     el.innerHTML = '<div class="cc-task-why">No news yet \u2014 Scout is getting set up.</div>';
     return;
   }
+  /* Pick up to 5 items: first unseen label from each section, then fill. */
   var show = [];
-  var areaCount = 0;
   var seenLabel = {};
   for (var i = 0; i < flat.length && show.length < 5; i++) {
     var it = flat[i];
-    if (it._label === 'Your area') {
-      if (areaCount < 2) { show.push(it); areaCount++; }
-    } else {
-      if (!seenLabel[it._label]) { show.push(it); seenLabel[it._label] = true; }
-    }
+    if (!seenLabel[it._label]) { show.push(it); seenLabel[it._label] = true; }
+  }
+  /* Fill remaining slots with any items not yet shown. */
+  for (var i = 0; i < flat.length && show.length < 5; i++) {
+    if (show.indexOf(flat[i]) === -1) show.push(flat[i]);
   }
   var html = '';
   if (news && news.stale && news.staleDate) {
@@ -2131,7 +2108,7 @@ async function scoutBriefing() {
   if (mk.length > 0) {
     prompt += '\n\n' +
       'MARKET TODAY (from today\'s news):\n' +
-      mk.map(function(it){ return '- ' + it.headline + ' -> ' + it.whatToDo; }).join('\n') +
+      mk.map(function(it){ return '- ' + it.headline + (it.whatToDo ? ' -> ' + it.whatToDo : ''); }).join('\n') +
       '\nMention the single most urgent market item in one sentence, as part of ' +
       'what changed. Do not read out sources or URLs.';
   }
@@ -2190,7 +2167,7 @@ async function scoutAsk(question) {
   if (_marketItems && _marketItems.length > 0) {
     sys += '\n\n' +
       'MARKET TODAY (from today\'s news):\n' +
-      _marketItems.map(function(it){ return '- ' + it.headline + ' -> ' + it.whatToDo; }).join('\n');
+      _marketItems.map(function(it){ return '- ' + it.headline + (it.whatToDo ? ' -> ' + it.whatToDo : ''); }).join('\n');
   }
 
   var msgs = [{ role: 'user', content: sys + '\n\nQUESTION: ' + question }];

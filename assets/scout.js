@@ -1637,14 +1637,12 @@ function scoutSafeUrl(u) {
 
 /* Flatten a /scout/news response into a single ordered item list.
    Order matches renderNewsBody (email): sections first (industry →
-   also worth knowing), then business items as "Your area" last.
-   Every item gets an `_idx` (0-based) and `_label`.
+   also worth knowing). Every item gets an `_idx` (0-based) and `_label`.
    Both the dashboard headline view and news.html use this so
    #item-N always refers to the same item. */
 function scoutNewsFlatItems(news) {
   var out = [];
   if (!news) return out;
-  /* Sections first: "Your industry", "Also worth knowing", etc. */
   var sections = Array.isArray(news.sections) ? news.sections : [];
   sections.forEach(function(sec) {
     var label = sec.category === 'industry' ? 'Your industry' : (sec.label || 'News');
@@ -1653,13 +1651,6 @@ function scoutNewsFlatItems(news) {
       out.push(Object.assign({}, it, { _idx: out.length, _label: label }));
     });
   });
-  /* Business items last as "Your area" (weekly local). */
-  var bizItems = (news.business && Array.isArray(news.business.items)) ? news.business.items : [];
-  if (bizItems.length > 0) {
-    bizItems.forEach(function(it) {
-      out.push(Object.assign({}, it, { _idx: out.length, _label: 'Your area' }));
-    });
-  }
   return out;
 }
 

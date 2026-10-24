@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
-  newCostAccum, buildDailyNews, getWatchlist,
+  newCostAccum, buildDailyNews,
   TRUSTED_NEWS_DOMAINS, COST_TABLE, NEWS_CATS
 } from '../cloudflare-worker.js';
 
