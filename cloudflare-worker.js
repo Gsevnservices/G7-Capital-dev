@@ -2128,8 +2128,9 @@ async function pickNewsForFirm(env, firmCode, day, context, industryCandidates, 
     'You pick the most useful news for one Indian small business.\n\n' +
     'RULES:\n' +
     (industryCandidates.length > 0 ? '- Pick 3–4 items for "industry" (items 0–' + (industryCandidates.length - 1) + ' are industry news).\n' : '- No industry candidates available — leave "industry" empty.\n') +
-    '- Pick up to 3 items for "also" from the remaining categories (policy, city). ' +
+    '- Pick up to 3 items for "also" from india_policy and city categories only. ' +
     'Skip civic topics (water, traffic, power cuts, crime, weather, local politics) unless they directly affect this trade.\n' +
+    '- india_markets and global items go ONLY in "markets" (pick the single best one). Never put them in "also".\n' +
     '- For each pick: why (one sentence, under 25 words, concrete effect on this business, ' +
     'or exactly "No direct effect on your business.") and whatToDo (one concrete action under 15 words, or "").\n' +
     '- impact: one of demand_up, demand_down, cost_up, cost_down, lead_source, ' +
@@ -2337,17 +2338,25 @@ async function assembleNews(env, firmCode, day, opts) {
 
   /* ── 5. Feed stats for diagnostics ── */
   var _feedDiag = {};
-  if (industrySec && industrySec._feedStats) _feedDiag.industry = { feedStats: industrySec._feedStats, totalFetched: industrySec._totalFetched || 0, kept: (industrySec.items || []).length, mergeDrops: industrySec._mergeDrops || {} };
-  Object.keys(_catSecs).forEach(function(c) {
+  if (industrySec) _feedDiag.industry = { feedStats: industrySec._feedStats || [], totalFetched: industrySec._totalFetched || 0, kept: (industrySec.items || []).length, mergeDrops: industrySec._mergeDrops || {} };
+  /* Always show every chosen category — even with 0 items or cache-only. */
+  chosen.forEach(function(c) {
     var s = _catSecs[c];
-    if (s && s._feedStats) _feedDiag[c] = { feedStats: s._feedStats, totalFetched: s._totalFetched || 0, kept: (s.items || []).length, mergeDrops: s._mergeDrops || {} };
+    if (s) {
+      _feedDiag[c] = { feedStats: s._feedStats || [], totalFetched: s._totalFetched || 0, kept: (s.items || []).length, mergeDrops: s._mergeDrops || {} };
+    } else {
+      _feedDiag[c] = { feedStats: [], totalFetched: 0, kept: 0, mergeDrops: {}, missing: true };
+    }
   });
 
-  /* Picker stats. */
+  /* Picker stats — per-category breakdown of candidates fed to the picker. */
+  var _catBreakdown = {};
+  Object.keys(catFeeds).forEach(function(k) { _catBreakdown[k] = (catFeeds[k] || []).length; });
   var _pickerDiag = {
     candidatesIn: industryCandidates.length + Object.keys(catFeeds).reduce(function(n,k){ return n + (catFeeds[k]||[]).length; }, 0),
     industryIn: industryCandidates.length,
     catIn: Object.keys(catFeeds).reduce(function(n,k){ return n + (catFeeds[k]||[]).length; }, 0),
+    catBreakdown: _catBreakdown,
     industryOut: (pickerResult.industry || []).length,
     alsoOut: alsoItems.length,
     marketsOut: pickerResult.markets ? 1 : 0
@@ -2386,10 +2395,12 @@ async function buildDailyNews(env, firmCode, day, context, city, prefs, cost) {
   for (var ci = 0; ci < chosen.length; ci++) {
     var c = chosen[ci];
     try {
-      await fetchCategoryFeeds(env, c, day, city);
+      var _catResult = await fetchCategoryFeeds(env, c, day, city);
+      var _catCount = (_catResult && _catResult.items) ? _catResult.items.length : 0;
+      console.log(JSON.stringify({ catFeed: c, firmCode: firmCode, items: _catCount, cached: !!(_catResult && _catResult._fromCache) }));
     } catch (e) {
       var catErr = String((e && e.message) || e).slice(0, 300);
-      console.log(JSON.stringify({ catFeedFallback: c, reason: catErr }));
+      console.log(JSON.stringify({ catFeedError: c, firmCode: firmCode, reason: catErr }));
       if (!_genError) _genError = { stage: c + '_feed', reason: catErr };
     }
   }
