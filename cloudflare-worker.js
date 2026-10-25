@@ -1827,19 +1827,15 @@ function _decodeHtmlEntities(s) {
     .replace(/&#(\d+);/g, function(_, n) { return String.fromCharCode(parseInt(n, 10)); });
 }
 
-/* ── Google News RSS feed fetcher ──
-   Fetches https://news.google.com/rss/search?q=<query>+when:<days>d&hl=en-IN&gl=IN&ceid=IN:en
-   Parses items: title (stripped of " - Source"), link, pubDate, source.
-   Dedupes by normalised title. Drops guide/listing titles. */
+/* ── RSS feed headers — browser-like User-Agent + RSS Accept ── */
+var _feedHeaders = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+};
+
+/* ── Parse RSS XML into items array ── */
 var _guideTitleRe = /\bguide\b|\bhow to\b|\bexplained\b|\bwhat is\b|\beverything you need\b|\bchecklist\b|\brates list\b|\btips\b|\bbest \d/i;
-async function fetchNewsFeed(query, days) {
-  var url = 'https://news.google.com/rss/search?q=' +
-    encodeURIComponent(query + ' when:' + days + 'd') +
-    '&hl=en-IN&gl=IN&ceid=IN:en';
-  var r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; G7Scout/1.0)' } });
-  if (!r.ok) throw new Error('Google News RSS ' + r.status + ' for "' + query + '"');
-  var xml = await r.text();
-  /* Parse <item> blocks from RSS XML. */
+function _parseRssItems(xml) {
   var items = [];
   var seen = new Set();
   var _itemRe = /<item>([\s\S]*?)<\/item>/g;
@@ -1878,6 +1874,57 @@ async function fetchNewsFeed(query, days) {
   return items;
 }
 
+/* ── Google News RSS feed fetcher with Bing fallback ──
+   Fetches https://news.google.com/rss/search?q=<query>+when:<days>d&hl=en-IN&gl=IN&ceid=IN:en
+   If Google returns non-200, non-XML, or 0 items, falls back to Bing News RSS.
+   Returns: { items, _source: 'google'|'bing', _diag: { status, contentType, bodyPreview } } */
+async function fetchNewsFeed(query, days) {
+  var gUrl = 'https://news.google.com/rss/search?q=' +
+    encodeURIComponent(query + ' when:' + days + 'd') +
+    '&hl=en-IN&gl=IN&ceid=IN:en';
+
+  var diag = { google: {}, bing: null };
+  var items = [];
+  var source = 'google';
+
+  /* Try Google first. */
+  var r = await fetch(gUrl, { headers: _feedHeaders });
+  var body = await r.text();
+  var ct = r.headers.get('content-type') || '';
+  diag.google = { status: r.status, contentType: ct.slice(0, 80), bodyPreview: body.slice(0, 300) };
+
+  var isXml = ct.indexOf('xml') !== -1 || ct.indexOf('rss') !== -1 || body.trim().startsWith('<?xml') || body.trim().startsWith('<rss');
+  if (r.ok && isXml) {
+    items = _parseRssItems(body);
+  }
+
+  /* Bing fallback: non-200, non-XML, or 0 items from Google. */
+  if (items.length === 0) {
+    source = 'bing';
+    var bUrl = 'https://www.bing.com/news/search?q=' +
+      encodeURIComponent(query) + '&format=rss&setlang=en-IN&cc=IN';
+    try {
+      var br = await fetch(bUrl, { headers: _feedHeaders });
+      var bBody = await br.text();
+      var bCt = br.headers.get('content-type') || '';
+      diag.bing = { status: br.status, contentType: bCt.slice(0, 80), bodyPreview: bBody.slice(0, 300) };
+      var bIsXml = bCt.indexOf('xml') !== -1 || bCt.indexOf('rss') !== -1 || bBody.trim().startsWith('<?xml') || bBody.trim().startsWith('<rss');
+      if (br.ok && bIsXml) {
+        items = _parseRssItems(bBody);
+      }
+    } catch (bErr) {
+      diag.bing = { error: String(bErr && bErr.message || bErr).slice(0, 200) };
+    }
+    /* Log which source served this feed. */
+    console.log(JSON.stringify({ feedFallback: 'bing', query: query, googleStatus: r.status, bingItems: items.length }));
+  }
+
+  /* Attach diagnostic metadata (used by feed-test route and regen-news). */
+  items._source = source;
+  items._diag = diag;
+  return items;
+}
+
 /* Fetch all feeds for an industry, merge, dedupe, drop stale (>7d).
    Cached in KV at news:industry:<KEY>:<day> with 48h TTL. */
 async function fetchIndustryFeeds(env, industryKey, day) {
@@ -1889,12 +1936,15 @@ async function fetchIndustryFeeds(env, industryKey, day) {
 
   var all = [];
   var errors = [];
+  var feedStats = [];
   for (var fi = 0; fi < def.feeds.length; fi++) {
     try {
       var items = await fetchNewsFeed(def.feeds[fi], 7);
+      feedStats.push({ query: def.feeds[fi], fetched: items.length, source: items._source || 'google' });
       all = all.concat(items);
     } catch (e) {
       errors.push({ query: def.feeds[fi], error: String(e && e.message || e).slice(0, 200) });
+      feedStats.push({ query: def.feeds[fi], fetched: 0, source: 'error', error: String(e && e.message || e).slice(0, 100) });
     }
   }
 
@@ -1925,7 +1975,8 @@ async function fetchIndustryFeeds(env, industryKey, day) {
   });
   cleaned = dedupeItems(cleaned);
 
-  var result = { category: 'industry', industry: industryKey, label: def.label, items: cleaned.slice(0, 15), date: day };
+  var result = { category: 'industry', industry: industryKey, label: def.label, items: cleaned.slice(0, 15), date: day,
+    _feedStats: feedStats, _totalFetched: all.length };
   if (errors.length) {
     console.log(JSON.stringify({ industryFeedErrors: industryKey, errors: errors }));
     result._feedErrors = errors;
@@ -1956,12 +2007,15 @@ async function fetchCategoryFeeds(env, cat, day, city) {
 
   var all = [];
   var errors = [];
+  var feedStats = [];
   for (var fi = 0; fi < feedQueries.length; fi++) {
     try {
       var items = await fetchNewsFeed(feedQueries[fi], def.days);
+      feedStats.push({ query: feedQueries[fi], fetched: items.length, source: items._source || 'google' });
       all = all.concat(items);
     } catch (e) {
       errors.push({ query: feedQueries[fi], error: String(e && e.message || e).slice(0, 200) });
+      feedStats.push({ query: feedQueries[fi], fetched: 0, source: 'error', error: String(e && e.message || e).slice(0, 100) });
     }
   }
 
@@ -1989,7 +2043,8 @@ async function fetchCategoryFeeds(env, cat, day, city) {
   });
   cleaned = dedupeItems(cleaned);
 
-  var result = { category: cat, label: def.label || cat, items: cleaned.slice(0, 10), date: day };
+  var result = { category: cat, label: def.label || cat, items: cleaned.slice(0, 10), date: day,
+    _feedStats: feedStats, _totalFetched: all.length };
   if (errors.length) result._feedErrors = errors;
   await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
   return result;
@@ -2184,6 +2239,7 @@ async function assembleNews(env, firmCode, day, opts) {
   /* ── 2. Category feeds from cache ── */
   var chosen = (Array.isArray(prefs) ? prefs : []).filter(function(c){ return FEED_CATS[c]; });
   var catFeeds = {};
+  var _catSecs = {};
   for (var ci = 0; ci < chosen.length; ci++) {
     var c = chosen[ci];
     var citySlug = (city || '').toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
@@ -2194,6 +2250,7 @@ async function assembleNews(env, firmCode, day, opts) {
         errors.push({ stage: c, error: String(e && e.message || e).slice(0, 200) });
       }
     }
+    if (sec) _catSecs[c] = sec;
     if (sec && sec.items && sec.items.length) catFeeds[c] = sec.items;
   }
 
@@ -2242,13 +2299,33 @@ async function assembleNews(env, firmCode, day, opts) {
     finalSections.push({ category: 'also', label: 'Also worth knowing', items: alsoItems });
   }
 
-  /* ── 5. Final object (same shape as before — business is always empty now) ── */
+  /* ── 5. Feed stats for diagnostics ── */
+  var _feedDiag = {};
+  if (industrySec && industrySec._feedStats) _feedDiag.industry = { feedStats: industrySec._feedStats, totalFetched: industrySec._totalFetched || 0, kept: (industrySec.items || []).length };
+  Object.keys(_catSecs).forEach(function(c) {
+    var s = _catSecs[c];
+    if (s && s._feedStats) _feedDiag[c] = { feedStats: s._feedStats, totalFetched: s._totalFetched || 0, kept: (s.items || []).length };
+  });
+
+  /* Picker stats. */
+  var _pickerDiag = {
+    candidatesIn: industryCandidates.length + Object.keys(catFeeds).reduce(function(n,k){ return n + (catFeeds[k]||[]).length; }, 0),
+    industryIn: industryCandidates.length,
+    catIn: Object.keys(catFeeds).reduce(function(n,k){ return n + (catFeeds[k]||[]).length; }, 0),
+    industryOut: (pickerResult.industry || []).length,
+    alsoOut: alsoItems.length,
+    marketsOut: pickerResult.markets ? 1 : 0
+  };
+
+  /* ── 6. Final object (same shape as before — business is always empty now) ── */
   var out = {
     business: { items: [] },
     sections: finalSections,
     errors: errors,
     industry: industry,
-    generatedAt: pickerResult.generatedAt || new Date().toISOString()
+    generatedAt: pickerResult.generatedAt || new Date().toISOString(),
+    _feedDiag: _feedDiag,
+    _pickerDiag: _pickerDiag
   };
   return out;
 }
@@ -3280,14 +3357,50 @@ export default {
           });
         }
 
+        /* Extract feed diagnostics and picker stats before sending. */
+        var _feedDiag = (news && news._feedDiag) || {};
+        var _pickerDiag = (news && news._pickerDiag) || {};
+        if (news) { delete news._feedDiag; delete news._pickerDiag; }
+
         var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo,
                      industry: _regenIndustry, industryItems: _indItems,
-                     alsoItems: _alsoItems };
+                     alsoItems: _alsoItems,
+                     feedDiag: _feedDiag, pickerDiag: _pickerDiag };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
       } catch (e) {
         ctx.waitUntil(flushCost(env, day, firmCode, cost));
         return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
+      }
+    }
+
+    // POST /admin/feed-test — { adminPassword, q, days? }
+    // Runs fetchNewsFeed live (no cache) and returns raw diagnostics.
+    if (request.method === 'POST' && path === '/admin/feed-test') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var q = String(body.q || '').trim();
+      if (!q) return jsonResponse({ error: 'q (query) required' }, 400);
+      var days = Number(body.days) || 2;
+      try {
+        var items = await fetchNewsFeed(q, days);
+        var diag = items._diag || {};
+        var src = items._source || 'google';
+        var first3 = items.slice(0, 3).map(function(it) {
+          return { title: it.title, pubDate: it.pubDate, source: it.source };
+        });
+        return jsonResponse({
+          query: q, days: days, source: src,
+          google: diag.google || {},
+          bing: diag.bing || null,
+          itemCount: items.length,
+          first3: first3
+        });
+      } catch (e) {
+        return jsonResponse({ error: 'fetch_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
       }
     }
 
