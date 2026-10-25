@@ -1833,14 +1833,30 @@ var _feedHeaders = {
   'Accept': 'application/rss+xml, application/xml, text/xml, */*'
 };
 
-/* ── Parse RSS XML into items array ── */
+/* ── Robust date parser: handles RFC 822, ISO 8601, and common variants ── */
+function _parseDate(raw) {
+  if (!raw) return '';
+  var s = raw.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+  if (!s) return '';
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString();
+  /* Bing sometimes emits "Sat, 25 Oct 2026 10:30:00" without timezone — treat as UTC. */
+  var d2 = new Date(s + ' UTC');
+  if (!isNaN(d2.getTime())) return d2.toISOString();
+  return '';
+}
+
+/* ── Parse RSS XML into items array ──
+   Returns items[] with _drops counter object tracking why items were filtered. */
 var _guideTitleRe = /\bguide\b|\bhow to\b|\bexplained\b|\bwhat is\b|\beverything you need\b|\bchecklist\b|\brates list\b|\btips\b|\bbest \d/i;
 function _parseRssItems(xml) {
   var items = [];
   var seen = new Set();
+  var drops = { guide: 0, duplicate: 0, empty: 0, total: 0 };
   var _itemRe = /<item>([\s\S]*?)<\/item>/g;
   var match;
   while ((match = _itemRe.exec(xml)) !== null) {
+    drops.total++;
     var block = match[1];
     var _t = (block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
     var _l = (block.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
@@ -1857,27 +1873,28 @@ function _parseRssItems(xml) {
       if (!_s) _s = _t.slice(_dashIdx + 3).trim();
       _t = _t.slice(0, _dashIdx).trim();
     }
-    if (!_t || !_l) continue;
+    if (!_t || !_l) { drops.empty++; continue; }
     /* Drop guide/listing titles. */
-    if (_guideTitleRe.test(_t)) continue;
+    if (_guideTitleRe.test(_t)) { drops.guide++; continue; }
     /* Dedupe by normalised title (lowercase, stripped of punctuation). */
     var _norm = _t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-    if (seen.has(_norm)) continue;
+    if (seen.has(_norm)) { drops.duplicate++; continue; }
     seen.add(_norm);
     items.push({
       title: _t.slice(0, 150),
       link: _l,
-      pubDate: _d ? new Date(_d).toISOString() : '',
+      pubDate: _parseDate(_d),
       source: _s.slice(0, 80)
     });
   }
+  items._drops = drops;
   return items;
 }
 
 /* ── Google News RSS feed fetcher with Bing fallback ──
    Fetches https://news.google.com/rss/search?q=<query>+when:<days>d&hl=en-IN&gl=IN&ceid=IN:en
    If Google returns non-200, non-XML, or 0 items, falls back to Bing News RSS.
-   Returns: { items, _source: 'google'|'bing', _diag: { status, contentType, bodyPreview } } */
+   Returns items[] with ._source, ._diag, ._drops attached. */
 async function fetchNewsFeed(query, days) {
   var gUrl = 'https://news.google.com/rss/search?q=' +
     encodeURIComponent(query + ' when:' + days + 'd') +
@@ -1901,8 +1918,10 @@ async function fetchNewsFeed(query, days) {
   /* Bing fallback: non-200, non-XML, or 0 items from Google. */
   if (items.length === 0) {
     source = 'bing';
+    /* Bing interval filter: "7" = past week. Bing doesn't support arbitrary day counts,
+       so we always request past week and filter by date in the merge/dedupe step. */
     var bUrl = 'https://www.bing.com/news/search?q=' +
-      encodeURIComponent(query) + '&format=rss&setlang=en-IN&cc=IN';
+      encodeURIComponent(query) + '&format=rss&setlang=en-IN&cc=IN&qft=interval%3d%227%22';
     try {
       var br = await fetch(bUrl, { headers: _feedHeaders });
       var bBody = await br.text();
@@ -1940,7 +1959,8 @@ async function fetchIndustryFeeds(env, industryKey, day) {
   for (var fi = 0; fi < def.feeds.length; fi++) {
     try {
       var items = await fetchNewsFeed(def.feeds[fi], 7);
-      feedStats.push({ query: def.feeds[fi], fetched: items.length, source: items._source || 'google' });
+      feedStats.push({ query: def.feeds[fi], fetched: items.length, source: items._source || 'google',
+        drops: items._drops || {} });
       all = all.concat(items);
     } catch (e) {
       errors.push({ query: def.feeds[fi], error: String(e && e.message || e).slice(0, 200) });
@@ -1948,18 +1968,24 @@ async function fetchIndustryFeeds(env, industryKey, day) {
     }
   }
 
-  /* Dedupe across all feeds by normalised title. */
+  /* Dedupe across all feeds by normalised title. Track drop reasons. */
   var seen = new Set();
   var merged = [];
   var now = Date.now();
+  var mergeDrops = { duplicate: 0, tooOld: 0, undatedCapped: 0 };
+  var undatedCount = 0;
   all.forEach(function(it) {
     var norm = it.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-    if (seen.has(norm)) return;
+    if (seen.has(norm)) { mergeDrops.duplicate++; return; }
     seen.add(norm);
     /* Drop items older than 7 days. */
     if (it.pubDate) {
       var age = now - new Date(it.pubDate).getTime();
-      if (age > 7 * 86400000) return;
+      if (age > 7 * 86400000) { mergeDrops.tooOld++; return; }
+    } else {
+      /* Cap undated items at 2 per feed group. */
+      undatedCount++;
+      if (undatedCount > 2) { mergeDrops.undatedCapped++; return; }
     }
     merged.push(it);
   });
@@ -1973,10 +1999,12 @@ async function fetchIndustryFeeds(env, industryKey, day) {
   var cleaned = merged.slice(0, 30).map(function(it) {
     return { headline: it.title, sourceUrl: it.link, sourceTitle: it.source, pubDate: it.pubDate };
   });
+  var beforeDedupe = cleaned.length;
   cleaned = dedupeItems(cleaned);
+  mergeDrops.headlineDedupe = beforeDedupe - cleaned.length;
 
   var result = { category: 'industry', industry: industryKey, label: def.label, items: cleaned.slice(0, 15), date: day,
-    _feedStats: feedStats, _totalFetched: all.length };
+    _feedStats: feedStats, _totalFetched: all.length, _mergeDrops: mergeDrops };
   if (errors.length) {
     console.log(JSON.stringify({ industryFeedErrors: industryKey, errors: errors }));
     result._feedErrors = errors;
@@ -2011,7 +2039,8 @@ async function fetchCategoryFeeds(env, cat, day, city) {
   for (var fi = 0; fi < feedQueries.length; fi++) {
     try {
       var items = await fetchNewsFeed(feedQueries[fi], def.days);
-      feedStats.push({ query: feedQueries[fi], fetched: items.length, source: items._source || 'google' });
+      feedStats.push({ query: feedQueries[fi], fetched: items.length, source: items._source || 'google',
+        drops: items._drops || {} });
       all = all.concat(items);
     } catch (e) {
       errors.push({ query: feedQueries[fi], error: String(e && e.message || e).slice(0, 200) });
@@ -2019,17 +2048,22 @@ async function fetchCategoryFeeds(env, cat, day, city) {
     }
   }
 
-  /* Dedupe, drop stale. */
+  /* Dedupe, drop stale. Track drop reasons. */
   var seen = new Set();
   var merged = [];
   var now = Date.now();
+  var mergeDrops = { duplicate: 0, tooOld: 0, undatedCapped: 0 };
+  var undatedCount = 0;
   all.forEach(function(it) {
     var norm = it.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-    if (seen.has(norm)) return;
+    if (seen.has(norm)) { mergeDrops.duplicate++; return; }
     seen.add(norm);
     if (it.pubDate) {
       var age = now - new Date(it.pubDate).getTime();
-      if (age > def.days * 86400000) return;
+      if (age > def.days * 86400000) { mergeDrops.tooOld++; return; }
+    } else {
+      undatedCount++;
+      if (undatedCount > 2) { mergeDrops.undatedCapped++; return; }
     }
     merged.push(it);
   });
@@ -2041,10 +2075,12 @@ async function fetchCategoryFeeds(env, cat, day, city) {
   var cleaned = merged.slice(0, 20).map(function(it) {
     return { headline: it.title, sourceUrl: it.link, sourceTitle: it.source, pubDate: it.pubDate };
   });
+  var beforeDedupe = cleaned.length;
   cleaned = dedupeItems(cleaned);
+  mergeDrops.headlineDedupe = beforeDedupe - cleaned.length;
 
   var result = { category: cat, label: def.label || cat, items: cleaned.slice(0, 10), date: day,
-    _feedStats: feedStats, _totalFetched: all.length };
+    _feedStats: feedStats, _totalFetched: all.length, _mergeDrops: mergeDrops };
   if (errors.length) result._feedErrors = errors;
   await kvPut(env, cacheKey, JSON.stringify(result), { expirationTtl: 172800 });
   return result;
@@ -2301,10 +2337,10 @@ async function assembleNews(env, firmCode, day, opts) {
 
   /* ── 5. Feed stats for diagnostics ── */
   var _feedDiag = {};
-  if (industrySec && industrySec._feedStats) _feedDiag.industry = { feedStats: industrySec._feedStats, totalFetched: industrySec._totalFetched || 0, kept: (industrySec.items || []).length };
+  if (industrySec && industrySec._feedStats) _feedDiag.industry = { feedStats: industrySec._feedStats, totalFetched: industrySec._totalFetched || 0, kept: (industrySec.items || []).length, mergeDrops: industrySec._mergeDrops || {} };
   Object.keys(_catSecs).forEach(function(c) {
     var s = _catSecs[c];
-    if (s && s._feedStats) _feedDiag[c] = { feedStats: s._feedStats, totalFetched: s._totalFetched || 0, kept: (s.items || []).length };
+    if (s && s._feedStats) _feedDiag[c] = { feedStats: s._feedStats, totalFetched: s._totalFetched || 0, kept: (s.items || []).length, mergeDrops: s._mergeDrops || {} };
   });
 
   /* Picker stats. */
@@ -3365,6 +3401,7 @@ export default {
         var resp = { news: news, log: bizLog, cost: Object.assign({}, cost), spend: spendInfo,
                      industry: _regenIndustry, industryItems: _indItems,
                      alsoItems: _alsoItems,
+                     effectivePrefs: effectivePrefs,
                      feedDiag: _feedDiag, pickerDiag: _pickerDiag };
         if (_regenFallback) resp.fallback = _regenFallback;
         return jsonResponse(resp);
@@ -3397,6 +3434,7 @@ export default {
           google: diag.google || {},
           bing: diag.bing || null,
           itemCount: items.length,
+          drops: items._drops || {},
           first3: first3
         });
       } catch (e) {

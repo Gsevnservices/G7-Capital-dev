@@ -861,14 +861,35 @@ async function regenNews(firmCode, shared) {
     var fd = data.feedDiag || {};
     var pd = data.pickerDiag || {};
     var msg = 'News regenerated for ' + firmCode + (shared ? ' (incl. shared)' : '') + '\n';
-    msg += 'Spend: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n\n';
+    msg += 'Spend: $' + (sp.firmSpent != null ? sp.firmSpent.toFixed(4) : '?') + ' / $' + (sp.firmCap != null ? sp.firmCap.toFixed(2) : '?') + ' cap\n';
+    /* Resolved prefs */
+    if (data.effectivePrefs) msg += 'Prefs: ' + data.effectivePrefs.join(', ') + '\n';
+    msg += '\n';
     /* Per-feed stats */
     msg += '── FEEDS ──\n';
     Object.keys(fd).forEach(function(cat) {
       var f = fd[cat];
-      msg += cat + ': ' + (f.totalFetched || 0) + ' fetched → ' + (f.kept || 0) + ' kept\n';
+      msg += cat + ': ' + (f.totalFetched || 0) + ' fetched → ' + (f.kept || 0) + ' kept';
+      /* Merge-level drops. */
+      var md = f.mergeDrops || {};
+      var dropParts = [];
+      if (md.duplicate) dropParts.push(md.duplicate + ' dup');
+      if (md.tooOld) dropParts.push(md.tooOld + ' old');
+      if (md.undatedCapped) dropParts.push(md.undatedCapped + ' undated-cap');
+      if (md.headlineDedupe) dropParts.push(md.headlineDedupe + ' headline-dup');
+      if (dropParts.length) msg += '  [dropped: ' + dropParts.join(', ') + ']';
+      msg += '\n';
       if (f.feedStats) f.feedStats.forEach(function(s) {
-        msg += '  "' + s.query + '": ' + s.fetched + ' (' + s.source + ')' + (s.error ? ' ⚠ ' + s.error : '') + '\n';
+        var line = '  "' + s.query + '": ' + s.fetched + ' (' + s.source + ')';
+        /* Parse-level drops from _parseRssItems. */
+        var pd2 = s.drops || {};
+        var parseParts = [];
+        if (pd2.guide) parseParts.push(pd2.guide + ' guide');
+        if (pd2.duplicate) parseParts.push(pd2.duplicate + ' dup');
+        if (pd2.empty) parseParts.push(pd2.empty + ' empty');
+        if (parseParts.length) line += '  [parse-drops: ' + parseParts.join(', ') + ' of ' + (pd2.total || '?') + ' raw]';
+        if (s.error) line += ' ⚠ ' + s.error;
+        msg += line + '\n';
       });
     });
     /* Picker stats */
