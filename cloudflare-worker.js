@@ -2171,6 +2171,8 @@ async function pickNewsForFirm(env, firmCode, day, context, industryCandidates, 
 
   /* Resolve indexes to real items. Drop any invalid index. */
   var NO_EFFECT = 'No direct effect on your business.';
+  /* Weak-why filter: drop picks whose why implies irrelevance. */
+  var _weakWhyRe = /\bindirect\b|\bfar from\b|\bnot in your city\b|\bnot in your area\b|\bonly a signal\b|\bno immediate\b|\bno direct\b/i;
   function resolvePickedItems(arr, maxCount) {
     var out = [];
     (Array.isArray(arr) ? arr : []).forEach(function(p) {
@@ -2191,25 +2193,61 @@ async function pickNewsForFirm(env, firmCode, day, context, industryCandidates, 
   var industryPicked = resolvePickedItems(picks.industry, 4);
   var alsoPicked = resolvePickedItems(picks.also, 3);
 
+  /* Drop weak-why picks from industry, replace with next best candidate. */
+  var usedUrls = new Set();
+  industryPicked = industryPicked.filter(function(it) {
+    if (_weakWhyRe.test(it.why || '')) return false;
+    usedUrls.add(it.sourceUrl);
+    return true;
+  });
   /* Fallback: if fewer than 2 industry items picked but candidates exist,
      take the newest remaining ones without For you / Do this. */
   if (industryPicked.length < 2 && industryCandidates.length > 0) {
-    var pickedUrls = new Set(industryPicked.map(function(it){ return it.sourceUrl; }));
     for (var fi = 0; fi < industryCandidates.length && industryPicked.length < 2; fi++) {
-      if (!pickedUrls.has(industryCandidates[fi].sourceUrl)) {
+      if (!usedUrls.has(industryCandidates[fi].sourceUrl)) {
         industryPicked.push(Object.assign({}, industryCandidates[fi]));
+        usedUrls.add(industryCandidates[fi].sourceUrl);
       }
     }
   }
 
-  /* Filter civic items from also. */
-  alsoPicked = alsoPicked.filter(function(it) { return !_civicRe.test(it.headline || ''); });
+  /* Filter also: drop civic, weak-why, missing why, and "No direct effect". */
+  alsoPicked = alsoPicked.filter(function(it) {
+    if (_civicRe.test(it.headline || '')) return false;
+    var w = (it.why || '').trim();
+    if (!w) return false;
+    if (w === NO_EFFECT) return false;
+    if (_weakWhyRe.test(w)) return false;
+    return true;
+  });
 
   /* Markets line. */
   var marketsItem = null;
   if (picks.markets && typeof picks.markets.idx === 'number' && indexMap[picks.markets.idx]) {
     marketsItem = Object.assign({}, indexMap[picks.markets.idx].item, { _marketLine: true });
   }
+  /* Markets fallback: if picker returned no markets line but market/global
+     feeds have candidates, take the newest one as a compact line. */
+  if (!marketsItem) {
+    var _mCats = ['india_markets', 'global'];
+    for (var mi = 0; mi < _mCats.length && !marketsItem; mi++) {
+      var _mItems = categoryCandidates[_mCats[mi]];
+      if (_mItems && _mItems.length > 0) {
+        marketsItem = Object.assign({}, _mItems[0], { _marketLine: true });
+      }
+    }
+  }
+
+  /* Truncate headlines over 110 chars at last word boundary. */
+  function _truncHeadline(h) {
+    if (!h || h.length <= 110) return h;
+    var cut = h.lastIndexOf(' ', 110);
+    if (cut < 40) cut = 110;
+    return h.slice(0, cut) + '\u2026';
+  }
+  industryPicked.forEach(function(it) { it.headline = _truncHeadline(it.headline); });
+  alsoPicked.forEach(function(it) { it.headline = _truncHeadline(it.headline); });
+  if (marketsItem) marketsItem.headline = _truncHeadline(marketsItem.headline);
 
   var result = {
     industry: industryPicked,
