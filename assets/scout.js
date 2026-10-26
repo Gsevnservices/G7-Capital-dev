@@ -96,6 +96,7 @@ function scoutClearLocalState() {
   for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
     try { localStorage.removeItem(scoutKey(SCOUT_STATE_KEYS[i])); } catch (e) {}
   }
+  _scoutSavedHashes = {};
   scoutClearUnsynced();
 }
 
@@ -118,9 +119,89 @@ function migrateUnscopedScoutKeys() {
   return false;
 }
 
+// ── Delta save infrastructure ──
+// Track a simple hash per key so we only send keys that actually changed
+// since the last successful save. Two tabs editing different keys cannot
+// overwrite each other because the worker merges per-key.
+var _scoutSavedHashes = {};  // key → hash after last successful save
+
+// Fast string hash (djb2) — not cryptographic, just a change detector.
+function _scoutHash(s) {
+  if (s == null) return 0;
+  var h = 5381;
+  for (var i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+// Compute current hashes for all state keys and return only the keys
+// whose hash differs from _scoutSavedHashes (i.e. changed since last save).
+function _scoutChangedKeys() {
+  var changed = {};
+  for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
+    var base = SCOUT_STATE_KEYS[i];
+    var v = localStorage.getItem(scoutKey(base));
+    var h = _scoutHash(v);
+    if (h !== _scoutSavedHashes[base]) {
+      if (v !== null) changed[base] = v;
+      else changed[base] = null;  // key was deleted
+    }
+  }
+  return changed;
+}
+
+// After a successful save, snapshot current hashes so next diff is correct.
+function _scoutSnapshotHashes() {
+  for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
+    var base = SCOUT_STATE_KEYS[i];
+    _scoutSavedHashes[base] = _scoutHash(localStorage.getItem(scoutKey(base)));
+  }
+}
+
 // Bundle all Scout state keys from localStorage into one object and
-// POST to the server. Fire-and-forget: logs on failure, never throws.
+// POST to the server. Sends only changed keys (delta) with _merge:true.
+// Skips the request entirely when nothing changed.
+// Fire-and-forget: logs on failure, never throws.
 async function saveScoutStateToServer() {
+  try {
+    var token = localStorage.getItem('g7_session_token') || '';
+    if (!token) return false;
+
+    // Compute delta — only keys that changed since last successful save
+    var changed = _scoutChangedKeys();
+    var changedKeys = Object.keys(changed);
+    if (changedKeys.length === 0) return true;  // nothing to save
+
+    // Remove null entries (deleted keys) — server merge treats missing keys as "keep existing"
+    var payload = {};
+    for (var k = 0; k < changedKeys.length; k++) {
+      if (changed[changedKeys[k]] !== null) payload[changedKeys[k]] = changed[changedKeys[k]];
+    }
+    if (Object.keys(payload).length === 0) return true;
+
+    var res = await fetch(SCOUT_WORKER + '/data/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ type: 'scout_state', data: payload, _merge: true })
+    });
+    _scoutLastSaveStatus = res.status;
+    if (res.status === 401) { scoutMarkUnsynced(); return false; }
+    if (res.ok) { _scoutSnapshotHashes(); scoutClearUnsynced(); return true; }
+    return false;
+  } catch (e) {
+    console.warn('Scout state save failed (non-blocking):', e);
+    _scoutLastSaveStatus = 0;
+    return false;
+  }
+}
+
+// Full save — used by loadScoutStateFromServer's push-before-pull path
+// and as a fallback. Sends ALL keys (no _merge flag) for backward compat.
+async function _saveScoutStateFull() {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return false;
@@ -141,13 +222,67 @@ async function saveScoutStateToServer() {
     });
     _scoutLastSaveStatus = res.status;
     if (res.status === 401) { scoutMarkUnsynced(); return false; }
-    if (res.ok) { scoutClearUnsynced(); return true; }
+    if (res.ok) { _scoutSnapshotHashes(); scoutClearUnsynced(); return true; }
     return false;
   } catch (e) {
-    console.warn('Scout state save failed (non-blocking):', e);
+    console.warn('Scout state full save failed (non-blocking):', e);
     _scoutLastSaveStatus = 0;
     return false;
   }
+}
+
+// ── Debounced save (4 s trailing, flush on page hide) ──
+var _scoutSaveTimer = null;
+var _scoutSavePending = false;
+
+function scoutScheduleSave() {
+  _scoutSavePending = true;
+  clearTimeout(_scoutSaveTimer);
+  _scoutSaveTimer = setTimeout(function() {
+    _scoutSavePending = false;
+    saveScoutStateToServer();
+  }, 4000);
+}
+
+// Flush pending save immediately (page hide / close).
+// Uses keepalive:true so the browser finishes the request after tab close.
+function _scoutFlushSave() {
+  if (!_scoutSavePending) return;
+  clearTimeout(_scoutSaveTimer);
+  _scoutSavePending = false;
+  try {
+    var token = localStorage.getItem('g7_session_token') || '';
+    if (!token) return;
+    var changed = _scoutChangedKeys();
+    var payload = {};
+    for (var k in changed) { if (changed[k] !== null) payload[k] = changed[k]; }
+    if (Object.keys(payload).length === 0) return;
+    // Use keepalive — browser will finish this even after tab closes.
+    // Max keepalive payload is 64 KB; scout_state can exceed this, so
+    // fall back to a regular fetch if the body is too large.
+    var body = JSON.stringify({ type: 'scout_state', data: payload, _merge: true });
+    var useKeepalive = body.length < 63000;
+    if (!useKeepalive) scoutMarkUnsynced();  // non-keepalive may be killed on tab close
+    fetch(SCOUT_WORKER + '/data/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: body,
+      keepalive: useKeepalive
+    }).then(function(r) {
+      if (r && r.ok) _scoutSnapshotHashes();
+    }).catch(function() {});
+  } catch (e) {}
+}
+
+// Wire up page-hide flush
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'hidden') _scoutFlushSave();
+  });
+  window.addEventListener('pagehide', function() { _scoutFlushSave(); });
 }
 
 // Load Scout state blob from the server and write each key into
@@ -165,7 +300,7 @@ async function loadScoutStateFromServer() {
        push a blob that contains the core analysis — never a fragment. */
     if (scoutIsUnsynced()) {
       if (localStorage.getItem(scoutKey('scout_pending_result')) !== null) {
-        var pushed = await saveScoutStateToServer();
+        var pushed = await _saveScoutStateFull();
         if (!pushed) {
           /* 401 — session is dead; expire and send to login. Local work is
              preserved and the unsynced flag stays set for the next login.
@@ -200,6 +335,8 @@ async function loadScoutStateFromServer() {
         localStorage.setItem(scoutKey(key), blob[key]);
       }
     }
+    // Snapshot hashes so delta saves start from the server state
+    _scoutSnapshotHashes();
     return true;
   } catch (e) {
     console.warn('Scout state load failed (non-blocking):', e);

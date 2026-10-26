@@ -301,8 +301,12 @@ async function resolveIndustryForFirm(env, firmCode) {
   }
   var resolved = resolveIndustry(bt, sells) || resolveIndustry(bti, sells) || 'services_trade';
   console.log(JSON.stringify({ resolveIndustry: firmCode, type: bt || bti, sells: sells.slice(0, 80), key: resolved }));
-  /* Persist in own KV key (no TTL — settings can change it later). */
-  try { await kvPut(env, 'scout:industry:' + firmCode, resolved); } catch (e) {}
+  /* Persist in own KV key — skip write if value hasn't changed. */
+  try {
+    var _indKey = 'scout:industry:' + firmCode;
+    var _indOld = await env.G7_KV.get(_indKey);
+    if (_indOld !== resolved) await kvPut(env, _indKey, resolved);
+  } catch (e) {}
   return resolved;
 }
 
@@ -3020,7 +3024,21 @@ export default {
       // Construct the KV key scoped to this firm
       const key = 'firms:' + session.firmCode + ':' + type;
 
-      // Save to KV — no TTL on firm data, it persists until explicitly deleted
+      // Merge save: when _merge is true and type is scout_state, read the
+      // existing blob and overwrite only the keys present in this request.
+      // Two tabs editing different keys cannot erase each other's work.
+      // Old clients (no _merge flag) still send the full blob — works as before.
+      if (body._merge && type === 'scout_state' && data && typeof data === 'object') {
+        var existing = await env.G7_KV.get(key, 'json') || {};
+        var merged = Object.assign({}, existing);
+        for (var mk in data) {
+          if (data.hasOwnProperty(mk)) merged[mk] = data[mk];
+        }
+        await kvPut(env, key, JSON.stringify(merged));
+        return jsonResponse({ success: true, merged: true });
+      }
+
+      // Full save — no TTL on firm data, it persists until explicitly deleted
       await kvPut(env,key, JSON.stringify(data));
 
       return jsonResponse({ success: true });
@@ -3860,17 +3878,30 @@ export default {
       const context = String(body.context || '').slice(0, 4000);
       const city = String(body.city || '').slice(0, 80);
 
-      /* Save the latest context so the 06:00 IST cron can generate without
-         a browser open. 7-day expiry: inactive firms drop out on their own. */
-      if (context) {
-        await kvPut(env,'market:ctx:' + session.firmCode,
-          JSON.stringify({ context: context, city: city }),
-          { expirationTtl: 7 * 86400 });
-      }
-
-      /* IST date — the brief belongs to the owner's day, not UTC's. */
+      /* IST date — needed by both context-save and cache assembly below. */
       const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
       const day = ist.toISOString().slice(0, 10);
+
+      /* Save the latest context so the 06:00 IST cron can generate without
+         a browser open. 7-day expiry: inactive firms drop out on their own.
+         Compare before writing — skip if value is identical AND TTL was
+         already refreshed today (tracked by a lightweight touch key). */
+      if (context) {
+        var _ctxKey = 'market:ctx:' + session.firmCode;
+        var _ctxNew = JSON.stringify({ context: context, city: city });
+        var _ctxOld = await env.G7_KV.get(_ctxKey);
+        if (_ctxNew !== _ctxOld) {
+          await kvPut(env, _ctxKey, _ctxNew, { expirationTtl: 7 * 86400 });
+        } else {
+          // Value unchanged — still refresh TTL once per day so the key
+          // doesn't expire while the firm is actively using the product.
+          var _ctxTouchKey = 'market:ctx-touch:' + session.firmCode + ':' + day;
+          if (!(await env.G7_KV.get(_ctxTouchKey))) {
+            await kvPut(env, _ctxKey, _ctxNew, { expirationTtl: 7 * 86400 });
+            await kvPut(env, _ctxTouchKey, '1', { expirationTtl: 86400 });
+          }
+        }
+      }
 
       /* Try cache-only assembly first (cron pre-fetches feeds + picker runs). */
       var user2 = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};

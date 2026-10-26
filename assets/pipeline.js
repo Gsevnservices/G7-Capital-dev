@@ -55,40 +55,18 @@ function pipelineLoad() {
   }
 }
 
-/* Timer for debounced server sync after pipeline writes. */
-var _pipelineSyncTimer = null;
-/* Tracks whether a sync has fired since the last period of inactivity.
-   Leading-edge fire: first write after a quiet period syncs immediately
-   so a user who adds a business and immediately switches to WhatsApp
-   cannot lose data to a suspended tab. Subsequent writes in the same
-   burst are coalesced into one trailing sync 2 s later. */
-var _pipelineSyncFired = false;
-
 /* Write the whole pipeline. Returns true on success.
-   After a successful write, triggers a server sync via saveScoutStateToServer()
-   (defined in scout.js, loaded before pipeline.js on every Scout page).
-   Sync is fire-and-forget — a network failure never breaks the local save. */
+   After a successful write, schedules a debounced server sync via
+   scoutScheduleSave() (defined in scout.js, loaded before pipeline.js).
+   The 4 s debounce in scout.js coalesces rapid pipeline writes, and
+   the page-hide flush ensures nothing is lost on tab close. */
 function pipelineSave(store) {
   try {
     if (!store || !Array.isArray(store.people)) return false;
     localStorage.setItem(pipelineKey(), JSON.stringify(store));
 
-    /* Server sync — leading-edge + trailing-edge debounce.
-       First write after a quiet period fires immediately (leading edge).
-       Further writes within 2 s are coalesced into one trailing sync.
-       Guard: saveScoutStateToServer only exists when scout.js is loaded. */
-    if (typeof saveScoutStateToServer === 'function') {
-      clearTimeout(_pipelineSyncTimer);
-      if (!_pipelineSyncFired) {
-        /* Leading edge — fire now */
-        _pipelineSyncFired = true;
-        try { saveScoutStateToServer(); } catch (_se) {}
-      }
-      /* Trailing edge — coalesce remaining burst writes */
-      _pipelineSyncTimer = setTimeout(function() {
-        _pipelineSyncFired = false;
-        try { saveScoutStateToServer(); } catch (_se) {}
-      }, 2000);
+    if (typeof scoutScheduleSave === 'function') {
+      try { scoutScheduleSave(); } catch (_se) {}
     }
 
     return true;
