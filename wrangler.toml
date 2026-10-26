@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════
+# G7 Capital — Cloudflare Worker deployment config
+#
+# Deploy dev:   npx wrangler deploy --env dev
+# Deploy prod:  npx wrangler deploy              (ONLY when Pallav says "deploy prod worker")
+#               Always dry-run prod first:  npx wrangler deploy --dry-run
+#
+# Secrets (set per environment):
+#   npx wrangler secret put ANTHROPIC_API_KEY [--env dev]
+#   npx wrangler secret put RESEND_API_KEY    [--env dev]
+#   npx wrangler secret put ADMIN_PASSWORD    [--env dev]
+#   npx wrangler secret put ADMIN_EMAIL       [--env dev]
+#
+# Dashboard-managed vars preserved by keep_vars = true:
+#   COST_CAP_FIRM, COST_CAP_FIRM_FREE, COST_CAP_SHARED
+# ═══════════════════════════════════════════════════════════════
+
+name = "g7-proxy"
+main = "cloudflare-worker.js"
+compatibility_date = "2026-04-02"
+keep_vars = true
+
+[placement]
+mode = "smart"
+
+[observability]
+enabled = true
+
+# ── Production KV ──
+[[kv_namespaces]]
+binding = "G7_KV"
+id = "df5fd3fe75ef4e619c861237df4fc83b"
+
+[vars]
+WORKER_URL = "https://g7-proxy.gsevnservices.workers.dev"
+
+# Cron: every 30 min — the worker itself decides whether it's 6 AM IST
+[triggers]
+crons = ["*/30 * * * *"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Dev environment — completely isolated KV, no cron
+# ═══════════════════════════════════════════════════════════════
+[env.dev]
+name = "g7-proxy-dev"
+
+# No cron on dev — trigger manually via admin
+[env.dev.triggers]
+crons = []
+
+[env.dev.placement]
+mode = "smart"
+
+[env.dev.observability]
+enabled = true
+
+# Dev KV — created via: npx wrangler kv namespace create G7_KV_DEV
+# Replace the id below after creation
+[[env.dev.kv_namespaces]]
+binding = "G7_KV"
+id = "25f358b17843460c9429d88dcaca569f"
+
+[env.dev.vars]
+WORKER_URL = "https://g7-proxy-dev.gsevnservices.workers.dev"

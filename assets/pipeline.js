@@ -353,8 +353,7 @@ function pipelineFetchMsgLang() {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return;
-    fetch((typeof SCOUT_WORKER !== 'undefined' ? SCOUT_WORKER : 'https://g7-proxy.gsevnservices.workers.dev') +
-      '/scout/message-lang', {
+    fetch(SCOUT_WORKER + '/scout/message-lang', {
       headers: { 'Authorization': 'Bearer ' + token }
     }).then(function(r) { return r.json(); }).then(function(j) {
       if (j && j.language) {

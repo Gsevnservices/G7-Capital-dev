@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>G7 Admin Panel</title>
 
+<script src="assets/env.js?v=1"></script>
 <style>
 /* Simple, functional admin styles — not customer-facing */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -365,7 +366,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0d0d0d;color:#e0e0e
 // ─────────────────────────────────────────────────────────────
 // WORKER URL
 // ─────────────────────────────────────────────────────────────
-const WORKER = 'https://g7-proxy.gsevnservices.workers.dev';
+const WORKER = G7_WORKER_URL;
 
 // Admin password — remembered after authentication so it can
 // be sent with /admin/* calls without asking again
