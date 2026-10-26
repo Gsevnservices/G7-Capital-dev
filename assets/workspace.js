@@ -27,7 +27,7 @@
 // The API key lives in Cloudflare as an environment variable.
 // Replace this URL if you redeploy the worker under a different name.
 // ─────────────────────────────────────────────────────────────
-var G7_PROXY_URL = 'https://g7-proxy.gsevnservices.workers.dev/api/message';
+var G7_PROXY_URL = G7_WORKER_URL + '/api/message';
 
 
 // ─────────────────────────────────────────────────────────────

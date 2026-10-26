@@ -20,7 +20,7 @@
 // ─────────────────────────────────────────────────────────────
 
 // Cloudflare Worker base URL — Scout routes live here
-const SCOUT_WORKER = 'https://g7-proxy.gsevnservices.workers.dev';
+const SCOUT_WORKER = G7_WORKER_URL;
 
 
 // ============================================================

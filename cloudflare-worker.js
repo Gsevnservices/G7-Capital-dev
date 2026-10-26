@@ -1192,7 +1192,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
   const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
   const name = displayName(user, firmCode);
   const token = await unsubToken(env, firmCode);
-  const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token + '&type=actions';
+  const unsubUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev') + '/unsub?t=' + token + '&type=actions';
 
   /* Resolve messageToUse against tab2.messages */
   function resolveMessage(raw) {
@@ -1526,7 +1526,7 @@ async function sendNewsEmail(env, firmCode, day) {
   /* Greeting uses the business name, never the firm code. */
   const name = newsGreetingName(user, saved && saved.context, firmCode);
   const token = await unsubToken(env, firmCode);
-  const unsubUrl = 'https://g7-proxy.gsevnservices.workers.dev/unsub?t=' + token + '&type=news';
+  const unsubUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev') + '/unsub?t=' + token + '&type=news';
 
   var subjectTail = String(body.firstHeadline).slice(0, 60);
   if (subjectTail.length < body.firstHeadline.length) {
@@ -4671,7 +4671,7 @@ export default {
     // =========================================================================
     // ROUTE A — POST /inbound/create
     // Creates three inbound short links for the firm: bio, google, status.
-    // Each link is: https://g7-proxy.gsevnservices.workers.dev/i/{CODE}
+    // Each link is: {env.WORKER_URL}/i/{CODE}
     // Codes are opaque 6-char base36 strings — never the firmCode.
     // Session-protected.
     //

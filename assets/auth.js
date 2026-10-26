@@ -24,7 +24,7 @@
 // WORKER BASE URL
 // All API calls go through this Cloudflare Worker.
 // ─────────────────────────────────────────────────────────────
-const G7_WORKER = 'https://g7-proxy.gsevnservices.workers.dev';
+const G7_WORKER = G7_WORKER_URL;
 
 /* ═══════════════════════════════════════════
    PASSWORD-CHANGE GUARD
