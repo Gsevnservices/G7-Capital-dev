@@ -3032,7 +3032,10 @@ export default {
         var existing = await env.G7_KV.get(key, 'json') || {};
         var merged = Object.assign({}, existing);
         for (var mk in data) {
-          if (data.hasOwnProperty(mk)) merged[mk] = data[mk];
+          if (data.hasOwnProperty(mk)) {
+            if (data[mk] === null) delete merged[mk];
+            else merged[mk] = data[mk];
+          }
         }
         await kvPut(env, key, JSON.stringify(merged));
         return jsonResponse({ success: true, merged: true });

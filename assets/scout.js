@@ -173,12 +173,8 @@ async function saveScoutStateToServer() {
     var changedKeys = Object.keys(changed);
     if (changedKeys.length === 0) return true;  // nothing to save
 
-    // Remove null entries (deleted keys) — server merge treats missing keys as "keep existing"
-    var payload = {};
-    for (var k = 0; k < changedKeys.length; k++) {
-      if (changed[changedKeys[k]] !== null) payload[changedKeys[k]] = changed[changedKeys[k]];
-    }
-    if (Object.keys(payload).length === 0) return true;
+    // Include null entries — they tell the worker to delete those keys from the blob.
+    var payload = changed;
 
     var res = await fetch(SCOUT_WORKER + '/data/save', {
       method: 'POST',
@@ -254,9 +250,8 @@ function _scoutFlushSave() {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return;
     var changed = _scoutChangedKeys();
-    var payload = {};
-    for (var k in changed) { if (changed[k] !== null) payload[k] = changed[k]; }
-    if (Object.keys(payload).length === 0) return;
+    if (Object.keys(changed).length === 0) return;
+    var payload = changed;
     // Use keepalive — browser will finish this even after tab closes.
     // Max keepalive payload is 64 KB; scout_state can exceed this, so
     // fall back to a regular fetch if the body is too large.
