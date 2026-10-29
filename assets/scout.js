@@ -51,7 +51,9 @@ var SCOUT_STATE_KEYS = [
   'scout_pinned',
   'scout_bucket',
   'scout_review_link',
-  'scout_review_skip'
+  'scout_review_skip',
+  'scout_pipeline',
+  'scout_pipeline_anon'
 ];
 
 /* ═══════════════════════════════════════════
@@ -95,6 +97,9 @@ function scoutClearLocalState() {
   for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
     try { localStorage.removeItem(scoutKey(SCOUT_STATE_KEYS[i])); } catch (e) {}
   }
+  // Clear D1 flag and pipeline dirty/cursor state (set by pipeline.js)
+  try { localStorage.removeItem(scoutKey('scout_d1_on')); } catch (e) {}
+  if (typeof pipelineClearState === 'function') pipelineClearState();
   _scoutSavedHashes = {};
   scoutClearUnsynced();
 }
@@ -138,8 +143,12 @@ function _scoutHash(s) {
 // whose hash differs from _scoutSavedHashes (i.e. changed since last save).
 function _scoutChangedKeys() {
   var changed = {};
+  // When D1 is active, scout_pipeline is managed by pipeline.js sync —
+  // skip it in delta saves so it doesn't bloat the scout_state KV blob.
+  var d1on = localStorage.getItem(scoutKey('scout_d1_on')) === '1';
   for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
     var base = SCOUT_STATE_KEYS[i];
+    if (d1on && base === 'scout_pipeline') continue;
     var v = localStorage.getItem(scoutKey(base));
     var h = _scoutHash(v);
     if (h !== _scoutSavedHashes[base]) {

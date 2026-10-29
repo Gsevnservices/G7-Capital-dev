@@ -997,61 +997,92 @@ async function loadScoutState(env, firmCode) {
 
 /* ── D1 one-time migration: KV blob → customers table ──────────
    Called on every /scout/customers* route. Reads the flag first (one KV read)
-   and returns immediately if already migrated. */
+   and returns immediately if already migrated.
+   Uses a KV lock to prevent concurrent migrations duplicating history events. */
 async function ensureCustomersMigrated(env, firmCode) {
   if (!env.DB) return;
   var flagKey = 'cust:migrated:' + firmCode;
   var flag = await env.G7_KV.get(flagKey);
   if (flag) return;
-  // Read scout_pipeline from the firm's scout_state blob
-  var blob = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
-  if (!blob) { await kvPut(env, flagKey, '1'); return; }
-  var raw = blob['scout_pipeline'] || blob['scout_pipeline_' + firmCode];
-  var pipeline;
-  if (typeof raw === 'string') { try { pipeline = JSON.parse(raw); } catch (e) { pipeline = null; } }
-  else { pipeline = raw; }
-  if (!pipeline || !Array.isArray(pipeline.people) || pipeline.people.length === 0) {
-    await kvPut(env, flagKey, '1');
-    return;
+  // KV lock: claim migration; if another request already claimed, wait for flag
+  var lockKey = 'cust:migrating:' + firmCode;
+  var lock = await env.G7_KV.get(lockKey);
+  if (lock) {
+    // Another request is migrating — wait briefly then check flag again
+    await new Promise(function(r) { setTimeout(r, 2000); });
+    var recheckFlag = await env.G7_KV.get(flagKey);
+    if (recheckFlag) return;
+    // Still not done — proceed anyway (lock may have been abandoned)
   }
-  var stmts = [];
-  var now = new Date().toISOString();
-  for (var i = 0; i < pipeline.people.length; i++) {
-    var p = pipeline.people[i];
-    if (!p || !p.id) continue;
-    // Extract top-level columns; everything else goes into data JSON
-    var data = {};
-    var TOP_COLS = { id:1, name:1, phone:1, kind:1, status:1, source:1, value:1,
-                     next_action_at:1, created_at:1, updated_at:1, deleted_at:1 };
-    for (var k in p) { if (p.hasOwnProperty(k) && !TOP_COLS[k]) data[k] = p[k]; }
-    stmts.push(env.DB.prepare(
-      `INSERT OR IGNORE INTO customers (firm_code, id, name, phone, kind, stage, source, value, data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      firmCode, p.id, p.name || '', p.phone || '', p.kind || '',
-      p.status || 'contacted', p.source || 'manual', p.value || 0,
-      JSON.stringify(data),
-      p.lastContactedAt || p.lastStatusAt || now,
-      p.lastStatusAt || now
-    ));
-    // Migrate history entries as events
-    if (Array.isArray(p.history)) {
-      for (var h = 0; h < p.history.length; h++) {
-        var ev = p.history[h];
-        stmts.push(env.DB.prepare(
-          'INSERT INTO customer_events (firm_code, customer_id, type, to_stage, note, at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(firmCode, p.id, 'stage_change', ev.event || '', '', ev.at || now));
+  await kvPut(env, lockKey, '1');
+  try {
+    // Read scout_pipeline from the firm's scout_state blob
+    var blob = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
+    if (!blob) { await kvPut(env, flagKey, '1'); return; }
+    var raw = blob['scout_pipeline'] || blob['scout_pipeline_' + firmCode];
+    var pipeline;
+    if (typeof raw === 'string') { try { pipeline = JSON.parse(raw); } catch (e) { pipeline = null; } }
+    else { pipeline = raw; }
+    if (!pipeline || !Array.isArray(pipeline.people) || pipeline.people.length === 0) {
+      await kvPut(env, flagKey, '1');
+      return;
+    }
+    var stmts = [];
+    var now = new Date().toISOString();
+    for (var i = 0; i < pipeline.people.length; i++) {
+      var p = pipeline.people[i];
+      if (!p || !p.id) continue;
+      // Extract top-level columns; everything else goes into data JSON
+      var data = {};
+      var TOP_COLS = { id:1, name:1, phone:1, kind:1, status:1, source:1, value:1,
+                       next_action_at:1, created_at:1, updated_at:1, deleted_at:1 };
+      for (var k in p) { if (p.hasOwnProperty(k) && !TOP_COLS[k]) data[k] = p[k]; }
+      // INSERT OR IGNORE — only inserts if row doesn't exist yet
+      stmts.push(env.DB.prepare(
+        `INSERT OR IGNORE INTO customers (firm_code, id, name, phone, kind, stage, source, value, data, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        firmCode, p.id, p.name || '', p.phone || '', p.kind || '',
+        p.status || 'contacted', p.source || 'manual', p.value || 0,
+        JSON.stringify(data),
+        p.lastContactedAt || p.lastStatusAt || now,
+        p.lastStatusAt || now
+      ));
+    }
+    // Insert customers first, then only add events for rows that were actually inserted
+    if (stmts.length > 0) {
+      for (var c = 0; c < stmts.length; c += 500) {
+        await env.DB.batch(stmts.slice(c, c + 500));
       }
     }
-  }
-  // D1 batch() supports up to ~1000 statements; pipeline should never exceed that
-  if (stmts.length > 0) {
-    // Batch in chunks of 500 to stay safe
-    for (var c = 0; c < stmts.length; c += 500) {
-      await env.DB.batch(stmts.slice(c, c + 500));
+    // Now insert history events — only for rows that exist in DB (safe: INSERT OR IGNORE
+    // above means the customer row exists; but we check to avoid duplicating events
+    // on re-run by checking if events already exist for this customer)
+    var eventStmts = [];
+    for (var j = 0; j < pipeline.people.length; j++) {
+      var pe = pipeline.people[j];
+      if (!pe || !pe.id || !Array.isArray(pe.history)) continue;
+      // Check if events already exist for this customer (migration re-run guard)
+      var existingEvents = await env.DB.prepare(
+        'SELECT COUNT(*) as cnt FROM customer_events WHERE firm_code = ? AND customer_id = ?'
+      ).bind(firmCode, pe.id).first();
+      if (existingEvents && existingEvents.cnt > 0) continue;  // already migrated
+      for (var h = 0; h < pe.history.length; h++) {
+        var ev = pe.history[h];
+        eventStmts.push(env.DB.prepare(
+          'INSERT INTO customer_events (firm_code, customer_id, type, to_stage, note, at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(firmCode, pe.id, 'stage_change', ev.event || '', '', ev.at || now));
+      }
     }
+    if (eventStmts.length > 0) {
+      for (var ec = 0; ec < eventStmts.length; ec += 500) {
+        await env.DB.batch(eventStmts.slice(ec, ec + 500));
+      }
+    }
+    await kvPut(env, flagKey, '1');
+  } finally {
+    try { await env.G7_KV.delete(lockKey); } catch (e) {}
   }
-  await kvPut(env, flagKey, '1');
 }
 
 /* Load customers from D1 as a pipeline-shaped object for worker-side readers
@@ -1071,7 +1102,7 @@ async function loadCustomersForFirm(env, firmCode) {
           obj.id = r.id; obj.name = r.name; obj.phone = r.phone;
           obj.kind = r.kind; obj.status = r.stage; obj.source = r.source;
           obj.value = r.value;
-          obj.lastStatusAt = r.updated_at; obj.lastContactedAt = r.created_at;
+          // lastStatusAt and lastContactedAt live in data JSON — do NOT overwrite from columns
           return obj;
         });
         return { people: people, anonymousContacts: [] };
@@ -4776,7 +4807,8 @@ export default {
         let sql, params;
         if (since) {
           // Include soft-deleted so the browser learns about deletions
-          sql = 'SELECT * FROM customers WHERE firm_code = ? AND updated_at > ?';
+          // Use synced_at (server-stamped) not updated_at (client-stamped) for cursor consistency
+          sql = 'SELECT * FROM customers WHERE firm_code = ? AND synced_at > ?';
           params = [session.firmCode, since];
         } else if (q) {
           sql = 'SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND (name LIKE ? OR phone LIKE ?)';
@@ -4791,7 +4823,7 @@ export default {
         }
         sql += ' ORDER BY updated_at DESC LIMIT 1000';
         const rows = await env.DB.prepare(sql).bind(...params).all();
-        return jsonResponse({ customers: rows.results || [] });
+        return jsonResponse({ customers: rows.results || [], serverTime: new Date().toISOString() });
       } catch (e) {
         return jsonResponse({ error: 'DB query failed', detail: String(e.message || e).slice(0, 300) }, 500);
       }
@@ -4823,13 +4855,14 @@ export default {
           }
           const newStage = row.stage || 'contacted';
           stmts.push(env.DB.prepare(
-            `INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, value, next_action_at, data, created_at, updated_at, deleted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, value, next_action_at, data, created_at, updated_at, deleted_at, synced_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (firm_code, id) DO UPDATE SET
                name = excluded.name, phone = excluded.phone, kind = excluded.kind,
                stage = excluded.stage, source = excluded.source, value = excluded.value,
                next_action_at = excluded.next_action_at, data = excluded.data,
-               updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`
+               updated_at = excluded.updated_at, deleted_at = excluded.deleted_at,
+               synced_at = excluded.synced_at`
           ).bind(
             session.firmCode, row.id,
             row.name || '', row.phone || '', row.kind || '',
@@ -4837,7 +4870,8 @@ export default {
             row.value || 0, row.next_action_at || null,
             typeof row.data === 'string' ? row.data : JSON.stringify(row.data || {}),
             row.created_at || now, row.updated_at || now,
-            row.deleted_at || null
+            row.deleted_at || null,
+            now  // synced_at: server-stamped
           ));
           upsertCount++;
           // Write event if stage changed
@@ -4848,7 +4882,7 @@ export default {
           }
         }
         if (stmts.length > 0) await env.DB.batch(stmts);
-        return jsonResponse({ ok: true, upserted: upsertCount });
+        return jsonResponse({ ok: true, upserted: upsertCount, serverTime: now });
       } catch (e) {
         return jsonResponse({ error: 'DB upsert failed', detail: String(e.message || e).slice(0, 300) }, 500);
       }
@@ -4868,11 +4902,11 @@ export default {
       try {
         const stmts = ids.map(function(id) {
           return env.DB.prepare(
-            'UPDATE customers SET deleted_at = ?, updated_at = ? WHERE firm_code = ? AND id = ? AND deleted_at IS NULL'
-          ).bind(now, now, session.firmCode, id);
+            'UPDATE customers SET deleted_at = ?, updated_at = ?, synced_at = ? WHERE firm_code = ? AND id = ? AND deleted_at IS NULL'
+          ).bind(now, now, now, session.firmCode, id);
         });
         await env.DB.batch(stmts);
-        return jsonResponse({ ok: true, deleted: ids.length });
+        return jsonResponse({ ok: true, deleted: ids.length, serverTime: now });
       } catch (e) {
         return jsonResponse({ error: 'DB delete failed', detail: String(e.message || e).slice(0, 300) }, 500);
       }
