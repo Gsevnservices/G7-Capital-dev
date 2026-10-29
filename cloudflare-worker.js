@@ -681,6 +681,15 @@ function genInboundCode() {
 // in KV, checks expiry, and returns the session object if valid.
 // Returns null if the token is missing, invalid, or expired.
 // ─────────────────────────────────────────────────────────────────────────────
+/* ── Session constants ────────────────────────────────────────
+   IDLE_TTL:     30 days — if the user doesn't visit for this long, session dies.
+   HARD_CAP:     90 days — absolute max lifetime; user must re-login.
+   REFRESH_GAP:  24 h    — only refresh (KV write) once per day at most. */
+var SESSION_IDLE_MS    = 30 * 24 * 60 * 60 * 1000;
+var SESSION_HARD_MS    = 90 * 24 * 60 * 60 * 1000;
+var SESSION_REFRESH_MS = 24 * 60 * 60 * 1000;
+var SESSION_KV_TTL_S   = 91 * 24 * 60 * 60;  // KV auto-delete: hard cap + 1 day buffer
+
 async function validateSession(request, env) {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -689,11 +698,47 @@ async function validateSession(request, env) {
   const token = authHeader.slice(7); // strip 'Bearer '
   const session = await env.G7_KV.get('auth:sessions:' + token, 'json');
   if (!session) return null;
-  if (session.expiresAt < Date.now()) {
-    // Token has expired — clean it up and reject
+
+  const now = Date.now();
+
+  // ── Hard cap: 90 days from login ──
+  // Old sessions without createdAt: treat createdAt as now on first refresh
+  // (don't kick anyone out — they get a fresh 90-day window).
+  var createdAt = session.createdAt || now;
+
+  if (now - createdAt > SESSION_HARD_MS) {
     await env.G7_KV.delete('auth:sessions:' + token);
     return null;
   }
+
+  // ── Idle timeout: 30 days since last activity ──
+  // expiresAt is the idle deadline. Old sessions have it set to 7 days from
+  // login; new/refreshed sessions have it set to 30 days from last refresh.
+  if (session.expiresAt && session.expiresAt < now) {
+    await env.G7_KV.delete('auth:sessions:' + token);
+    return null;
+  }
+
+  // ── Sliding refresh: extend idle window if last refresh was >24h ago ──
+  var refreshedAt = session.refreshedAt || session.createdAt || 0;
+  if (now - refreshedAt > SESSION_REFRESH_MS) {
+    var idleDeadline = now + SESSION_IDLE_MS;
+    // Don't extend past the hard cap
+    var hardDeadline = createdAt + SESSION_HARD_MS;
+    if (idleDeadline > hardDeadline) idleDeadline = hardDeadline;
+
+    var updated = Object.assign({}, session, {
+      createdAt: createdAt,       // backfill for old sessions
+      refreshedAt: now,
+      expiresAt: idleDeadline
+    });
+    // Remaining TTL for KV auto-delete: time until hard cap + 1 day buffer
+    var remainingS = Math.max(Math.ceil((hardDeadline - now) / 1000) + 86400, 60);
+    await kvPut(env, 'auth:sessions:' + token, JSON.stringify(updated),
+      { expirationTtl: remainingS });
+    return updated;
+  }
+
   return session;
 }
 
@@ -2913,18 +2958,19 @@ export default {
       // Generate a session token — two UUIDs joined for extra length
       const token = crypto.randomUUID() + '-' + crypto.randomUUID();
 
-      // Store session in KV with 7-day TTL
-      // expiresAt is checked on each request; Cloudflare also auto-deletes
-      // the key after expirationTtl seconds as a backup cleanup mechanism
+      // Store session in KV with sliding-session fields.
+      // Idle timeout 30 days, hard cap 90 days.  Cloudflare TTL = hard cap + 1 day.
+      var loginNow = Date.now();
       await kvPut(env,
         'auth:sessions:' + token,
         JSON.stringify({
           firmCode: normalizedCode,
           firmName: user.firmName,
-          createdAt: Date.now(),
-          expiresAt: Date.now() + (7 * 24 * 60 * 60 * 1000) // 7 days in ms
+          createdAt: loginNow,
+          refreshedAt: loginNow,
+          expiresAt: loginNow + SESSION_IDLE_MS
         }),
-        { expirationTtl: 604800 } // 7 days in seconds — Cloudflare TTL
+        { expirationTtl: SESSION_KV_TTL_S }
       );
 
       return jsonResponse({
