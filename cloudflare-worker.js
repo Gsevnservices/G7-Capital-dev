@@ -995,6 +995,94 @@ async function loadScoutState(env, firmCode) {
   return { pick: pick };
 }
 
+/* ── D1 one-time migration: KV blob → customers table ──────────
+   Called on every /scout/customers* route. Reads the flag first (one KV read)
+   and returns immediately if already migrated. */
+async function ensureCustomersMigrated(env, firmCode) {
+  if (!env.DB) return;
+  var flagKey = 'cust:migrated:' + firmCode;
+  var flag = await env.G7_KV.get(flagKey);
+  if (flag) return;
+  // Read scout_pipeline from the firm's scout_state blob
+  var blob = await env.G7_KV.get('firms:' + firmCode + ':scout_state', 'json');
+  if (!blob) { await kvPut(env, flagKey, '1'); return; }
+  var raw = blob['scout_pipeline'] || blob['scout_pipeline_' + firmCode];
+  var pipeline;
+  if (typeof raw === 'string') { try { pipeline = JSON.parse(raw); } catch (e) { pipeline = null; } }
+  else { pipeline = raw; }
+  if (!pipeline || !Array.isArray(pipeline.people) || pipeline.people.length === 0) {
+    await kvPut(env, flagKey, '1');
+    return;
+  }
+  var stmts = [];
+  var now = new Date().toISOString();
+  for (var i = 0; i < pipeline.people.length; i++) {
+    var p = pipeline.people[i];
+    if (!p || !p.id) continue;
+    // Extract top-level columns; everything else goes into data JSON
+    var data = {};
+    var TOP_COLS = { id:1, name:1, phone:1, kind:1, status:1, source:1, value:1,
+                     next_action_at:1, created_at:1, updated_at:1, deleted_at:1 };
+    for (var k in p) { if (p.hasOwnProperty(k) && !TOP_COLS[k]) data[k] = p[k]; }
+    stmts.push(env.DB.prepare(
+      `INSERT OR IGNORE INTO customers (firm_code, id, name, phone, kind, stage, source, value, data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      firmCode, p.id, p.name || '', p.phone || '', p.kind || '',
+      p.status || 'contacted', p.source || 'manual', p.value || 0,
+      JSON.stringify(data),
+      p.lastContactedAt || p.lastStatusAt || now,
+      p.lastStatusAt || now
+    ));
+    // Migrate history entries as events
+    if (Array.isArray(p.history)) {
+      for (var h = 0; h < p.history.length; h++) {
+        var ev = p.history[h];
+        stmts.push(env.DB.prepare(
+          'INSERT INTO customer_events (firm_code, customer_id, type, to_stage, note, at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(firmCode, p.id, 'stage_change', ev.event || '', '', ev.at || now));
+      }
+    }
+  }
+  // D1 batch() supports up to ~1000 statements; pipeline should never exceed that
+  if (stmts.length > 0) {
+    // Batch in chunks of 500 to stay safe
+    for (var c = 0; c < stmts.length; c += 500) {
+      await env.DB.batch(stmts.slice(c, c + 500));
+    }
+  }
+  await kvPut(env, flagKey, '1');
+}
+
+/* Load customers from D1 as a pipeline-shaped object for worker-side readers
+   (morning email, generateScoutMove, briefing). Falls back to KV blob
+   when env.DB is missing (prod today). */
+async function loadCustomersForFirm(env, firmCode) {
+  if (env.DB) {
+    try {
+      var flag = await env.G7_KV.get('cust:migrated:' + firmCode);
+      if (flag) {
+        var rows = await env.DB.prepare(
+          'SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL ORDER BY updated_at DESC'
+        ).bind(firmCode).all();
+        var people = (rows.results || []).map(function(r) {
+          var obj = {};
+          try { obj = JSON.parse(r.data || '{}'); } catch (e) {}
+          obj.id = r.id; obj.name = r.name; obj.phone = r.phone;
+          obj.kind = r.kind; obj.status = r.stage; obj.source = r.source;
+          obj.value = r.value;
+          obj.lastStatusAt = r.updated_at; obj.lastContactedAt = r.created_at;
+          return obj;
+        });
+        return { people: people, anonymousContacts: [] };
+      }
+    } catch (e) { /* fall through to KV blob */ }
+  }
+  // Fallback: read from KV blob (prod path, or if D1 query fails)
+  var st = await loadScoutState(env, firmCode);
+  return st ? st.pick('scout_pipeline') : null;
+}
+
 /* PORT of pipelineDue from assets/pipeline.js — same statuses, same day
    thresholds, same urgency, same messages. Takes the pipeline store and
    current time as parameters instead of reading localStorage. */
@@ -1272,7 +1360,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
   }
 
   /* ── FOLLOW UP TODAY ── */
-  var pipeline = st ? st.pick('scout_pipeline') : null;
+  var pipeline = await loadCustomersForFirm(env, firmCode);
   var bizName = (pend && pend.businessData && pend.businessData.businessName) || '';
   var _bucket = (st ? st.pick('scout_bucket') : null) || 'retail';
   var _rsRaw = st ? st.pick('scout_review_skip') : null;
@@ -2484,7 +2572,7 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
   /* Pipeline summary — counts and the people due, never phone numbers. */
   const pend = st ? (st.pick('scout_pending_result') || {}) : {};
   const bizName = (pend.businessData && pend.businessData.businessName) || '';
-  const pipeline = st ? st.pick('scout_pipeline') : null;
+  const pipeline = await loadCustomersForFirm(env, firmCode);
   const people = (pipeline && Array.isArray(pipeline.people)) ? pipeline.people : [];
   const counts = {};
   people.forEach(function(p){ counts[p.status] = (counts[p.status] || 0) + 1; });
@@ -4665,6 +4753,146 @@ export default {
       } catch (e) {
         ctx.waitUntil(flushCost(env, today, session.firmCode, cost));
         return jsonResponse({ move: null });
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════
+    // CUSTOMERS — D1 routes  (env.DB required; absent on prod → 501)
+    // ═════════════════════════════════════════════════════════════
+
+    // ── GET /scout/customers ────────────────────────────────────
+    // ?since=ISO  — only rows updated after that time (includes soft-deleted)
+    // ?stage=     — filter by stage
+    // ?q=         — search name or phone (LIKE %q%)
+    if (request.method === 'GET' && path === '/scout/customers') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'D1 not available' }, 501);
+      await ensureCustomersMigrated(env, session.firmCode);
+      const since = url.searchParams.get('since') || '';
+      const stage = url.searchParams.get('stage') || '';
+      const q     = url.searchParams.get('q') || '';
+      try {
+        let sql, params;
+        if (since) {
+          // Include soft-deleted so the browser learns about deletions
+          sql = 'SELECT * FROM customers WHERE firm_code = ? AND updated_at > ?';
+          params = [session.firmCode, since];
+        } else if (q) {
+          sql = 'SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND (name LIKE ? OR phone LIKE ?)';
+          var like = '%' + q.replace(/%/g, '') + '%';
+          params = [session.firmCode, like, like];
+        } else if (stage) {
+          sql = 'SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND stage = ?';
+          params = [session.firmCode, stage];
+        } else {
+          sql = 'SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL';
+          params = [session.firmCode];
+        }
+        sql += ' ORDER BY updated_at DESC LIMIT 1000';
+        const rows = await env.DB.prepare(sql).bind(...params).all();
+        return jsonResponse({ customers: rows.results || [] });
+      } catch (e) {
+        return jsonResponse({ error: 'DB query failed', detail: String(e.message || e).slice(0, 300) }, 500);
+      }
+    }
+
+    // ── POST /scout/customers  (batch upsert, max 100) ─────────
+    if (request.method === 'POST' && path === '/scout/customers') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'D1 not available' }, 501);
+      await ensureCustomersMigrated(env, session.firmCode);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid JSON' }, 400); }
+      const rows = Array.isArray(body.customers) ? body.customers.slice(0, 100) : [];
+      if (rows.length === 0) return jsonResponse({ error: 'No customers provided' }, 400);
+      const now = new Date().toISOString();
+      try {
+        const stmts = [];
+        var upsertCount = 0;
+        for (const row of rows) {
+          if (!row.id) continue;
+          // Read existing to check updated_at and detect stage change
+          const existing = await env.DB.prepare(
+            'SELECT stage, updated_at FROM customers WHERE firm_code = ? AND id = ?'
+          ).bind(session.firmCode, row.id).first();
+          // Keep whichever version has the newer updated_at (ISO strings compare correctly)
+          if (existing && existing.updated_at && row.updated_at && row.updated_at < existing.updated_at) {
+            continue; // server version is newer, skip
+          }
+          const newStage = row.stage || 'contacted';
+          stmts.push(env.DB.prepare(
+            `INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, value, next_action_at, data, created_at, updated_at, deleted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (firm_code, id) DO UPDATE SET
+               name = excluded.name, phone = excluded.phone, kind = excluded.kind,
+               stage = excluded.stage, source = excluded.source, value = excluded.value,
+               next_action_at = excluded.next_action_at, data = excluded.data,
+               updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`
+          ).bind(
+            session.firmCode, row.id,
+            row.name || '', row.phone || '', row.kind || '',
+            newStage, row.source || 'manual',
+            row.value || 0, row.next_action_at || null,
+            typeof row.data === 'string' ? row.data : JSON.stringify(row.data || {}),
+            row.created_at || now, row.updated_at || now,
+            row.deleted_at || null
+          ));
+          upsertCount++;
+          // Write event if stage changed
+          if (existing && existing.stage && existing.stage !== newStage) {
+            stmts.push(env.DB.prepare(
+              'INSERT INTO customer_events (firm_code, customer_id, type, from_stage, to_stage, note, at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).bind(session.firmCode, row.id, 'stage_change', existing.stage, newStage, row._note || '', now));
+          }
+        }
+        if (stmts.length > 0) await env.DB.batch(stmts);
+        return jsonResponse({ ok: true, upserted: upsertCount });
+      } catch (e) {
+        return jsonResponse({ error: 'DB upsert failed', detail: String(e.message || e).slice(0, 300) }, 500);
+      }
+    }
+
+    // ── POST /scout/customers/delete  (soft delete) ─────────────
+    if (request.method === 'POST' && path === '/scout/customers/delete') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'D1 not available' }, 501);
+      await ensureCustomersMigrated(env, session.firmCode);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid JSON' }, 400); }
+      const ids = Array.isArray(body.ids) ? body.ids.slice(0, 100) : [];
+      if (ids.length === 0) return jsonResponse({ error: 'No ids provided' }, 400);
+      const now = new Date().toISOString();
+      try {
+        const stmts = ids.map(function(id) {
+          return env.DB.prepare(
+            'UPDATE customers SET deleted_at = ?, updated_at = ? WHERE firm_code = ? AND id = ? AND deleted_at IS NULL'
+          ).bind(now, now, session.firmCode, id);
+        });
+        await env.DB.batch(stmts);
+        return jsonResponse({ ok: true, deleted: ids.length });
+      } catch (e) {
+        return jsonResponse({ error: 'DB delete failed', detail: String(e.message || e).slice(0, 300) }, 500);
+      }
+    }
+
+    // ── GET /scout/customers/history?id= ────────────────────────
+    if (request.method === 'GET' && path === '/scout/customers/history') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'D1 not available' }, 501);
+      await ensureCustomersMigrated(env, session.firmCode);
+      const custId = url.searchParams.get('id') || '';
+      if (!custId) return jsonResponse({ error: 'id required' }, 400);
+      try {
+        const rows = await env.DB.prepare(
+          'SELECT * FROM customer_events WHERE firm_code = ? AND customer_id = ? ORDER BY at DESC LIMIT 200'
+        ).bind(session.firmCode, custId).all();
+        return jsonResponse({ events: rows.results || [] });
+      } catch (e) {
+        return jsonResponse({ error: 'DB query failed', detail: String(e.message || e).slice(0, 300) }, 500);
       }
     }
 

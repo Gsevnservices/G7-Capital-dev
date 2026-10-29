@@ -63,3 +63,9 @@ id = "25f358b17843460c9429d88dcaca569f"
 
 [env.dev.vars]
 WORKER_URL = "https://g7-proxy-dev.gsevnservices.workers.dev"
+
+# Dev D1 — customers table (prod stays on KV blob until tested)
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "g7-scout-dev"
+database_id = "2fa58257-43cb-4d7b-b69c-24743e857439"

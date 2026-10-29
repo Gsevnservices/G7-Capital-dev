@@ -46,7 +46,6 @@ var SCOUT_STATE_KEYS = [
   'scout_first_customer_celebrated',
   'scout_week_checklist',
   'scout_referral_chain',
-  'scout_pipeline',
   'scout_onboard_draft',
   'scout_daily_snapshot',
   'scout_pinned',
@@ -1503,8 +1502,7 @@ function purgeRawScoutKeys() {
     'scout_icp_names',
     'scout_first_customer_celebrated',
     'scout_week_checklist',
-    'scout_referral_chain',
-    'scout_pipeline'
+    'scout_referral_chain'
   ];
   for (var i = 0; i < keys.length; i++) {
     localStorage.removeItem(keys[i]);
