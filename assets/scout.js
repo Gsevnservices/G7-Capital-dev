@@ -22,6 +22,16 @@
 // Cloudflare Worker base URL — Scout routes live here
 const SCOUT_WORKER = G7_WORKER_URL;
 
+// Firm-scoped localStorage key: appends _FIRMCODE so different firms
+// sharing the same browser never collide.  Every Scout file that
+// touches localStorage must use scoutKey(base).
+function scoutKey(base) {
+  var firm = '';
+  try { firm = localStorage.getItem('g7_session_firm') || ''; } catch (e) {}
+  firm = String(firm).replace(/[^a-zA-Z0-9]/g, '') || 'default';
+  return base + '_' + firm;
+}
+
 
 // ============================================================
 // SERVER STATE SYNC — mirrors Scout's localStorage state to KV
