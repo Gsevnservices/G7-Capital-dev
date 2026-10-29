@@ -169,11 +169,32 @@ function _scoutChangedKeys() {
   return changed;
 }
 
-// After a successful save, snapshot current hashes so next diff is correct.
+// Snapshot current hashes for ALL keys from localStorage.
+// Safe to call synchronously after writing server state into localStorage
+// (no async gap). NOT used after saves — use _scoutApplySentHashes instead.
 function _scoutSnapshotHashes() {
   for (var i = 0; i < SCOUT_STATE_KEYS.length; i++) {
     var base = SCOUT_STATE_KEYS[i];
     _scoutSavedHashes[base] = _scoutHash(localStorage.getItem(scoutKey(base)));
+  }
+}
+
+// Record the hash of each value about to be sent.
+// Returns { key: hash } — pass to _scoutApplySentHashes on success.
+function _scoutRecordSentHashes(payload) {
+  var hashes = {};
+  for (var k in payload) {
+    if (!payload.hasOwnProperty(k)) continue;
+    hashes[k] = _scoutHash(payload[k]);  // null → 0
+  }
+  return hashes;
+}
+
+// After a successful save, mark only the sent keys as saved,
+// using the hashes recorded before the fetch — not a re-read of storage.
+function _scoutApplySentHashes(sentHashes) {
+  for (var k in sentHashes) {
+    if (sentHashes.hasOwnProperty(k)) _scoutSavedHashes[k] = sentHashes[k];
   }
 }
 
@@ -193,6 +214,8 @@ async function saveScoutStateToServer() {
 
     // Include null entries — they tell the worker to delete those keys from the blob.
     var payload = changed;
+    // Record hashes of values we're about to send, before the async gap.
+    var sentHashes = _scoutRecordSentHashes(payload);
 
     var res = await fetch(SCOUT_WORKER + '/data/save', {
       method: 'POST',
@@ -204,7 +227,7 @@ async function saveScoutStateToServer() {
     });
     _scoutLastSaveStatus = res.status;
     if (res.status === 401) { scoutMarkUnsynced(); return false; }
-    if (res.ok) { _scoutSnapshotHashes(); scoutClearUnsynced(); return true; }
+    if (res.ok) { _scoutApplySentHashes(sentHashes); scoutClearUnsynced(); return true; }
     return false;
   } catch (e) {
     console.warn('Scout state save failed (non-blocking):', e);
@@ -226,6 +249,8 @@ async function _saveScoutStateFull() {
       if (v !== null) blob[base] = v;
     }
     if (Object.keys(blob).length === 0) return false;
+    // Record hashes of values we're about to send, before the async gap.
+    var sentHashes = _scoutRecordSentHashes(blob);
     var res = await fetch(SCOUT_WORKER + '/data/save', {
       method: 'POST',
       headers: {
@@ -236,7 +261,7 @@ async function _saveScoutStateFull() {
     });
     _scoutLastSaveStatus = res.status;
     if (res.status === 401) { scoutMarkUnsynced(); return false; }
-    if (res.ok) { _scoutSnapshotHashes(); scoutClearUnsynced(); return true; }
+    if (res.ok) { _scoutApplySentHashes(sentHashes); scoutClearUnsynced(); return true; }
     return false;
   } catch (e) {
     console.warn('Scout state full save failed (non-blocking):', e);
@@ -270,6 +295,8 @@ function _scoutFlushSave() {
     var changed = _scoutChangedKeys();
     if (Object.keys(changed).length === 0) return;
     var payload = changed;
+    // Record hashes of values we're about to send, before the async gap.
+    var sentHashes = _scoutRecordSentHashes(payload);
     // Use keepalive — browser will finish this even after tab closes.
     // Max keepalive payload is 64 KB; scout_state can exceed this, so
     // fall back to a regular fetch if the body is too large.
@@ -285,7 +312,7 @@ function _scoutFlushSave() {
       body: body,
       keepalive: useKeepalive
     }).then(function(r) {
-      if (r && r.ok) _scoutSnapshotHashes();
+      if (r && r.ok) _scoutApplySentHashes(sentHashes);
     }).catch(function() {});
   } catch (e) {}
 }
