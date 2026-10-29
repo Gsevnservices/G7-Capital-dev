@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // G7 SCOUT — PIPELINE DATA LAYER
-// File: assets/pipeline.js   v24
+// File: assets/pipeline.js   v25
 //
 // Manages the named-contact pipeline. Customers live in D1 on
 // the server; localStorage holds a cache for instant rendering.
@@ -8,10 +8,12 @@
 // Load this file AFTER scout.js and BEFORE any Scout page that
 // needs pipeline data.
 //
-// Storage key: 'scout_pipeline' (localStorage cache only —
-//   no longer synced in the scout_state KV blob).
+// Storage key: 'scout_pipeline' (localStorage cache — also synced
+//   in scout_state KV blob for prod safety; skipped from delta
+//   saves when D1 is active via scout_d1_on flag).
 //
-// Shape: { people: [...], anonymousContacts: [] }
+// Shape: { people: [...] }
+// Anonymous contacts live in separate key: 'scout_pipeline_anon'
 //
 // People statuses (= D1 "stage" column):
 //   found | contacted | replied | trial_booked | joined |
@@ -35,37 +37,152 @@
 /* ---------- Pipeline store (Scout) ---------- */
 
 function pipelineKey() { return scoutKey('scout_pipeline'); }
+function pipelineAnonKey() { return scoutKey('scout_pipeline_anon'); }
 
 /* Read the whole pipeline from localStorage. Never throws. */
 function pipelineLoad() {
   try {
     var raw = localStorage.getItem(pipelineKey());
-    if (!raw) return { people: [], anonymousContacts: [] };
+    if (!raw) return { people: [] };
     var p = JSON.parse(raw);
-    if (!p || typeof p !== 'object') return { people: [], anonymousContacts: [] };
+    if (!p || typeof p !== 'object') return { people: [] };
     if (!Array.isArray(p.people)) p.people = [];
-    if (!Array.isArray(p.anonymousContacts)) p.anonymousContacts = [];
+    // Migrate: strip anonymousContacts from main store (moved to separate key)
+    if (Array.isArray(p.anonymousContacts) && p.anonymousContacts.length > 0) {
+      _migrateAnonContacts(p.anonymousContacts);
+      delete p.anonymousContacts;
+      try { localStorage.setItem(pipelineKey(), JSON.stringify(p)); } catch (e) {}
+    }
     return p;
   } catch (e) {
     console.error('pipelineLoad failed:', e);
-    return { people: [], anonymousContacts: [] };
+    return { people: [] };
   }
 }
 
-/* ── Dirty tracking ── */
-var _pipelineDirty = {};  // id → true for customers that need syncing
-var _pipelineSaveTimer = null;
-var _pipelineSavePending = false;
+/* ── Anonymous contacts — separate key, synced via scout_state ── */
 
-/* Write the whole pipeline to localStorage and mark changed customers dirty. */
+function _migrateAnonContacts(arr) {
+  try {
+    var existing = _loadAnon();
+    for (var i = 0; i < arr.length; i++) existing.push(arr[i]);
+    localStorage.setItem(pipelineAnonKey(), JSON.stringify(existing));
+  } catch (e) {}
+}
+
+function _loadAnon() {
+  try {
+    var raw = localStorage.getItem(pipelineAnonKey());
+    if (!raw) return [];
+    var a = JSON.parse(raw);
+    return Array.isArray(a) ? a : [];
+  } catch (e) { return []; }
+}
+
+function _saveAnon(arr) {
+  try { localStorage.setItem(pipelineAnonKey(), JSON.stringify(arr)); } catch (e) {}
+}
+
+/* ── Per-person hash-based dirty tracking (like scout.js delta saves) ── */
+var _pipelineHashes = {};   // id → djb2 hash after last successful sync
+var _pipelineDirty = {};    // id → true for customers that need syncing
+var _pipelineDeleteQueue = {};  // id → true for customers pending server delete
+var _pipelineSaveTimer = null;
+var _pipelineSyncCursor = '';   // server's synced_at from last load
+
+// Persist dirty/delete queues to localStorage so they survive page close
+function _persistDirtyState() {
+  try {
+    var dk = scoutKey('_pipeline_dirty');
+    var dqk = scoutKey('_pipeline_delq');
+    var dirtyIds = Object.keys(_pipelineDirty);
+    var delIds = Object.keys(_pipelineDeleteQueue);
+    if (dirtyIds.length > 0) localStorage.setItem(dk, JSON.stringify(dirtyIds));
+    else localStorage.removeItem(dk);
+    if (delIds.length > 0) localStorage.setItem(dqk, JSON.stringify(delIds));
+    else localStorage.removeItem(dqk);
+  } catch (e) {}
+}
+
+// Restore dirty/delete queues from localStorage on page load
+function _restoreDirtyState() {
+  try {
+    var dk = scoutKey('_pipeline_dirty');
+    var dqk = scoutKey('_pipeline_delq');
+    var raw = localStorage.getItem(dk);
+    if (raw) { var arr = JSON.parse(raw); for (var i = 0; i < arr.length; i++) _pipelineDirty[arr[i]] = true; }
+    var rawDel = localStorage.getItem(dqk);
+    if (rawDel) { var arr2 = JSON.parse(rawDel); for (var j = 0; j < arr2.length; j++) _pipelineDeleteQueue[arr2[j]] = true; }
+  } catch (e) {}
+}
+
+// Restore on load; if there are pending items, schedule a sync
+_restoreDirtyState();
+if (Object.keys(_pipelineDirty).length > 0 || Object.keys(_pipelineDeleteQueue).length > 0) {
+  pipelineScheduleSync();
+}
+
+// djb2 hash — same as _scoutHash in scout.js
+function _pipelineHash(s) {
+  if (s == null) return 0;
+  var h = 5381;
+  for (var i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+// Compute hash for a person object (stable: sort keys)
+function _personHash(p) {
+  if (!p) return 0;
+  try {
+    var keys = Object.keys(p).sort();
+    var obj = {};
+    for (var i = 0; i < keys.length; i++) obj[keys[i]] = p[keys[i]];
+    return _pipelineHash(JSON.stringify(obj));
+  } catch (e) { return 0; }
+}
+
+// Detect which people changed since last hash snapshot
+function _detectDirtyPeople(store) {
+  if (!store || !Array.isArray(store.people)) return;
+  for (var i = 0; i < store.people.length; i++) {
+    var p = store.people[i];
+    if (!p || !p.id) continue;
+    var h = _personHash(p);
+    if (h !== _pipelineHashes[p.id]) {
+      _pipelineDirty[p.id] = true;
+    }
+  }
+}
+
+// Snapshot hashes for all people after successful sync
+function _snapshotPipelineHashes(store) {
+  if (!store || !Array.isArray(store.people)) return;
+  _pipelineHashes = {};
+  for (var i = 0; i < store.people.length; i++) {
+    var p = store.people[i];
+    if (p && p.id) _pipelineHashes[p.id] = _personHash(p);
+  }
+}
+
+/* Write the whole pipeline to localStorage. Auto-detects dirty people. */
 function pipelineSave(store, changedIds) {
   try {
     if (!store || !Array.isArray(store.people)) return false;
     localStorage.setItem(pipelineKey(), JSON.stringify(store));
 
-    // Mark specific customers dirty and schedule D1 sync
+    // If caller passes explicit changedIds, mark those dirty
     if (Array.isArray(changedIds) && changedIds.length > 0) {
       for (var i = 0; i < changedIds.length; i++) _pipelineDirty[changedIds[i]] = true;
+    } else {
+      // Auto-detect via hash comparison
+      _detectDirtyPeople(store);
+    }
+
+    // Schedule D1 sync if anything is dirty
+    if (Object.keys(_pipelineDirty).length > 0 || Object.keys(_pipelineDeleteQueue).length > 0) {
+      _persistDirtyState();
       pipelineScheduleSync();
     }
     return true;
@@ -77,35 +194,65 @@ function pipelineSave(store, changedIds) {
 
 /* 4s trailing debounce for D1 sync, with page-hide flush */
 function pipelineScheduleSync() {
-  _pipelineSavePending = true;
   clearTimeout(_pipelineSaveTimer);
   _pipelineSaveTimer = setTimeout(function() {
-    _pipelineSavePending = false;
     _pipelineSyncToServer();
   }, 4000);
 }
 
 /* Flush pending sync immediately (page hide / close).
-   Checks dirty keys directly rather than relying on _pipelineSavePending,
-   so it catches the window between debounce fire and async fetch completing. */
+   Clears only the IDs that were actually sent, not all dirty. */
 function _pipelineFlushSync() {
   clearTimeout(_pipelineSaveTimer);
-  _pipelineSavePending = false;
   try {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return;
+
+    // Send upserts
     var rows = _buildDirtyRows();
-    if (rows.length === 0) return;
-    var body = JSON.stringify({ customers: rows });
-    var useKeepalive = body.length < 63000;
-    fetch(G7_WORKER_URL + '/scout/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: body,
-      keepalive: useKeepalive
-    }).then(function(r) {
-      if (r && r.ok) _pipelineDirty = {};
-    }).catch(function() {});
+    var sentIds = Object.keys(_pipelineDirty);
+
+    // Send deletes
+    var deleteIds = Object.keys(_pipelineDeleteQueue);
+
+    if (rows.length === 0 && deleteIds.length === 0) return;
+
+    if (rows.length > 0) {
+      var body = JSON.stringify({ customers: rows });
+      var useKeepalive = body.length < 63000;
+      fetch(G7_WORKER_URL + '/scout/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: body,
+        keepalive: useKeepalive
+      }).then(function(r) {
+        if (r && r.ok) {
+          // Clear only the IDs we actually sent
+          for (var i = 0; i < sentIds.length; i++) delete _pipelineDirty[sentIds[i]];
+          // Snapshot hashes for sent people
+          var store = pipelineLoad();
+          for (var j = 0; j < store.people.length; j++) {
+            var p = store.people[j];
+            if (p && sentIds.indexOf(p.id) !== -1) _pipelineHashes[p.id] = _personHash(p);
+          }
+        }
+      }).catch(function() {});
+    }
+
+    if (deleteIds.length > 0) {
+      var delBody = JSON.stringify({ ids: deleteIds });
+      var delKeepalive = delBody.length < 63000;
+      fetch(G7_WORKER_URL + '/scout/customers/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: delBody,
+        keepalive: delKeepalive
+      }).then(function(r) {
+        if (r && r.ok) {
+          for (var i = 0; i < deleteIds.length; i++) delete _pipelineDeleteQueue[deleteIds[i]];
+        }
+      }).catch(function() {});
+    }
   } catch (e) {}
 }
 
@@ -147,38 +294,74 @@ function _personToRow(p) {
     value: p.value || 0,
     next_action_at: p.next_action_at || null,
     data: JSON.stringify(data),
-    created_at: p.lastContactedAt || p.lastStatusAt || new Date().toISOString(),
-    updated_at: p.lastStatusAt || new Date().toISOString()
+    // updatedAt is bumped on every local change; used for conflict resolution
+    updated_at: p.updatedAt || new Date().toISOString()
   };
 }
 
-/* Async sync dirty customers to the server */
+/* Async sync dirty customers to the server.
+   Only clears the IDs that were actually sent (not all dirty). */
 async function _pipelineSyncToServer() {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return;
+
+    // Capture the dirty IDs we're about to send
+    var sentIds = Object.keys(_pipelineDirty);
     var rows = _buildDirtyRows();
-    if (rows.length === 0) return;
-    var res = await fetch(G7_WORKER_URL + '/scout/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify({ customers: rows })
-    });
-    if (res.ok) _pipelineDirty = {};
+    var deleteIds = Object.keys(_pipelineDeleteQueue);
+
+    // Send upserts
+    if (rows.length > 0) {
+      var res = await fetch(G7_WORKER_URL + '/scout/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ customers: rows })
+      });
+      if (res.ok) {
+        // Clear only the IDs we sent
+        for (var i = 0; i < sentIds.length; i++) delete _pipelineDirty[sentIds[i]];
+        // Update hashes for synced people
+        var store = pipelineLoad();
+        for (var j = 0; j < store.people.length; j++) {
+          var p = store.people[j];
+          if (p && sentIds.indexOf(p.id) !== -1) _pipelineHashes[p.id] = _personHash(p);
+        }
+      }
+    }
+
+    // Send deletes
+    if (deleteIds.length > 0) {
+      var delRes = await fetch(G7_WORKER_URL + '/scout/customers/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ ids: deleteIds })
+      });
+      if (delRes.ok) {
+        for (var d = 0; d < deleteIds.length; d++) delete _pipelineDeleteQueue[deleteIds[d]];
+      }
+    }
+
+    // Persist updated dirty state
+    _persistDirtyState();
+
+    // If there are still dirty items (added while we were syncing), reschedule
+    if (Object.keys(_pipelineDirty).length > 0 || Object.keys(_pipelineDeleteQueue).length > 0) {
+      pipelineScheduleSync();
+    }
   } catch (e) {
     console.warn('Pipeline sync failed (non-blocking):', e);
   }
 }
 
 /* ── Server load: fetch from D1 API, merge into localStorage ── */
-var _pipelineLastSync = '';  // ISO timestamp of last successful sync
 
 async function pipelineLoadFromServer() {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
     if (!token) return false;
     var url = G7_WORKER_URL + '/scout/customers';
-    if (_pipelineLastSync) url += '?since=' + encodeURIComponent(_pipelineLastSync);
+    if (_pipelineSyncCursor) url += '?since=' + encodeURIComponent(_pipelineSyncCursor);
     var res = await fetch(url, {
       headers: { 'Authorization': 'Bearer ' + token }
     });
@@ -186,37 +369,80 @@ async function pipelineLoadFromServer() {
     if (!res.ok) return false;
     var json = await res.json();
     var serverRows = json.customers || [];
-    if (serverRows.length === 0 && _pipelineLastSync) return true;  // no changes
+    var serverTime = json.serverTime || '';
+
+    // D1 is available — set flag so delta saves skip scout_pipeline
+    try { localStorage.setItem(scoutKey('scout_d1_on'), '1'); } catch (e) {}
+
+    if (serverRows.length === 0 && _pipelineSyncCursor) return true;  // no changes
 
     var store = pipelineLoad();
-    var byId = {};
-    for (var i = 0; i < store.people.length; i++) {
-      byId[store.people[i].id] = i;
-    }
 
-    for (var j = 0; j < serverRows.length; j++) {
-      var row = serverRows[j];
-      var person = _rowToPerson(row);
-      if (row.deleted_at) {
-        // Remove from local store
-        if (byId[row.id] !== undefined) {
-          store.people.splice(byId[row.id], 1);
-          // Rebuild index after splice
-          byId = {};
-          for (var r = 0; r < store.people.length; r++) byId[store.people[r].id] = r;
-        }
-      } else if (byId[row.id] !== undefined) {
-        // Update existing
-        store.people[byId[row.id]] = person;
-      } else {
-        // New from server
-        store.people.push(person);
-        byId[person.id] = store.people.length - 1;
+    if (_pipelineSyncCursor) {
+      // Incremental: merge server rows into local, keeping unsynced local changes
+      var byId = {};
+      for (var i = 0; i < store.people.length; i++) {
+        byId[store.people[i].id] = i;
       }
+      for (var j = 0; j < serverRows.length; j++) {
+        var row = serverRows[j];
+        var person = _rowToPerson(row);
+        if (row.deleted_at) {
+          // Remove from local store unless locally dirty (unsynced change)
+          if (byId[row.id] !== undefined && !_pipelineDirty[row.id]) {
+            store.people.splice(byId[row.id], 1);
+            // Rebuild index after splice
+            byId = {};
+            for (var r = 0; r < store.people.length; r++) byId[store.people[r].id] = r;
+          }
+        } else if (byId[row.id] !== undefined) {
+          // Update existing — but only if not locally dirty
+          if (!_pipelineDirty[row.id]) {
+            store.people[byId[row.id]] = person;
+          }
+        } else {
+          // New from server
+          store.people.push(person);
+          byId[person.id] = store.people.length - 1;
+        }
+      }
+    } else {
+      // Full load: replace local list, but keep any unsynced local changes
+      var dirtyPeople = {};
+      for (var d = 0; d < store.people.length; d++) {
+        if (_pipelineDirty[store.people[d].id]) {
+          dirtyPeople[store.people[d].id] = store.people[d];
+        }
+      }
+      // Build new list from server
+      var newPeople = [];
+      var seenIds = {};
+      for (var s = 0; s < serverRows.length; s++) {
+        var sRow = serverRows[s];
+        if (sRow.deleted_at) continue;  // skip deleted
+        var sPerson = _rowToPerson(sRow);
+        // Skip people pending local deletion
+        if (_pipelineDeleteQueue[sPerson.id]) continue;
+        // If locally dirty, keep local version
+        if (dirtyPeople[sPerson.id]) {
+          newPeople.push(dirtyPeople[sPerson.id]);
+        } else {
+          newPeople.push(sPerson);
+        }
+        seenIds[sPerson.id] = true;
+      }
+      // Add any dirty people not on server yet
+      for (var dk in dirtyPeople) {
+        if (!seenIds[dk]) newPeople.push(dirtyPeople[dk]);
+      }
+      store.people = newPeople;
     }
 
     localStorage.setItem(pipelineKey(), JSON.stringify(store));
-    _pipelineLastSync = new Date().toISOString();
+    // Use server time for cursor (not browser clock)
+    if (serverTime) _pipelineSyncCursor = serverTime;
+    // Snapshot hashes for non-dirty people
+    _snapshotPipelineHashes(store);
     return true;
   } catch (e) {
     console.warn('pipelineLoadFromServer failed (non-blocking):', e);
@@ -224,7 +450,10 @@ async function pipelineLoadFromServer() {
   }
 }
 
-/* Convert a D1 row back to a pipeline person object */
+/* Convert a D1 row back to a pipeline person object.
+   The data JSON column is the source of truth for non-top-level fields
+   like lastStatusAt, lastContactedAt, history, etc. We do NOT overwrite
+   them from D1 columns — those columns are for queries only. */
 function _rowToPerson(row) {
   var person = {};
   try { person = JSON.parse(row.data || '{}'); } catch (e) {}
@@ -236,11 +465,20 @@ function _rowToPerson(row) {
   person.source = row.source || 'manual';
   person.value = row.value || 0;
   person.next_action_at = row.next_action_at || null;
-  person.lastStatusAt = row.updated_at || '';
-  person.lastContactedAt = row.created_at || '';
+  // lastStatusAt and lastContactedAt live in data JSON — do NOT overwrite from columns
   if (!person.history) person.history = [];
   if (!Array.isArray(person.messagesSent)) person.messagesSent = [];
   return person;
+}
+
+/* Clear all pipeline in-memory and localStorage state (called on logout) */
+function pipelineClearState() {
+  _pipelineHashes = {};
+  _pipelineDirty = {};
+  _pipelineDeleteQueue = {};
+  _pipelineSyncCursor = '';
+  clearTimeout(_pipelineSaveTimer);
+  _persistDirtyState();  // clears persisted dirty/delete keys
 }
 
 /* ---------- CRUD helpers (same API as before) ---------- */
@@ -278,6 +516,7 @@ function pipelineAddPerson(name, opts) {
   var now = new Date().toISOString();
   if (existing) {
     existing.lastContactedAt = now;
+    existing.updatedAt = now;
     if (opts.messageId && existing.messagesSent.indexOf(opts.messageId) === -1) {
       existing.messagesSent.push(opts.messageId);
     }
@@ -297,6 +536,7 @@ function pipelineAddPerson(name, opts) {
     addedWeek: opts.week || 0,
     lastContactedAt: now,
     lastStatusAt: now,
+    updatedAt: now,
     messagesSent: opts.messageId ? [opts.messageId] : [],
     note: opts.note || '',
     address: opts.address || '',
@@ -310,19 +550,20 @@ function pipelineAddPerson(name, opts) {
   return person;
 }
 
-/* Record a contact where the user skipped naming the person. */
+/* Record a contact where the user skipped naming the person.
+   Stored in separate key scout_pipeline_anon, synced via scout_state. */
 function pipelineAddAnonymous(icp, week) {
-  var store = pipelineLoad();
+  var arr = _loadAnon();
   var found = null;
-  for (var i = 0; i < store.anonymousContacts.length; i++) {
-    if (store.anonymousContacts[i].week === week && store.anonymousContacts[i].icp === icp) {
-      found = store.anonymousContacts[i];
+  for (var i = 0; i < arr.length; i++) {
+    if (arr[i].week === week && arr[i].icp === icp) {
+      found = arr[i];
       break;
     }
   }
   if (found) { found.count += 1; }
-  else { store.anonymousContacts.push({ week: week || 0, icp: icp || '', count: 1 }); }
-  pipelineSave(store);
+  else { arr.push({ week: week || 0, icp: icp || '', count: 1 }); }
+  _saveAnon(arr);
   return true;
 }
 
@@ -336,6 +577,7 @@ function pipelineSetStatus(personId, status, week, note) {
       var now = new Date().toISOString();
       store.people[i].status = status;
       store.people[i].lastStatusAt = now;
+      store.people[i].updatedAt = now;
       if (status === 'joined') store.people[i].wonAt = now;
       if (note) store.people[i].note = note;
       store.people[i].history.push({ week: week || 0, event: status, at: now });
@@ -348,6 +590,7 @@ function pipelineSetStatus(personId, status, week, note) {
 /* Aggregate counts per ICP for a given week. */
 function pipelineWeekStats(week) {
   var store = pipelineLoad();
+  var anonArr = _loadAnon();
   var stats = {};
   function bucket(icp) {
     if (!stats[icp]) stats[icp] = { contacted: 0, replied: 0, trial_booked: 0, joined: 0 };
@@ -363,7 +606,7 @@ function pipelineWeekStats(week) {
       if (h.event === 'joined')       b.joined++;
     });
   });
-  store.anonymousContacts.forEach(function(a) {
+  anonArr.forEach(function(a) {
     if (a.week === week) bucket(a.icp || 'Unknown').contacted += a.count;
   });
   return stats;
@@ -586,7 +829,7 @@ function waPhone(raw) {
   return d;
 }
 
-/* Soft delete a customer: remove from localStorage, sync deletion to server */
+/* Soft delete a customer: remove from localStorage, queue server deletion with retry */
 function pipelineDeletePerson(personId) {
   var store = pipelineLoad();
   var found = false;
@@ -596,16 +839,12 @@ function pipelineDeletePerson(personId) {
   });
   if (!found) return false;
   localStorage.setItem(pipelineKey(), JSON.stringify(store));
-  // Fire-and-forget server deletion
-  try {
-    var token = localStorage.getItem('g7_session_token') || '';
-    if (token) {
-      fetch(G7_WORKER_URL + '/scout/customers/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ ids: [personId] })
-      }).catch(function() {});
-    }
-  } catch (e) {}
+  // Remove from dirty (no point syncing a deleted person) and queue delete
+  delete _pipelineDirty[personId];
+  delete _pipelineHashes[personId];
+  _pipelineDeleteQueue[personId] = true;
+  _persistDirtyState();
+  // Schedule sync so deletes get sent with retry logic
+  pipelineScheduleSync();
   return true;
 }
