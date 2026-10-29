@@ -435,6 +435,12 @@ async function renderAccount() {
         body: JSON.stringify(body)
       });
       if (!r.ok) { var j = await r.json().catch(function(){ return {}; }); flashErr('accountEmailErr', j.error || 'Could not save.'); return; }
+      // Server revoked old sessions and issued a fresh token — save it
+      var rj = await r.json().catch(function(){ return {}; });
+      if (rj.token) {
+        localStorage.setItem('g7_session_token', rj.token);
+        _auth = { 'Authorization': 'Bearer ' + rj.token };
+      }
     } catch (e) { flashErr('accountEmailErr', 'Could not save. Check your connection.'); return; }
     document.getElementById('accountEmailErr').style.display = 'none';
     flashSaved('accountEmailSaved');

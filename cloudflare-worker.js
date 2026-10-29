@@ -701,6 +701,14 @@ async function validateSession(request, env) {
 
   const now = Date.now();
 
+  // ── Per-firm revocation: password change / admin reset kills older sessions ──
+  // Old sessions with no createdAt count as created before any revoke (epoch 0).
+  var revokeTs = await env.G7_KV.get('auth:revoke:' + session.firmCode);
+  if (revokeTs && (session.createdAt || 0) < Number(revokeTs)) {
+    await env.G7_KV.delete('auth:sessions:' + token);
+    return null;
+  }
+
   // ── Hard cap: 90 days from login ──
   // Old sessions without createdAt: treat createdAt as now on first refresh
   // (don't kick anyone out — they get a fresh 90-day window).
@@ -3024,7 +3032,28 @@ export default {
       if (recoveryEmail) updated.recoveryEmail = recoveryEmail;
 
       await kvPut(env,key, JSON.stringify(updated));
-      return jsonResponse({ success: true });
+
+      // Revoke all other sessions for this firm
+      var revokeNow = Date.now();
+      await kvPut(env, 'auth:revoke:' + session.firmCode, String(revokeNow));
+
+      // Issue a fresh session for THIS device so the user stays logged in
+      var freshToken = crypto.randomUUID() + '-' + crypto.randomUUID();
+      await kvPut(env,
+        'auth:sessions:' + freshToken,
+        JSON.stringify({
+          firmCode: session.firmCode,
+          firmName: session.firmName,
+          createdAt: revokeNow,
+          refreshedAt: revokeNow,
+          expiresAt: revokeNow + SESSION_IDLE_MS
+        }),
+        { expirationTtl: SESSION_KV_TTL_S }
+      );
+      // Delete the old session (it would fail revocation check anyway)
+      await env.G7_KV.delete('auth:sessions:' + request.headers.get('Authorization').slice(7));
+
+      return jsonResponse({ success: true, token: freshToken });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -3109,6 +3138,9 @@ export default {
         passwordSetByUser: true,
         passwordChangedAt: Date.now()
       })));
+
+      // Revoke all existing sessions for this firm (password was reset)
+      await kvPut(env, 'auth:revoke:' + rec.firmCode, String(Date.now()));
 
       return jsonResponse({ success: true, firmCode: rec.firmCode, product: user.product || '' });
     }
@@ -3451,6 +3483,9 @@ export default {
         passwordResetAt: Date.now(),
         passwordSetByUser: false
       }));
+
+      // Revoke all existing sessions for this firm (admin reset)
+      await kvPut(env, 'auth:revoke:' + normalizedCode, String(Date.now()));
 
       return jsonResponse({ success: true, firmCode: normalizedCode });
     }
@@ -4674,6 +4709,26 @@ export default {
       user.recoveryEmail = newEmail;
       await kvPut(env, key, JSON.stringify(user));
 
+      // Revoke all other sessions (recovery email change is security-sensitive)
+      var revokeNow = Date.now();
+      await kvPut(env, 'auth:revoke:' + session.firmCode, String(revokeNow));
+
+      // Issue a fresh session so the current user stays logged in
+      var freshToken = crypto.randomUUID() + '-' + crypto.randomUUID();
+      await kvPut(env,
+        'auth:sessions:' + freshToken,
+        JSON.stringify({
+          firmCode: session.firmCode,
+          firmName: session.firmName,
+          createdAt: revokeNow,
+          refreshedAt: revokeNow,
+          expiresAt: revokeNow + SESSION_IDLE_MS
+        }),
+        { expirationTtl: SESSION_KV_TTL_S }
+      );
+      // Delete the old session
+      await env.G7_KV.delete('auth:sessions:' + request.headers.get('Authorization').slice(7));
+
       /* Send notice to the OLD address (fire-and-forget, never blocks) */
       if (oldEmail && oldEmail !== newEmail) {
         const masked = newEmail.replace(/^(..)[^@]*/, '$1***');
@@ -4685,7 +4740,7 @@ export default {
         ctx.waitUntil(sendEmail(env, oldEmail, subj, txt, htm));
       }
 
-      return jsonResponse({ email: newEmail });
+      return jsonResponse({ email: newEmail, token: freshToken });
     }
 
     // ─────────────────────────────────────────────────────────────
