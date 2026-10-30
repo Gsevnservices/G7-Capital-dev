@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=42"></script>
+<script src="../assets/scout.js?v=43"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -96,6 +96,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
 <div class="settings-wrap" id="settingsWrap">
 
+  <!-- PLAN -->
+  <div class="settings-section" id="s-plan">
+    <div class="settings-section-label">Plan</div>
+    <div id="planSettings">
+      <div style="font-size:13px;color:var(--grey2)">Loading&hellip;</div>
+    </div>
+  </div>
+
   <!-- EMAILS -->
   <div class="settings-section" id="s-emails">
     <div class="settings-section-label">Emails</div>
@@ -165,6 +173,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   migrateUnscopedScoutKeys();
   await loadScoutStateFromServer();
 
+  renderPlan();
   renderEmails();
   renderLanguage();
   renderReviews();
@@ -193,6 +202,66 @@ function flashErr(id, msg) {
   el.style.display = '';
   clearTimeout(el._t);
   el._t = setTimeout(function() { el.style.display = 'none'; }, 4000);
+}
+
+/* ═══════════════════════════════════════
+   PLAN
+═══════════════════════════════════════ */
+async function renderPlan() {
+  var el = document.getElementById('planSettings');
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/plan', { headers: _auth });
+    if (!r.ok) { el.innerHTML = '<div class="s-note">Could not load plan.</div>'; return; }
+    var d = await r.json();
+    var isPaid = d.plan === 'paid';
+    var html = '';
+
+    /* Plan badge */
+    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
+    html += '<span style="display:inline-block;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:4px 12px;border-radius:2px;' +
+      (isPaid ? 'background:rgba(224,146,47,0.15);color:#F0B968;border:1px solid rgba(224,146,47,0.3)' : 'background:rgba(255,255,255,0.06);color:#8A8880;border:1px solid rgba(255,255,255,0.1)') + '">' +
+      (isPaid ? 'Paid plan' : 'Free plan') + '</span>';
+    if (!isPaid) {
+      html += '<a href="mailto:gsevnservices@gmail.com?subject=Upgrade%20my%20Scout%20account&body=Hi%2C%20I\'d%20like%20to%20upgrade%20my%20Scout%20account%20to%20the%20paid%20plan." ' +
+        'style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#E0922F;text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Upgrade \u2014 \u20b93,000/mo \u2192</a>';
+    }
+    html += '</div>';
+
+    /* Usage rows */
+    var labels = { ask: 'Ask Scout', analysis: 'Business analysis', checkin: 'Weekly check-in', places: 'Customer Finder' };
+    var feats = d.features || {};
+    for (var k in labels) {
+      if (!feats[k]) continue;
+      var f = feats[k];
+      var pct = f.limit > 0 ? Math.min(100, Math.round(f.used / f.limit * 100)) : (f.used > 0 ? 100 : 0);
+      var barColor = pct >= 100 ? '#c44' : '#E0922F';
+      html += '<div style="margin-bottom:14px">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">';
+      html += '<span style="font-size:12px;color:var(--white);letter-spacing:.08em">' + labels[k] + '</span>';
+      html += '<span style="font-size:11px;color:#8A8880">';
+      if (f.limit > 0) {
+        html += f.used + ' of ' + f.limit + ' used';
+        if (f.period === 'day') html += ' today';
+        else if (f.period === 'month') html += ' this month';
+      } else {
+        html += 'Paid only';
+      }
+      html += '</span></div>';
+      /* Progress bar */
+      html += '<div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">';
+      html += '<div style="width:' + pct + '%;height:100%;background:' + barColor + ';transition:width .3s"></div>';
+      html += '</div>';
+      /* Paid limit hint for free users */
+      if (!isPaid && f.paidLimit) {
+        html += '<div style="font-size:10px;color:#5A5855;margin-top:3px">Paid: ' + f.paidLimit + '/' + (f.period === 'day' ? 'day' : f.period === 'month' ? 'month' : 'lifetime') + '</div>';
+      }
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="s-note">Could not load plan.</div>';
+  }
 }
 
 /* ═══════════════════════════════════════

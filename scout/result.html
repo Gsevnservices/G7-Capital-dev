@@ -9,7 +9,7 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=42"></script>
+<script src="../assets/scout.js?v=43"></script>
 <script src="../assets/pipeline.js?v=25"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23E0922F'>G</text></svg>">
 <style>
@@ -3915,11 +3915,17 @@ async function searchPlaces(query, icpName, icpIdx, forceRefresh) {
       { method: 'GET', headers: { 'Authorization': 'Bearer ' + token } }
     );
 
-    /* 403 — daily quota exhausted */
+    /* 402 limit — shared upgrade card */
+    if (await scoutHandleLimit(res)) {
+      btn.textContent = 'Find ' + shortName + ' \u2192';
+      btn.disabled = false;
+      return;
+    }
+    /* Legacy 403 compat */
     if (res.status === 403) {
       var errData = null;
       try { errData = await res.json(); } catch(e) {}
-      if (errData && errData.error === 'limit_reached') {
+      if (errData && (errData.error === 'limit_reached' || errData.error === 'limit')) {
         resultsEl.innerHTML = '<div class="cf-msg">You\u2019ve used today\u2019s searches \u2014 saved results still work.</div>';
       } else {
         resultsEl.innerHTML = '<div class="cf-msg">Search unavailable \u2014 please try again later.</div>';
@@ -4416,12 +4422,18 @@ async function rerunAnalysis() {
       })
     });
 
+    /* 402 limit → shared card */
+    if (response.status === 402 && await scoutHandleLimit(response)) {
+      overlay.classList.remove('active');
+      return;
+    }
     if (!response.ok) {
       var errBody = await response.text();
+      /* Legacy 403 compat */
       if (response.status === 403) {
         var parsed = null;
         try { parsed = JSON.parse(errBody); } catch(e) {}
-        if (parsed && parsed.error === 'limit_reached') {
+        if (parsed && (parsed.error === 'limit_reached' || parsed.error === 'limit')) {
           overlay.classList.remove('active');
           alert('You\u2019ve reached your analysis limit. Upgrade your plan for more.');
           return;
@@ -4460,6 +4472,11 @@ async function rerunAnalysis() {
         })
       });
 
+      /* 402 limit on retry → shared card */
+      if (retryResponse.status === 402 && await scoutHandleLimit(retryResponse)) {
+        overlay.classList.remove('active');
+        return;
+      }
       if (!retryResponse.ok) {
         var retryErr = await retryResponse.text();
         throw new Error('Scout error ' + retryResponse.status + ': ' + retryErr);

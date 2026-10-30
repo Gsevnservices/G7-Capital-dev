@@ -9,7 +9,7 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=42"></script>
+<script src="../assets/scout.js?v=43"></script>
 <script src="../assets/pipeline.js?v=25"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -712,7 +712,9 @@ async function handleSubmit() {
 
   } catch(err) {
     overlay.classList.remove('active');
-    if (err.code === 'upgrade_required') {
+    if (err.code === 'limit_handled') {
+      /* scoutHandleLimit already showed the card */
+    } else if (err.code === 'upgrade_required') {
       showUpgradeModal('free');
     } else if (err.code === 'limit_reached') {
       showUpgradeModal('cap');
