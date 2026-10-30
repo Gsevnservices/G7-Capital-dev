@@ -59,8 +59,7 @@ const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
    and retries once. Logs the colo (from _anthropicColo, set by the fetch
    handler) or "cron" with the error. Throws a clear message on second failure. */
 var _anthropicColo = 'cron';
-var _env = null;       // set at top of fetch/scheduled — used by recordError callers
-var _ctx = null;       // set at top of fetch — for waitUntil
+var _env = null;       // set at top of fetch/scheduled — read-only ref for anthropicFetch
 var _clientErrCounts = {};  // IP:day → count (in-memory, resets on isolate restart)
 
 async function anthropicFetch(url, init, callerRoute) {
@@ -80,8 +79,7 @@ async function anthropicFetch(url, init, callerRoute) {
   }
   if (!r.ok && _env) {
     var _errRoute = callerRoute || 'anthropic';
-    var _p = recordError(_env, { source: 'worker', route: _errRoute, kind: 'api_' + r.status, message: 'Anthropic returned ' + r.status + ' (' + _anthropicColo + ')' });
-    if (_ctx) try { _ctx.waitUntil(_p); } catch(e) {}
+    await recordError(_env, { source: 'worker', route: _errRoute, kind: 'api_' + r.status, message: 'Anthropic returned ' + r.status + ' (' + _anthropicColo + ')' });
   }
   return r;
 }
@@ -683,6 +681,7 @@ function sanitizeErrorMsg(msg) {
   return String(msg || '')
     .replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '[email]')
     .replace(/\b\d{10,}\b/g, '[phone]')
+    .replace(/\+?\d[\d\s\-]{8,}\d/g, function(m) { return m.replace(/\D/g, '').length >= 10 ? '[phone]' : m; })
     .replace(/eyJ[A-Za-z0-9_\-]{10,}/g, '[token]')
     .replace(/[a-f0-9]{32,}/gi, '[hash]')
     .slice(0, 300);
@@ -701,7 +700,8 @@ async function errorHash(source, route, kind, message) {
 }
 
 /* Record an error to D1. Upserts: same (day, hash) bumps count.
-   opts: { source, route, firmCode, kind, message } */
+   opts: { source, route, firmCode, kind, message, _floodCap? }
+   When _floodCap is true, only UPDATE existing rows (no INSERT). */
 async function recordError(env, opts) {
   var msg = sanitizeErrorMsg(opts.message);
   var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
@@ -711,13 +711,21 @@ async function recordError(env, opts) {
   console.log(JSON.stringify(logObj));
   if (!env.DB) return;
   try {
-    await env.DB.prepare(
-      "INSERT INTO errors (day, source, route, firm_code, kind, message, hash) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT (day, hash) DO UPDATE SET count = count + 1, " +
-      "last_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"
-    ).bind(day, opts.source || 'worker', opts.route || '', opts.firmCode || '',
-      opts.kind || '', msg, hash).run();
+    if (opts._floodCap) {
+      /* Flood-capped: bump count on existing row only, no insert */
+      await env.DB.prepare(
+        "UPDATE errors SET count = count + 1, last_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') " +
+        "WHERE day = ? AND hash = ?"
+      ).bind(day, hash).run();
+    } else {
+      await env.DB.prepare(
+        "INSERT INTO errors (day, source, route, firm_code, kind, message, hash) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT (day, hash) DO UPDATE SET count = count + 1, " +
+        "last_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+      ).bind(day, opts.source || 'worker', opts.route || '', opts.firmCode || '',
+        opts.kind || '', msg, hash).run();
+    }
   } catch (e) {
     console.error('recordError D1 write failed:', String(e && e.message || e).slice(0, 200));
   }
@@ -2235,6 +2243,12 @@ async function fetchNewsFeed(query, days) {
     console.log(JSON.stringify({ feedFallback: 'bing', query: query, googleStatus: r.status, bingItems: items.length }));
   }
 
+  /* Record feed failure when both Google and Bing return 0 items. */
+  if (items.length === 0 && _env) {
+    await recordError(_env, { source: 'worker', route: 'news/feed', kind: 'feed_failed',
+      message: 'Both Google+Bing returned 0 items for: ' + String(query).slice(0, 100) });
+  }
+
   /* Attach diagnostic metadata (used by feed-test route and regen-news). */
   items._source = source;
   items._diag = diag;
@@ -2299,6 +2313,12 @@ async function fetchIndustryFeeds(env, industryKey, day) {
   var beforeDedupe = cleaned.length;
   cleaned = dedupeItems(cleaned);
   mergeDrops.headlineDedupe = beforeDedupe - cleaned.length;
+
+  /* Record when every feed for an industry returned 0 items. */
+  if (all.length === 0) {
+    await recordError(env, { source: 'worker', route: 'news/feed', kind: 'feed_failed',
+      message: 'All feeds empty for industry: ' + industryKey });
+  }
 
   var result = { category: 'industry', industry: industryKey, label: def.label, items: cleaned.slice(0, 15), date: day,
     _feedStats: feedStats, _totalFetched: all.length, _mergeDrops: mergeDrops };
@@ -2375,6 +2395,12 @@ async function fetchCategoryFeeds(env, cat, day, city) {
   var beforeDedupe = cleaned.length;
   cleaned = dedupeItems(cleaned);
   mergeDrops.headlineDedupe = beforeDedupe - cleaned.length;
+
+  /* Record when every feed for a category returned 0 items. */
+  if (all.length === 0) {
+    await recordError(env, { source: 'worker', route: 'news/feed', kind: 'feed_failed',
+      message: 'All feeds empty for category: ' + cat + (city ? ' (' + city + ')' : '') });
+  }
 
   var result = { category: cat, label: def.label || cat, items: cleaned.slice(0, 10), date: day,
     _feedStats: feedStats, _totalFetched: all.length, _mergeDrops: mergeDrops };
@@ -2916,7 +2942,7 @@ export {
 // ─────────────────────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
-    _env = env; _ctx = ctx;
+    _env = env;
    try {
     // Set colo for Anthropic 403 logging (cron handler sets it to 'cron').
     _anthropicColo = (request.cf && request.cf.colo) || 'unknown';
@@ -4737,7 +4763,7 @@ export default {
         places = await findBusinesses(env, q, cap, cost);
       } catch (e) {
         ctx.waitUntil(flushCost(env, _istPlaces, session.firmCode, cost));
-        ctx.waitUntil(recordError(env, { source: 'worker', route: 'places', firmCode: session.firmCode, kind: 'search_failed', message: String(e && e.message || e) }));
+        await recordError(env, { source: 'worker', route: 'places', firmCode: session.firmCode, kind: 'search_failed', message: String(e && e.message || e) });
         return jsonResponse({ error: 'Business search failed' }, 502);
       }
 
@@ -5443,11 +5469,23 @@ export default {
         var _ceSession = await validateSession(request, env);
         if (_ceSession) _ceFirm = _ceSession.firmCode;
       } catch(e) {}
-      ctx.waitUntil(recordError(env, {
+      /* Validate kind — only known values */
+      var _ceKind = _ceBody.kind;
+      if (_ceKind !== 'js_error' && _ceKind !== 'unhandled_rejection' && _ceKind !== 'network_error') _ceKind = 'js_error';
+      /* Flood cap: if ≥300 client rows today, only bump existing hashes (D1 dedupe), don't insert new ones */
+      var _ceFlood = false;
+      if (env.DB) {
+        try {
+          var _ceCountRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM errors WHERE day = ? AND source = 'client'").bind(_ipDay).first();
+          if (_ceCountRow && _ceCountRow.n >= 300) _ceFlood = true;
+        } catch(e) {}
+      }
+      await recordError(env, {
         source: 'client', route: _cePage, firmCode: _ceFirm,
-        kind: _ceBody.kind || 'js_error',
-        message: _ceMsg + (_ceStack ? ' | ' + _ceStack : '')
-      }));
+        kind: _ceKind,
+        message: _ceMsg + (_ceStack ? ' | ' + _ceStack : ''),
+        _floodCap: _ceFlood
+      });
       return jsonResponse({ ok: true });
     }
 
@@ -5479,7 +5517,7 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    _env = env; _ctx = ctx;
+    _env = env;
    try {
     _anthropicColo = 'cron';
     const ist = new Date(Date.now() + 5.5 * 3600 * 1000);

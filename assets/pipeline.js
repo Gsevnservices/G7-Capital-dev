@@ -848,3 +848,88 @@ function pipelineDeletePerson(personId) {
   pipelineScheduleSync();
   return true;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   CUSTOMER CSV EXPORT
+   Loads from server first, then builds CSV in the browser.
+   UTF-8 BOM so Hindi names open correctly in Excel.
+   Formula safety: prefix cells starting with = + - @ with '.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Convert ISO string to DD-MM-YYYY in IST. Returns '' for falsy input. */
+function _csvIstDate(iso) {
+  if (!iso) return '';
+  try {
+    var d = new Date(new Date(iso).getTime() + 5.5 * 3600000);
+    if (isNaN(d.getTime())) return '';
+    var dd = String(d.getUTCDate()).padStart(2, '0');
+    var mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return dd + '-' + mm + '-' + d.getUTCFullYear();
+  } catch (e) { return ''; }
+}
+
+/* Quote a single CSV cell. */
+function _csvCell(val) {
+  var s = String(val == null ? '' : val).replace(/\r?\n/g, ' ');
+  /* Formula safety */
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
+  /* Always quote if it contains comma, quote, or newline */
+  if (s.indexOf('"') !== -1 || s.indexOf(',') !== -1) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+/* Build a CSV string from the pipeline. */
+function _buildCustomerCsv(people) {
+  var header = ['Name','Phone','Type','Stage','Source','Address','Website','Note','Added','Last contacted','Won on'];
+  var lines = [header.map(_csvCell).join(',')];
+  for (var i = 0; i < people.length; i++) {
+    var p = people[i];
+    var row = [
+      p.name || '',
+      p.phone || '',
+      p.kind || '',
+      stageLabel(p.status || 'contacted'),
+      p.source || 'manual',
+      p.address || '',
+      p.website || '',
+      p.note || '',
+      _csvIstDate(p.history && p.history.length ? p.history[0].at : ''),
+      _csvIstDate(p.lastContactedAt),
+      _csvIstDate(p.wonAt)
+    ];
+    lines.push(row.map(_csvCell).join(','));
+  }
+  return lines.join('\r\n');
+}
+
+/* Trigger download. Works on Android Chrome and iPhone Safari. */
+function _downloadCsv(csv, filename) {
+  /* UTF-8 BOM so Excel opens Hindi correctly */
+  var bom = '\uFEFF';
+  var blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  /* Cleanup after a tick — iOS Safari needs a delay */
+  setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+}
+
+/* Public: load from server, build CSV, trigger download. */
+async function pipelineExportCsv() {
+  await pipelineLoadFromServer();
+  var store = pipelineLoad();
+  var people = store.people || [];
+  if (!people.length) { alert('No customers to export.'); return; }
+  var csv = _buildCustomerCsv(people);
+  var firm = '';
+  try { firm = (localStorage.getItem('g7_session_firm') || '').replace(/[^a-zA-Z0-9_-]/g, ''); } catch (e) {}
+  var today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  var filename = 'scout-customers-' + (firm || 'export') + '-' + today + '.csv';
+  _downloadCsv(csv, filename);
+}
