@@ -2214,17 +2214,20 @@ async function scoutHandleLimit(res) {
     }
   }
 
+  var isBudget = body.reason === 'budget';
+  var showUpgrade = body.plan === 'free' && !isBudget;
+
   var paidText = '';
-  if (body.paidLimit && body.plan === 'free') {
+  if (showUpgrade && body.paidLimit) {
     paidText = 'Paid plan: ' + body.paidLimit + '/' + (body.period === 'day' ? 'day' : body.period === 'month' ? 'month' : 'lifetime');
   }
 
-  _scoutShowLimitCard(label, body.message, usedText, resetText, paidText, body.plan);
+  _scoutShowLimitCard(label, body.message, usedText, resetText, paidText, showUpgrade);
   return true;
 }
 
 /* Render / reuse the shared limit overlay. */
-function _scoutShowLimitCard(featureLabel, message, usedText, resetText, paidText, plan) {
+function _scoutShowLimitCard(featureLabel, message, usedText, resetText, paidText, showUpgrade) {
   var id = 'scoutLimitOverlay';
   var el = document.getElementById(id);
   if (!el) {
@@ -2252,7 +2255,7 @@ function _scoutShowLimitCard(featureLabel, message, usedText, resetText, paidTex
   document.getElementById('scoutLimitMeta').innerHTML = meta.join('<br>');
 
   var btn = document.getElementById('scoutLimitUpgrade');
-  if (plan === 'free') {
+  if (showUpgrade) {
     btn.style.display = 'inline-block';
     btn.textContent = 'Upgrade \u2014 ' + SCOUT_PLAN.price + ' \u2192';
   } else {
