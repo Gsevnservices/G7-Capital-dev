@@ -9,7 +9,7 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=42"></script>
+<script src="../assets/scout.js?v=43"></script>
 <script src="../assets/pipeline.js?v=25"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
@@ -655,6 +655,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <a href="pipeline.html" class="nav-link">Customers</a>
     <a href="settings.html" class="nav-link">Settings</a>
     <span class="nav-firm-indicator" id="navFirmName"></span>
+    <a id="navPlanChip" href="settings.html#plan" style="display:none;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#8A8880;text-decoration:none;margin-right:8px;padding:3px 10px;border:1px solid rgba(255,255,255,0.08);border-radius:2px">Free plan <span style="color:#E0922F">&middot; Upgrade</span></a>
     <button class="nav-logout" onclick="handleLogout()">Sign Out</button>
   </div>
 </nav>
@@ -835,6 +836,20 @@ window.addEventListener('DOMContentLoaded', async function() {
   ccRender();
   scoutMarketLoad(); /* preload for voice/briefing — not rendered into #ccMarket */
   scoutNewsLoad().then(scoutNewsRender);
+
+  /* Plan chip — non-blocking */
+  (async function() {
+    try {
+      var _pr = await fetch(SCOUT_WORKER + '/scout/plan', {
+        headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
+      });
+      if (_pr.ok) {
+        var _pj = await _pr.json();
+        var chip = document.getElementById('navPlanChip');
+        if (chip && _pj.plan !== 'paid') chip.style.display = '';
+      }
+    } catch (e) {}
+  })();
 
   var firmName = localStorage.getItem('g7_session_name') || '';
 
@@ -2124,6 +2139,7 @@ async function scoutBriefing() {
       },
       body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] })
     });
+    if (await scoutHandleLimit(res)) return '';
     var data = await res.json();
     if (data && data.text) return scoutCleanSpoken(data.text);
   } catch(e) {}
@@ -2189,6 +2205,7 @@ async function scoutAsk(question) {
       },
       body: JSON.stringify({ messages: msgs })
     });
+    if (await scoutHandleLimit(res)) return '';
     var data = await res.json();
     if (data && data.text) {
       var answer = scoutCleanSpoken(data.text);

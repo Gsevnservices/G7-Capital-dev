@@ -420,8 +420,8 @@ async function featureGate(env, day, firmCode, feature) {
   var limit = def[plan] || def.free;
   var key = 'feat:' + day + ':' + firmCode + ':' + feature;
   var used = parseInt(await env.G7_KV.get(key) || '0', 10);
-  if (used >= limit) return { ok: false, used: used, limit: limit, feature: feature };
-  return { ok: true, used: used, limit: limit, feature: feature, counterKey: key };
+  if (used >= limit) return { ok: false, used: used, limit: limit, feature: feature, plan: plan };
+  return { ok: true, used: used, limit: limit, feature: feature, plan: plan, counterKey: key };
 }
 async function featureIncrement(env, gate) {
   if (gate && gate.counterKey) {
@@ -463,6 +463,60 @@ async function sendBudgetEmail(env, day, firmCode, spent, cap) {
   var text = subj + '.\n\nGeneration paused until midnight IST.\n' +
     'Day: ' + day + '\nFirm: ' + firmCode + '\nSpent: $' + spent.toFixed(4) + '\nCap: $' + cap.toFixed(2);
   try { await sendEmail(env, (env.ADMIN_EMAIL || 'contact@gsevnservices.in'), subj, text, '<p>' + text.replace(/\n/g, '<br>') + '</p>'); } catch (e) {}
+}
+
+/* ── Limit response builder ──
+   All gates return HTTP 402 with a uniform shape so the frontend can show
+   one shared upgrade card.  The old error text stays in `message` for
+   backwards compat with pages that haven't been updated yet. */
+
+function _istMidnight() {
+  /* Next midnight IST = next 18:30 UTC (IST = UTC+5:30). */
+  var now = new Date();
+  var utcMs = now.getTime();
+  var istMs = utcMs + 5.5 * 3600000;
+  var istDate = new Date(istMs);
+  var todayIst = new Date(Date.UTC(istDate.getUTCFullYear(), istDate.getUTCMonth(), istDate.getUTCDate()));
+  var tomorrowIst = new Date(todayIst.getTime() + 86400000);
+  return new Date(tomorrowIst.getTime() - 5.5 * 3600000).toISOString();
+}
+
+function _istMonthStart() {
+  /* First day of next month, IST midnight, as ISO string. */
+  var now = new Date();
+  var istMs = now.getTime() + 5.5 * 3600000;
+  var istDate = new Date(istMs);
+  var y = istDate.getUTCFullYear();
+  var m = istDate.getUTCMonth() + 1; // next month
+  if (m > 11) { m = 0; y++; }
+  var firstOfNext = new Date(Date.UTC(y, m, 1));
+  return new Date(firstOfNext.getTime() - 5.5 * 3600000).toISOString();
+}
+
+/* Paid limits — single source of truth. */
+var PAID_LIMITS = {
+  ask:      { limit: 10, period: 'day' },
+  analysis: { limit: 3,  period: 'month' },
+  checkin:  { limit: 8,  period: 'month' },
+  places:   { limit: 5,  period: 'day' }
+};
+
+function limitResponse(feature, plan, used, limit, period, message) {
+  var paid = PAID_LIMITS[feature] || {};
+  var resetsAt = (period === 'day') ? _istMidnight()
+    : (period === 'month') ? _istMonthStart()
+    : null;
+  return jsonResponse({
+    error: 'limit',
+    message: message || 'Limit reached',
+    feature: feature,
+    plan: plan,
+    used: used,
+    limit: limit,
+    period: period,
+    resetsAt: resetsAt,
+    paidLimit: paid.limit || null
+  }, 402);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3843,14 +3897,16 @@ export default {
         const cntRaw = await env.G7_KV.get(analysisCounterKey);
         analysisCount = cntRaw ? parseInt(cntRaw, 10) : 0;
         if (analysisCount >= 3) {
-          return jsonResponse({ error: 'limit_reached', limit: 'analysis' }, 403);
+          return limitResponse('analysis', plan, analysisCount, 3, 'month',
+            'You\u2019ve used all your analyses this month.');
         }
       } else {
         analysisCounterKey = 'scout:limit:' + session.firmCode + ':analyses';
         const cntRaw = await env.G7_KV.get(analysisCounterKey);
         analysisCount = cntRaw ? parseInt(cntRaw, 10) : 0;
         if (analysisCount >= 1) {
-          return jsonResponse({ error: 'limit_reached', limit: 'analysis' }, 403);
+          return limitResponse('analysis', plan, analysisCount, 1, 'lifetime',
+            'You\u2019ve used your free business analysis.');
         }
       }
       // ---- end limit gate ----
@@ -4023,12 +4079,14 @@ export default {
       var _istBrief = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
       var _fgB = await featureGate(env, _istBrief, session.firmCode, 'ask');
       if (!_fgB.ok) {
-        return jsonResponse({ error: "You\u2019ve used today\u2019s questions \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return limitResponse('ask', _fgB.plan, _fgB.used, _fgB.limit, 'day',
+          "You\u2019ve used today\u2019s questions \u2014 back tomorrow.");
       }
       var _bcB = await budgetCheck(env, _istBrief, session.firmCode);
       if (!_bcB.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istBrief, session.firmCode, _bcB.firmSpent, _bcB.cap));
-        return jsonResponse({ error: "You\u2019ve used today\u2019s questions \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return limitResponse('ask', _fgB.plan, _fgB.used, _fgB.limit, 'day',
+          "You\u2019ve used today\u2019s questions \u2014 back tomorrow.");
       }
       await featureIncrement(env, _fgB);
       var cost = newCostAccum();
@@ -4183,11 +4241,13 @@ export default {
         const cntRaw = await env.G7_KV.get(checkinCounterKey);
         checkinCount = cntRaw ? parseInt(cntRaw, 10) : 0;
         if (checkinCount >= 8) {
-          return jsonResponse({ error: 'limit_reached', limit: 'checkin' }, 403);
+          return limitResponse('checkin', plan, checkinCount, 8, 'month',
+            'You\u2019ve used all your check-ins this month.');
         }
       } else {
         // Free users cannot check in — check-ins are a paid-only feature
-        return jsonResponse({ error: 'upgrade_required', limit: 'checkin' }, 403);
+        return limitResponse('checkin', plan, 0, 0, 'month',
+          'Weekly check-ins are part of the paid plan.');
       }
       // ---- end limit gate ----
 
@@ -4196,7 +4256,8 @@ export default {
       var _bcCI = await budgetCheck(env, _istCI, session.firmCode);
       if (!_bcCI.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istCI, session.firmCode, _bcCI.firmSpent, _bcCI.cap));
-        return jsonResponse({ error: "You\u2019ve used today\u2019s check-ins \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return limitResponse('checkin', plan, checkinCount, 8, 'month',
+          "Scout\u2019s daily budget has been reached \u2014 back tomorrow.");
       }
       var cost = newCostAccum();
 
@@ -4588,7 +4649,8 @@ export default {
 
       // Cache miss — enforce daily rate limit
       if (placesCount >= hardLimit) {
-        return jsonResponse({ error: 'limit_reached', limit: 'places' }, 403);
+        return limitResponse('places', plan, placesCount, hardLimit, 'day',
+          "You\u2019ve used today\u2019s customer searches \u2014 back tomorrow.");
       }
 
       /* Firm money backstop (places already has its own daily limit gate above). */
@@ -4596,7 +4658,8 @@ export default {
       var _bcP = await budgetCheck(env, _istPlaces, session.firmCode);
       if (!_bcP.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istPlaces, session.firmCode, _bcP.firmSpent, _bcP.cap));
-        return jsonResponse({ error: "You\u2019ve used today\u2019s customer searches \u2014 back tomorrow.", budgetPaused: true }, 429);
+        return limitResponse('places', plan, placesCount, hardLimit, 'day',
+          "You\u2019ve used today\u2019s customer searches \u2014 back tomorrow.");
       }
 
       // 6. Call Claude web search to find businesses
@@ -4665,6 +4728,52 @@ export default {
       await kvPut(env,key, JSON.stringify(user));
       const ep = emailPrefs(user);
       return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: true });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /scout/plan — current plan + per-feature usage.
+    // Read-only: no writes, no counters incremented.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/plan') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
+      var _plan = user.plan || 'free';
+      var _istDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _month = new Date().toISOString().slice(0, 7);
+
+      /* Ask — daily counter */
+      var _askUsed = parseInt(await env.G7_KV.get('feat:' + _istDay + ':' + session.firmCode + ':ask') || '0', 10);
+      var _askLim = _plan === 'paid' ? 10 : 3;
+
+      /* Analysis — free=lifetime, paid=monthly */
+      var _anKey = _plan === 'paid'
+        ? 'scout:limit:' + session.firmCode + ':analyses:' + _month
+        : 'scout:limit:' + session.firmCode + ':analyses';
+      var _anUsed = parseInt(await env.G7_KV.get(_anKey) || '0', 10);
+      var _anLim = _plan === 'paid' ? 3 : 1;
+
+      /* Check-in — free=0, paid=monthly */
+      var _ciKey = 'scout:limit:' + session.firmCode + ':checkins:' + _month;
+      var _ciUsed = _plan === 'paid' ? parseInt(await env.G7_KV.get(_ciKey) || '0', 10) : 0;
+      var _ciLim = _plan === 'paid' ? 8 : 0;
+
+      /* Places — daily */
+      /* Places gate uses UTC day (not IST) — match its key format */
+      var _plKey = 'scout:limit:' + session.firmCode + ':places:' + new Date().toISOString().slice(0, 10);
+      var _plUsed = parseInt(await env.G7_KV.get(_plKey) || '0', 10);
+      var _plLim = _plan === 'paid' ? 5 : 2;
+
+      return jsonResponse({
+        plan: _plan,
+        planSince: user.planSince || user.createdAt || null,
+        features: {
+          ask:      { used: _askUsed, limit: _askLim,  paidLimit: 10, period: 'day',      resetsAt: _istMidnight() },
+          analysis: { used: _anUsed,  limit: _anLim,   paidLimit: 3,  period: _plan === 'paid' ? 'month' : 'lifetime', resetsAt: _plan === 'paid' ? _istMonthStart() : null },
+          checkin:  { used: _ciUsed,  limit: _ciLim,   paidLimit: 8,  period: 'month',    resetsAt: _istMonthStart() },
+          places:   { used: _plUsed,  limit: _plLim,   paidLimit: 5,  period: 'day',      resetsAt: _istMidnight() }
+        }
+      });
     }
 
     // ─────────────────────────────────────────────────────────────

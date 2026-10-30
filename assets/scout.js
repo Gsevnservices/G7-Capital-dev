@@ -442,12 +442,18 @@ async function callScout(businessContext) {
     throw new Error('Could not reach Scout. Please check your internet connection and try again.');
   }
 
+  /* 402 limit → show shared card */
+  if (response.status === 402 && await scoutHandleLimit(response)) {
+    var _le = new Error('limit'); _le.code = 'limit_handled'; throw _le;
+  }
+
   if (!response.ok) {
     var errBody = await response.text();
+    /* Legacy 403 compat — pages that still catch 'limit_reached' */
     if (response.status === 403) {
       var parsed = null;
       try { parsed = JSON.parse(errBody); } catch (e) {}
-      if (parsed && parsed.error === 'limit_reached') {
+      if (parsed && (parsed.error === 'limit_reached' || parsed.error === 'limit')) {
         var limitErr = new Error('limit_reached');
         limitErr.code = 'limit_reached';
         limitErr.limit = parsed.limit || 'analysis';
@@ -507,6 +513,11 @@ async function callScoutRaw(userMessage) {
     });
   } catch (networkError) {
     throw new Error('Could not reach Scout. Please check your internet connection and try again.');
+  }
+
+  /* 402 limit → show shared card */
+  if (response.status === 402 && await scoutHandleLimit(response)) {
+    var _le2 = new Error('limit'); _le2.code = 'limit_handled'; throw _le2;
   }
 
   if (!response.ok) {
@@ -670,22 +681,22 @@ async function callScoutCheckin(checkinData, onProgress) {
     throw new Error('Could not reach Scout. Please check your internet connection and try again.');
   }
 
+  /* 402 limit → show shared card */
+  if (response.status === 402 && await scoutHandleLimit(response)) {
+    var _le3 = new Error('limit'); _le3.code = 'limit_handled'; throw _le3;
+  }
+
   if (!response.ok) {
     var errBody = await response.text();
+    /* Legacy 403 compat */
     if (response.status === 403) {
       var parsed = null;
       try { parsed = JSON.parse(errBody); } catch (e) {}
-      if (parsed && parsed.error === 'upgrade_required') {
-        var upgradeErr = new Error('upgrade_required');
-        upgradeErr.code = 'upgrade_required';
+      if (parsed && (parsed.error === 'upgrade_required' || parsed.error === 'limit_reached' || parsed.error === 'limit')) {
+        var upgradeErr = new Error(parsed.error);
+        upgradeErr.code = parsed.error;
         upgradeErr.limit = parsed.limit || 'checkin';
         throw upgradeErr;
-      }
-      if (parsed && parsed.error === 'limit_reached') {
-        var limitErr = new Error('limit_reached');
-        limitErr.code = 'limit_reached';
-        limitErr.limit = parsed.limit || 'checkin';
-        throw limitErr;
       }
     }
     throw new Error('Scout check-in error ' + response.status + ': ' + errBody);
@@ -2147,6 +2158,112 @@ function buildScoutUserMessage(d) {
   ].filter(function(l){ return l !== undefined; }).join('\n');
 }
 
+
+// ─────────────────────────────────────────────────────────────
+// PLAN + LIMIT HANDLING
+// ─────────────────────────────────────────────────────────────
+
+/* Single source of truth for plan copy — matches landing page. */
+var SCOUT_PLAN = {
+  price: '\u20b93,000/month',
+  trial: 'first month free',
+  upgradeEmail: 'gsevnservices@gmail.com',
+  featureLabels: {
+    ask: 'Ask Scout',
+    analysis: 'Business analysis',
+    checkin: 'Weekly check-in',
+    places: 'Customer Finder'
+  }
+};
+
+/* scoutHandleLimit(response) — call after any fetch to a gated route.
+   If the response is a 402 limit body, shows a shared upgrade card and
+   returns true.  Otherwise returns false and leaves the response untouched.
+
+   Usage:
+     var res = await fetch(SCOUT_WORKER + '/scout/briefing', ...);
+     if (await scoutHandleLimit(res)) return;
+     // normal handling...
+
+   The response body is consumed when this returns true.  When it returns
+   false, the body is NOT consumed — callers read it themselves. */
+
+async function scoutHandleLimit(res) {
+  if (!res || res.status !== 402) return false;
+  var body;
+  try { body = await res.clone().json(); } catch (e) { return false; }
+  if (!body || body.error !== 'limit') return false;
+
+  var label = (SCOUT_PLAN.featureLabels[body.feature] || body.feature);
+  var usedText = '';
+  if (body.limit > 0) {
+    usedText = body.used + ' of ' + body.limit + ' used';
+    if (body.period === 'day') usedText += ' today';
+    else if (body.period === 'month') usedText += ' this month';
+  }
+
+  var resetText = '';
+  if (body.resetsAt) {
+    var d = new Date(body.resetsAt);
+    var now = new Date();
+    var diffH = Math.round((d - now) / 3600000);
+    if (diffH <= 24) resetText = 'Resets in ' + diffH + ' hour' + (diffH === 1 ? '' : 's');
+    else {
+      var diffD = Math.round((d - now) / 86400000);
+      resetText = 'Resets in ' + diffD + ' day' + (diffD === 1 ? '' : 's');
+    }
+  }
+
+  var paidText = '';
+  if (body.paidLimit && body.plan === 'free') {
+    paidText = 'Paid plan: ' + body.paidLimit + '/' + (body.period === 'day' ? 'day' : body.period === 'month' ? 'month' : 'lifetime');
+  }
+
+  _scoutShowLimitCard(label, body.message, usedText, resetText, paidText, body.plan);
+  return true;
+}
+
+/* Render / reuse the shared limit overlay. */
+function _scoutShowLimitCard(featureLabel, message, usedText, resetText, paidText, plan) {
+  var id = 'scoutLimitOverlay';
+  var el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(8,8,8,0.88);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+    el.innerHTML =
+      '<div style="max-width:440px;width:100%;background:#0e0e0e;border:1px solid #E0922F;border-radius:4px;padding:36px 32px;text-align:center;font-family:\'Tenor Sans\',sans-serif">' +
+        '<div id="scoutLimitHeading" style="font-family:\'Cormorant Garamond\',serif;font-weight:300;font-size:28px;color:#F0B968;margin-bottom:14px;line-height:1.2"></div>' +
+        '<p id="scoutLimitMsg" style="font-size:14px;color:#d8d2c8;line-height:1.6;margin-bottom:6px"></p>' +
+        '<div id="scoutLimitMeta" style="font-size:12px;color:#8A8880;margin-bottom:24px;line-height:1.8"></div>' +
+        '<a id="scoutLimitUpgrade" href="settings.html#plan" style="display:none;background:#E0922F;color:#080808;text-decoration:none;font-size:13px;letter-spacing:0.15em;text-transform:uppercase;padding:14px 32px;margin-bottom:14px">Upgrade \u2192</a>' +
+        '<div><button onclick="document.getElementById(\'scoutLimitOverlay\').style.display=\'none\'" style="background:none;border:none;color:#888;font-size:12px;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;margin-top:10px">Close</button></div>' +
+      '</div>';
+    document.body.appendChild(el);
+  }
+  el.style.display = 'flex';
+  document.getElementById('scoutLimitHeading').textContent = featureLabel;
+  document.getElementById('scoutLimitMsg').textContent = message;
+
+  var meta = [];
+  if (usedText) meta.push(usedText);
+  if (resetText) meta.push(resetText);
+  if (paidText) meta.push(paidText);
+  document.getElementById('scoutLimitMeta').innerHTML = meta.join('<br>');
+
+  var btn = document.getElementById('scoutLimitUpgrade');
+  if (plan === 'free') {
+    btn.style.display = 'inline-block';
+    btn.textContent = 'Upgrade \u2014 ' + SCOUT_PLAN.price + ' \u2192';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+/* Open the upgrade contact — single function, easy to swap for Razorpay later. */
+function scoutOpenUpgrade() {
+  window.location.href = 'settings.html#plan';
+}
 
 // ─────────────────────────────────────────────────────────────
 // MODULE EXPORT (Node.js validation only)
