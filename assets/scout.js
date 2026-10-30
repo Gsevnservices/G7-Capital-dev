@@ -2165,8 +2165,7 @@ function buildScoutUserMessage(d) {
 
 /* Single source of truth for plan copy — matches landing page. */
 var SCOUT_PLAN = {
-  price: '\u20b93,000/month',
-  trial: 'first month free',
+  upgradeLabel: 'Paid plan \u2014 talk to us for pricing',
   upgradeEmail: 'gsevnservices@gmail.com',
   featureLabels: {
     ask: 'Ask Scout',
@@ -2257,7 +2256,7 @@ function _scoutShowLimitCard(featureLabel, message, usedText, resetText, paidTex
   var btn = document.getElementById('scoutLimitUpgrade');
   if (showUpgrade) {
     btn.style.display = 'inline-block';
-    btn.textContent = 'Upgrade \u2014 ' + SCOUT_PLAN.price + ' \u2192';
+    btn.textContent = 'Talk to us about upgrading \u2192';
   } else {
     btn.style.display = 'none';
   }
