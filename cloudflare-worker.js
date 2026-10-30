@@ -408,7 +408,6 @@ async function flushCost(env, day, firmCode, cost) {
    Returns { ok, used, limit, feature } */
 var FEAT_LIMITS = {
   ask:      { paid: 10, free: 3 },   /* Ask Scout = /scout/briefing */
-  finder:   { paid: 5,  free: 2 },
   /* news + move are once-a-day via cron/cache — no counter needed.
      analyse + checkin keep their existing monthly gates. */
 };
@@ -501,13 +500,14 @@ var PAID_LIMITS = {
   places:   { limit: 5,  period: 'day' }
 };
 
-function limitResponse(feature, plan, used, limit, period, message) {
+function limitResponse(feature, plan, used, limit, period, message, reason) {
   var paid = PAID_LIMITS[feature] || {};
   var resetsAt = (period === 'day') ? _istMidnight()
     : (period === 'month') ? _istMonthStart()
     : null;
   return jsonResponse({
     error: 'limit',
+    reason: reason || 'feature',
     message: message || 'Limit reached',
     feature: feature,
     plan: plan,
@@ -4086,7 +4086,7 @@ export default {
       if (!_bcB.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istBrief, session.firmCode, _bcB.firmSpent, _bcB.cap));
         return limitResponse('ask', _fgB.plan, _fgB.used, _fgB.limit, 'day',
-          "You\u2019ve used today\u2019s questions \u2014 back tomorrow.");
+          "You\u2019ve reached today\u2019s limit \u2014 back tomorrow.", 'budget');
       }
       await featureIncrement(env, _fgB);
       var cost = newCostAccum();
@@ -4256,8 +4256,8 @@ export default {
       var _bcCI = await budgetCheck(env, _istCI, session.firmCode);
       if (!_bcCI.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istCI, session.firmCode, _bcCI.firmSpent, _bcCI.cap));
-        return limitResponse('checkin', plan, checkinCount, 8, 'month',
-          "Scout\u2019s daily budget has been reached \u2014 back tomorrow.");
+        return limitResponse('checkin', plan, checkinCount, 8, 'day',
+          "You\u2019ve reached today\u2019s limit \u2014 back tomorrow.", 'budget');
       }
       var cost = newCostAccum();
 
@@ -4609,7 +4609,7 @@ export default {
       // 3. Read plan from user record
       const userRecord = await env.G7_KV.get('auth:users:' + session.firmCode, 'json');
       const plan = userRecord && userRecord.plan ? userRecord.plan : 'free';
-      const todayKey = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+      const todayKey = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10); // IST day
 
       // Determine daily limit and result cap based on plan
       const isPaid    = plan === 'paid';
@@ -4659,7 +4659,7 @@ export default {
       if (!_bcP.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istPlaces, session.firmCode, _bcP.firmSpent, _bcP.cap));
         return limitResponse('places', plan, placesCount, hardLimit, 'day',
-          "You\u2019ve used today\u2019s customer searches \u2014 back tomorrow.");
+          "You\u2019ve reached today\u2019s limit \u2014 back tomorrow.", 'budget');
       }
 
       // 6. Call Claude web search to find businesses
@@ -4759,8 +4759,7 @@ export default {
       var _ciLim = _plan === 'paid' ? 8 : 0;
 
       /* Places — daily */
-      /* Places gate uses UTC day (not IST) — match its key format */
-      var _plKey = 'scout:limit:' + session.firmCode + ':places:' + new Date().toISOString().slice(0, 10);
+      var _plKey = 'scout:limit:' + session.firmCode + ':places:' + _istDay;
       var _plUsed = parseInt(await env.G7_KV.get(_plKey) || '0', 10);
       var _plLim = _plan === 'paid' ? 5 : 2;
 
