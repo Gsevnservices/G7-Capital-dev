@@ -214,6 +214,15 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#0d0d0d;color:#e0e0e
       <div id="failedAnalysesList" style="font-size:12px;color:#555">Click Refresh Stats to load.</div>
     </div>
 
+    <!-- PART F: Error Log (D1) -->
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid #222">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+        <div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#C9A84C">Errors (today + yesterday)</div>
+        <button class="btn" style="font-size:10px;padding:4px 12px" onclick="loadErrors()">Load Errors</button>
+      </div>
+      <div id="errorLogList" style="font-size:12px;color:#555">Click Load Errors to fetch.</div>
+    </div>
+
     <!-- PART D: Create Scout Account -->
     <div style="margin-top:32px;padding-top:28px;border-top:1px solid #222">
       <div style="font-size:13px;font-weight:600;color:#C9A84C;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Create Scout Account</div>
@@ -999,6 +1008,32 @@ async function loadCostToday() {
   } catch (e) {
     document.getElementById('costTotal').textContent = '?';
   }
+}
+
+async function loadErrors() {
+  var el = document.getElementById('errorLogList');
+  el.textContent = 'Loading…';
+  try {
+    var r = await fetch(WORKER + '/admin/errors?adminPassword=' + encodeURIComponent(adminPassword));
+    if (!r.ok) { el.textContent = 'Failed (' + r.status + ')'; return; }
+    var d = await r.json();
+    if (!d.errors || d.errors.length === 0) { el.innerHTML = '<span style="color:#4a4">No errors today or yesterday.</span>'; return; }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
+      '<tr style="color:#888;text-align:left;border-bottom:1px solid #222"><th>Day</th><th>Source</th><th>Route</th><th>Firm</th><th>Kind</th><th>Count</th><th>Message</th></tr>';
+    d.errors.forEach(function(e) {
+      var isToday = e.day === d.today;
+      html += '<tr style="border-bottom:1px solid #1a1a1a;color:' + (isToday ? '#e0e0e0' : '#888') + '">' +
+        '<td style="padding:4px 6px">' + e.day + '</td>' +
+        '<td style="padding:4px 6px">' + e.source + '</td>' +
+        '<td style="padding:4px 6px">' + (e.route || '—') + '</td>' +
+        '<td style="padding:4px 6px">' + (e.firm_code || '—') + '</td>' +
+        '<td style="padding:4px 6px">' + (e.kind || '—') + '</td>' +
+        '<td style="padding:4px 6px;color:#E0922F">' + e.count + '</td>' +
+        '<td style="padding:4px 6px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (e.message || '').replace(/"/g, '&quot;') + '">' + (e.message || '—') + '</td></tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  } catch (e) { el.textContent = 'Error: ' + e.message; }
 }
 
 async function loadScoutStats() {

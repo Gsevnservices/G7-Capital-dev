@@ -22,6 +22,38 @@
 // Cloudflare Worker base URL — Scout routes live here
 const SCOUT_WORKER = G7_WORKER_URL;
 
+/* ── Client error reporting ──
+   Sends JS errors to /log/client-error for the D1 errors table.
+   At most 10 reports per page load. Session token sent if available. */
+(function() {
+  var _errCount = 0;
+  var _maxPerPage = 10;
+  function _reportError(message, stack) {
+    if (_errCount >= _maxPerPage) return;
+    _errCount++;
+    var page = location.pathname.split('/').pop() || 'unknown';
+    var headers = { 'Content-Type': 'application/json' };
+    try { var tk = localStorage.getItem('g7_session_token'); if (tk) headers['Authorization'] = 'Bearer ' + tk; } catch(e) {}
+    try {
+      fetch(SCOUT_WORKER + '/log/client-error', {
+        method: 'POST', headers: headers,
+        body: JSON.stringify({ page: page, message: String(message || '').slice(0, 300), stack: String(stack || '').slice(0, 200), kind: 'js_error' }),
+        keepalive: true
+      });
+    } catch(e) {}
+  }
+  window.onerror = function(msg, src, line, col, err) {
+    _reportError(msg, (err && err.stack ? err.stack : (src || '') + ':' + (line || '')));
+  };
+  window.addEventListener('unhandledrejection', function(ev) {
+    var r = ev.reason;
+    _reportError(
+      r && r.message ? r.message : String(r || 'unhandled rejection'),
+      r && r.stack ? r.stack : ''
+    );
+  });
+})();
+
 // Firm-scoped localStorage key: appends _FIRMCODE so different firms
 // sharing the same browser never collide.  Every Scout file that
 // touches localStorage must use scoutKey(base).
