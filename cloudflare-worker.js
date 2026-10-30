@@ -39,6 +39,8 @@
 //   POST /inbound/create             — Create inbound short links bio/google/status (session-protected, idempotent)
 //   GET  /inbound/stats              — Get link codes + click counts (session-protected)
 //   GET  /i/{CODE}                   — Public inbound redirect: logs click, 302 → wa.me (no CORS applied)
+//   POST /log/client-error           — Browser error reports (rate-limited per IP, no auth required)
+//   GET  /admin/errors               — Today+yesterday errors from D1 (admin-protected)
 //
 // Health check:
 //   GET /                        → { status: 'G7 Proxy is running' }
@@ -57,7 +59,11 @@ const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
    and retries once. Logs the colo (from _anthropicColo, set by the fetch
    handler) or "cron" with the error. Throws a clear message on second failure. */
 var _anthropicColo = 'cron';
-async function anthropicFetch(url, init) {
+var _env = null;       // set at top of fetch/scheduled — used by recordError callers
+var _ctx = null;       // set at top of fetch — for waitUntil
+var _clientErrCounts = {};  // IP:day → count (in-memory, resets on isolate restart)
+
+async function anthropicFetch(url, init, callerRoute) {
   var r = await fetch(url, init);
   if (r.status === 403) {
     var body403 = await r.text();
@@ -71,6 +77,11 @@ async function anthropicFetch(url, init) {
         throw new Error('Anthropic blocked this request (' + _anthropicColo + ') \u2014 check Worker placement');
       }
     }
+  }
+  if (!r.ok && _env) {
+    var _errRoute = callerRoute || 'anthropic';
+    var _p = recordError(_env, { source: 'worker', route: _errRoute, kind: 'api_' + r.status, message: 'Anthropic returned ' + r.status + ' (' + _anthropicColo + ')' });
+    if (_ctx) try { _ctx.waitUntil(_p); } catch(e) {}
   }
   return r;
 }
@@ -602,6 +613,9 @@ async function sendEmail(env, to, subject, text, html, headers) {
       },
       body: JSON.stringify(payload)
     });
+    if (!r.ok) {
+      try { await recordError(env, { source: 'worker', route: 'resend', kind: 'api_' + r.status, message: 'Resend returned ' + r.status + ' for ' + subject.slice(0, 60) }); } catch(e2) {}
+    }
     return r.ok;
   } catch (e) { return false; }
 }
@@ -651,8 +665,61 @@ async function recordAnalysisFailure(env, record) {
       body,
       '<pre style="font-family:monospace;font-size:13px">' + body.replace(/</g, '&lt;') + '</pre>'
     );
+    /* Also record to D1 errors table */
+    await recordError(env, { source: 'worker', route: 'analyse', firmCode: record.firm,
+      kind: 'analysis_' + (record.stage || 'unknown'),
+      message: (record.stage || 'unknown') + ': ' + (record.parseError || record.stopReason || 'failed') });
   } catch (e) {
     console.error('recordAnalysisFailure error:', e && e.message);
+  }
+}
+
+/* ── ERROR RECORDING ──
+   Records errors to D1 errors table. If env.DB is missing (prod today),
+   falls back to console.log only. Never throws. */
+
+/* Strip phone numbers, emails, and JWT/session tokens from error messages. */
+function sanitizeErrorMsg(msg) {
+  return String(msg || '')
+    .replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '[email]')
+    .replace(/\b\d{10,}\b/g, '[phone]')
+    .replace(/eyJ[A-Za-z0-9_\-]{10,}/g, '[token]')
+    .replace(/[a-f0-9]{32,}/gi, '[hash]')
+    .slice(0, 300);
+}
+
+/* Compute a dedup hash: source + route + kind + message (numbers stripped).
+   Returns 16-char hex string (64-bit SHA-256 prefix). */
+async function errorHash(source, route, kind, message) {
+  var raw = (source || '') + ':' + (route || '') + ':' + (kind || '') + ':' +
+    String(message || '').replace(/[0-9]/g, '');
+  var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+  var arr = new Uint8Array(buf);
+  var hex = '';
+  for (var i = 0; i < 8; i++) hex += arr[i].toString(16).padStart(2, '0');
+  return hex;
+}
+
+/* Record an error to D1. Upserts: same (day, hash) bumps count.
+   opts: { source, route, firmCode, kind, message } */
+async function recordError(env, opts) {
+  var msg = sanitizeErrorMsg(opts.message);
+  var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  var hash = await errorHash(opts.source, opts.route, opts.kind, msg);
+  var logObj = { _err: true, day: day, source: opts.source, route: opts.route,
+    firm: opts.firmCode || '', kind: opts.kind, message: msg, hash: hash };
+  console.log(JSON.stringify(logObj));
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      "INSERT INTO errors (day, source, route, firm_code, kind, message, hash) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT (day, hash) DO UPDATE SET count = count + 1, " +
+      "last_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+    ).bind(day, opts.source || 'worker', opts.route || '', opts.firmCode || '',
+      opts.kind || '', msg, hash).run();
+  } catch (e) {
+    console.error('recordError D1 write failed:', String(e && e.message || e).slice(0, 200));
   }
 }
 
@@ -1854,9 +1921,9 @@ async function runMorningForFirm(env, firmCode, day) {
   var news = null, move = null, a = 'error', n = 'error';
   var effectiveNewsPrefs;
   try { effectiveNewsPrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs); } catch (e) { effectiveNewsPrefs = user.newsPrefs || []; }
-  try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectiveNewsPrefs, cost); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectiveNewsPrefs, cost); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); try { await recordError(env, { source: 'worker', route: 'cron/news', firmCode: firmCode, kind: 'rss_all_failed', message: String(e && e.message || e) }); } catch(e2) {} }
   const st = await loadScoutState(env, firmCode);
-  try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st, false, cost); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st, false, cost); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); try { await recordError(env, { source: 'worker', route: 'cron/move', firmCode: firmCode, kind: 'move_failed', message: String(e && e.message || e) }); } catch(e2) {} }
   try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
   if (news) { try { n = await sendNewsEmail(env, firmCode, day); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = 'no_news'; }
 
@@ -1914,7 +1981,7 @@ async function findBusinesses(env, query, cap, cost) {
       ],
       messages: [{ role: 'user', content: 'Find: ' + query }]
     })
-  });
+  }, 'places');
   if (!r.ok) {
     const t = await r.text();
     throw new Error('finder ' + r.status + ': ' + t.slice(0, 400));
@@ -2383,7 +2450,7 @@ async function pickNewsForFirm(env, firmCode, day, context, industryCandidates, 
       messages: [{ role: 'user', content: 'BUSINESS:\n' + String(context).slice(0, 2500) +
         '\n\nCANDIDATES:\n' + JSON.stringify(numbered) }]
     })
-  });
+  }, 'cron/news');
 
   var picks = { industry: [], also: [], markets: null };
   if (r.ok) {
@@ -2789,7 +2856,7 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
                'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 6000, thinking: { type: 'between_tools' },
                            system: system, messages: [{ role: 'user', content: userMsg }] })
-  });
+  }, 'cron/move');
   if (!r.ok) throw new Error('move ' + r.status + ': ' + (await r.text()).slice(0, 300));
   const d = await r.json();
   recordCost(cost, 'claude-sonnet-5-5', d);
@@ -2849,7 +2916,8 @@ export {
 // ─────────────────────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
-
+    _env = env; _ctx = ctx;
+   try {
     // Set colo for Anthropic 403 logging (cron handler sets it to 'cron').
     _anthropicColo = (request.cf && request.cf.colo) || 'unknown';
 
@@ -2944,7 +3012,7 @@ export default {
             'anthropic-beta': 'prompt-caching-2024-07-31'
           },
           body: JSON.stringify(body)
-        });
+        }, 'alex');
       } catch {
         return jsonResponse({ error: 'Failed to reach Anthropic API' }, 502);
       }
@@ -3930,7 +3998,7 @@ export default {
           system:   body.system   || '',
           messages: body.messages || []
         })
-      });
+      }, 'analyse');
 
       if (!anthropicResponse.ok) {
         const errText = await anthropicResponse.text();
@@ -4105,7 +4173,7 @@ export default {
           stream:     false,
           messages:   body.messages || []
         })
-      });
+      }, 'briefing');
 
       if (!anthropicResponse.ok) {
         const errText = await anthropicResponse.text();
@@ -4277,7 +4345,7 @@ export default {
           system:   body.system   || '',
           messages: body.messages || []
         })
-      });
+      }, 'checkin');
 
       if (!anthropicResponse.ok) {
         const errText = await anthropicResponse.text();
@@ -4669,6 +4737,7 @@ export default {
         places = await findBusinesses(env, q, cap, cost);
       } catch (e) {
         ctx.waitUntil(flushCost(env, _istPlaces, session.firmCode, cost));
+        ctx.waitUntil(recordError(env, { source: 'worker', route: 'places', firmCode: session.firmCode, kind: 'search_failed', message: String(e && e.message || e) }));
         return jsonResponse({ error: 'Business search failed' }, 502);
       }
 
@@ -5349,11 +5418,69 @@ export default {
       });
     }
 
+    // ── ROUTE — POST /log/client-error ────────────────────────────────────────
+    // Browser-side errors from scout.js. Rate-limited per IP (in-memory).
+    // No auth required. Records to D1 errors table with source='client'.
+    if (request.method === 'POST' && path === '/log/client-error') {
+      var _ip = request.headers.get('cf-connecting-ip') || 'unknown';
+      var _ipDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _ipKey = _ip + ':' + _ipDay;
+      var _ipCount = _clientErrCounts[_ipKey] || 0;
+      if (_ipCount >= 50) return jsonResponse({ ok: false, reason: 'rate_limited' });
+      _clientErrCounts[_ipKey] = _ipCount + 1;
+      /* Prune stale days from in-memory map (keep it small). */
+      if (Object.keys(_clientErrCounts).length > 500) {
+        for (var _ck in _clientErrCounts) { if (_ck.indexOf(_ipDay) === -1) delete _clientErrCounts[_ck]; }
+      }
+      var _ceBody;
+      try { _ceBody = await request.json(); } catch(e) { return jsonResponse({ ok: false, reason: 'bad_json' }, 400); }
+      var _cePage = String(_ceBody.page || '').slice(0, 100);
+      var _ceMsg = String(_ceBody.message || '').slice(0, 300);
+      var _ceStack = String(_ceBody.stack || '').slice(0, 200);
+      var _ceFirm = '';
+      /* Extract firmCode from session if present, but don't fail if missing */
+      try {
+        var _ceSession = await validateSession(request, env);
+        if (_ceSession) _ceFirm = _ceSession.firmCode;
+      } catch(e) {}
+      ctx.waitUntil(recordError(env, {
+        source: 'client', route: _cePage, firmCode: _ceFirm,
+        kind: _ceBody.kind || 'js_error',
+        message: _ceMsg + (_ceStack ? ' | ' + _ceStack : '')
+      }));
+      return jsonResponse({ ok: true });
+    }
+
+    // ── ROUTE — GET /admin/errors ───────────────────────────────────────────
+    // Returns today's and yesterday's errors sorted by count. Admin-protected.
+    if (request.method === 'GET' && path === '/admin/errors') {
+      var _aePwd = url.searchParams.get('adminPassword');
+      if (!_aePwd || _aePwd !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'No D1 database' }, 501);
+      var _aeToday = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _aeYesterday = new Date(Date.now() + 5.5 * 3600000 - 86400000).toISOString().slice(0, 10);
+      var _aeRows = await env.DB.prepare(
+        "SELECT day, source, route, firm_code, kind, message, count, first_at, last_at " +
+        "FROM errors WHERE day IN (?, ?) ORDER BY day DESC, count DESC LIMIT 100"
+      ).bind(_aeToday, _aeYesterday).all();
+      return jsonResponse({ today: _aeToday, yesterday: _aeYesterday, errors: (_aeRows && _aeRows.results) || [] });
+    }
+
     // ── Catch-all 404 ─────────────────────────────────────────────────────────
     return jsonResponse({ error: 'Not found' }, 404);
+
+   } catch (_uncaught) {
+    var _errPath = '/';
+    try { _errPath = new URL(request.url).pathname; } catch(e2) {}
+    ctx.waitUntil(recordError(env, { source: 'worker', route: _errPath, kind: 'uncaught', message: String(_uncaught && _uncaught.message || _uncaught) }));
+    console.error('Uncaught in fetch:', _uncaught);
+    return jsonResponse({ error: 'Internal error' }, 500);
+   }
   },
 
   async scheduled(event, env, ctx) {
+    _env = env; _ctx = ctx;
+   try {
     _anthropicColo = 'cron';
     const ist = new Date(Date.now() + 5.5 * 3600 * 1000);
     const day = ist.toISOString().slice(0, 10);
@@ -5460,6 +5587,7 @@ export default {
           report.firms.push({ firm: firmCode, status: 'error',
             error: String((e && e.message) || e).slice(0, 300), ms: Date.now() - t0 });
           await kvPut(env,'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
+          try { await recordError(env, { source: 'worker', route: 'cron', firmCode: firmCode, kind: 'morning_job', message: String(e && e.message || e) }); } catch(e2) {}
         }
       }
       cursor = page.list_complete ? undefined : page.cursor;
@@ -5469,5 +5597,51 @@ export default {
     report.finishedAt = new Date().toISOString();
     console.log(JSON.stringify({ cron: report }));
     await kvPut(env,'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
+
+    /* ── Error digest email — once per day, ~7 AM IST or later ──
+       Sends yesterday's error summary to ADMIN_EMAIL if any errors exist. */
+    if (ist.getHours() >= 7 && env.DB && env.ADMIN_EMAIL) {
+      var _errDigestDay = new Date(ist.getTime() - 86400000).toISOString().slice(0, 10);
+      var _errSentKey = 'err:digest:sent:' + _errDigestDay;
+      var _errSent = await env.G7_KV.get(_errSentKey);
+      if (!_errSent) {
+        /* Claim the flag first to prevent duplicate sends from overlapping cron runs. */
+        await kvPut(env, _errSentKey, '1', { expirationTtl: 2 * 86400 });
+        try {
+          var _errRows = await env.DB.prepare(
+            "SELECT source, route, firm_code, kind, message, count, first_at, last_at " +
+            "FROM errors WHERE day = ? ORDER BY count DESC LIMIT 50"
+          ).bind(_errDigestDay).all();
+          var _errs = (_errRows && _errRows.results) || [];
+          if (_errs.length > 0) {
+            var _wCount = 0, _cCount = 0, _totalCount = 0;
+            _errs.forEach(function(r) { _totalCount += r.count; if (r.source === 'worker') _wCount += r.count; else _cCount += r.count; });
+            var _lines = [
+              'Error digest for ' + _errDigestDay,
+              '',
+              'Total: ' + _totalCount + ' (' + _wCount + ' worker, ' + _cCount + ' client)',
+              '',
+              'Top errors (by count):'
+            ];
+            _errs.slice(0, 10).forEach(function(r, i) {
+              _lines.push((i + 1) + '. [' + r.source + '] ' + r.route + ' — ' + r.kind + ' (x' + r.count + ')');
+              if (r.firm_code) _lines.push('   Firm: ' + r.firm_code);
+              _lines.push('   ' + r.message);
+            });
+            var _errText = _lines.join('\n');
+            var _errHtml = '<pre style="font-family:monospace;font-size:13px;line-height:1.6">' +
+              _errText.replace(/</g, '&lt;') + '</pre>';
+            await sendEmail(env, env.ADMIN_EMAIL, 'Scout errors — ' + _errDigestDay, _errText, _errHtml);
+          }
+        } catch (e) {
+          console.error('Error digest failed:', String(e && e.message || e).slice(0, 200));
+        }
+      }
+    }
+
+   } catch (_uncaught) {
+    try { await recordError(env, { source: 'worker', route: 'cron', kind: 'uncaught', message: String(_uncaught && _uncaught.message || _uncaught) }); } catch(e2) {}
+    console.error('Uncaught in scheduled:', _uncaught);
+   }
   }
 };
