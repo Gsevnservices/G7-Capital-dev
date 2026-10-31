@@ -19,6 +19,7 @@ name = "g7-proxy"
 main = "cloudflare-worker.js"
 compatibility_date = "2026-04-02"
 keep_vars = true
+minify = true
 
 [placement]
 mode = "smart"
@@ -44,6 +45,7 @@ crons = ["*/30 * * * *"]
 # ═══════════════════════════════════════════════════════════════
 [env.dev]
 name = "g7-proxy-dev"
+minify = true
 
 # No cron on dev — trigger manually via admin
 [env.dev.triggers]
