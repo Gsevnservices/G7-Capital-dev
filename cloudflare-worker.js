@@ -3070,11 +3070,11 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
 }
 
 /* ── Places cost entries for COST_TABLE ──
-   Google Places Text Search (New) — Basic SKU: $0.032 per request
-   Google Place Details (New) — Basic SKU:      $0.005 per request
-   We track this separately from Anthropic costs. */
-var PLACES_TEXT_SEARCH_COST = 0.032;
-var PLACES_DETAILS_COST = 0.005;
+   Text Search Enterprise (rating + userRatingCount fields): $0.035/call, 1000 free/mo
+   Place Details Enterprise (phone + website fields):        $0.020/call, 1000 free/mo
+   Source: developers.google.com/maps/documentation/places/web-service/usage-and-billing */
+var PLACES_TEXT_SEARCH_COST = 0.035;
+var PLACES_DETAILS_COST = 0.020;
 
 function recordPlacesCost(cost, textSearchCalls, detailsCalls) {
   if (!cost) return;
@@ -5980,21 +5980,21 @@ export default {
         _alCursor = _alPage.list_complete ? undefined : _alPage.cursor;
       } while (_alCursor);
 
-      /* Places cost: sum across all firms */
-      var _alPlacesCost = 0;
-      var _alCursor2;
-      do {
-        var _alPage2 = await env.G7_KV.list({ prefix: 'scout:leads:places:', cursor: _alCursor2 });
-        for (var _alK2 of _alPage2.keys) {
-          if (_alK2.name.indexOf(':' + _alDay) !== -1) {
-            var _alVal = parseInt(await env.G7_KV.get(_alK2.name) || '0', 10);
-            _alPlacesCost += _alVal * PLACES_TEXT_SEARCH_COST;
-          }
-        }
-        _alCursor2 = _alPage2.list_complete ? undefined : _alPage2.cursor;
-      } while (_alCursor2);
+      /* Places cost: sum text search + details across all firms from leads data */
+      var _alTotalTextSearches = 0;
+      var _alTotalDetails = 0;
+      _alFirms.forEach(function(f) {
+        _alTotalTextSearches += f.textSearchCalls || 0;
+        _alTotalDetails += f.detailsCalls || 0;
+      });
+      var _alPlacesCost = _alTotalTextSearches * PLACES_TEXT_SEARCH_COST + _alTotalDetails * PLACES_DETAILS_COST;
 
-      return jsonResponse({ day: _alDay, firms: _alFirms, totalPlacesCostUsd: _alPlacesCost });
+      return jsonResponse({
+        day: _alDay, firms: _alFirms,
+        totalTextSearchCalls: _alTotalTextSearches,
+        totalDetailsCalls: _alTotalDetails,
+        totalPlacesCostUsd: Math.round(_alPlacesCost * 1000) / 1000
+      });
     }
 
     // =========================================================================
