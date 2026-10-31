@@ -2100,7 +2100,9 @@ var B2C_PARTNER_MAP = {
   _default:   ['small offices','societies','complementary businesses']
 };
 
-/* ── Places Text Search (New) — single search call ── */
+/* ── Places Text Search (New) — BASIC field mask only (cheap SKU $0.032) ── */
+/* Returns: id, displayName, primaryType, types, location, businessStatus, rating, userRatingCount */
+/* Does NOT return: phone, website, address, mapsUrl — use placeDetails() for those */
 async function placesTextSearch(env, query, lat, lng, radiusM, maxResults) {
   if (!env.GOOGLE_PLACES_KEY) throw new Error('No GOOGLE_PLACES_KEY');
   var body = {
@@ -2115,7 +2117,7 @@ async function placesTextSearch(env, query, lat, lng, radiusM, maxResults) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': env.GOOGLE_PLACES_KEY,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.businessStatus,places.types,places.websiteUri,places.googleMapsUri,places.location'
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.primaryType,places.types,places.location,places.businessStatus,places.rating,places.userRatingCount'
     },
     body: JSON.stringify(body)
   });
@@ -2128,18 +2130,39 @@ async function placesTextSearch(env, query, lat, lng, radiusM, maxResults) {
     return {
       placeId: p.id || '',
       name: (p.displayName && p.displayName.text) || '',
-      address: p.formattedAddress || '',
-      phone: p.nationalPhoneNumber || p.internationalPhoneNumber || '',
+      primaryType: p.primaryType || '',
       rating: p.rating || 0,
       reviews: p.userRatingCount || 0,
       status: p.businessStatus || '',
       types: p.types || [],
-      website: p.websiteUri || '',
-      mapsUrl: p.googleMapsUri || '',
       lat: (p.location && p.location.latitude) || 0,
       lng: (p.location && p.location.longitude) || 0
     };
   });
+}
+
+/* ── Place Details (New) — fetches contact info for a single place ($0.005 Basic) ── */
+/* Called only for the final 5 picked leads, not for all search results */
+async function placeDetails(env, placeId) {
+  if (!env.GOOGLE_PLACES_KEY) throw new Error('No GOOGLE_PLACES_KEY');
+  var r = await fetch('https://places.googleapis.com/v1/places/' + encodeURIComponent(placeId), {
+    method: 'GET',
+    headers: {
+      'X-Goog-Api-Key': env.GOOGLE_PLACES_KEY,
+      'X-Goog-FieldMask': 'id,displayName,formattedAddress,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri'
+    }
+  });
+  if (!r.ok) {
+    var errText = await r.text().catch(function() { return ''; });
+    throw new Error('Place Details ' + r.status + ': ' + errText.slice(0, 200));
+  }
+  var p = await r.json();
+  return {
+    address: p.formattedAddress || '',
+    phone: p.nationalPhoneNumber || p.internationalPhoneNumber || '',
+    website: p.websiteUri || '',
+    mapsUrl: p.googleMapsUri || ''
+  };
 }
 
 /* ── Haversine distance in km ── */
@@ -2261,6 +2284,22 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   profile.confirmedAt = null;
   profile.createdAt = new Date().toISOString();
 
+  /* Geocode each area once and store coordinates in the profile.
+     Uses one Text Search per area — only happens at profile creation time,
+     not on every daily run. */
+  profile.areaCoords = {};
+  if (env.GOOGLE_PLACES_KEY && profile.areas.length > 0) {
+    for (var ai = 0; ai < profile.areas.length; ai++) {
+      var areaName = profile.areas[ai];
+      try {
+        var geoR = await placesTextSearch(env, areaName + (city ? ', ' + city : ''), 0, 0, 50000, 1);
+        if (geoR.length > 0) {
+          profile.areaCoords[areaName] = { lat: geoR[0].lat, lng: geoR[0].lng };
+        }
+      } catch (e) { /* geocode failed — will retry at runtime */ }
+    }
+  }
+
   return profile;
 }
 
@@ -2316,21 +2355,18 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
       if (phoneTail.length >= 10 && existingPhones.has(phoneTail)) continue;
     }
 
-    /* Excluded types */
+    /* Excluded by primaryType or types (Google Places category match) */
     var excluded = false;
-    for (var j = 0; j < c.types.length; j++) {
-      if (excludeSet.has(c.types[j].toLowerCase())) { excluded = true; break; }
-    }
-    if (excluded) continue;
-
-    /* Excluded by name pattern */
-    var nameLower = c.name.toLowerCase();
-    for (var ex of excludeSet) {
-      if (nameLower.indexOf(ex) !== -1) { excluded = true; break; }
+    if (c.primaryType && excludeSet.has(c.primaryType.toLowerCase())) { excluded = true; }
+    if (!excluded) {
+      for (var j = 0; j < c.types.length; j++) {
+        if (excludeSet.has(c.types[j].toLowerCase())) { excluded = true; break; }
+      }
     }
     if (excluded) continue;
 
     /* Known chain */
+    var nameLower = c.name.toLowerCase();
     var isChain = false;
     for (var k = 0; k < KNOWN_CHAINS.length; k++) {
       if (nameLower.indexOf(KNOWN_CHAINS[k]) !== -1) { isChain = true; break; }
@@ -2353,23 +2389,33 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
   var batch = candidates.slice(0, 30);
 
   var candidateList = batch.map(function(c, i) {
-    return (i + 1) + '. ' + c.name + ' | ' + c.address + ' | rating:' + c.rating +
-      ' reviews:' + c.reviews + ' | types:' + c.types.slice(0, 5).join(',');
+    return (i + 1) + '. ' + c.name + ' | ' + (c.address || 'no address') + ' | rating:' + c.rating +
+      ' reviews:' + c.reviews + ' | types:' + (c.types || []).slice(0, 5).join(',') +
+      (c._groupName ? ' | group:' + c._groupName : '');
   }).join('\n');
 
-  var group = null;
-  for (var g = 0; g < profile.groups.length; g++) {
-    if (profile.groups[g].name === groupName) { group = profile.groups[g]; break; }
-  }
+  /* Build context for all unique groups represented in the batch */
+  var groupsSeen = new Set();
+  var groupsContext = '';
+  batch.forEach(function(c) { if (c._groupName) groupsSeen.add(c._groupName); });
+  if (groupsSeen.size === 0) groupsSeen.add(groupName);
+  groupsSeen.forEach(function(gn) {
+    var g = null;
+    for (var i = 0; i < profile.groups.length; i++) {
+      if (profile.groups[i].name === gn) { g = profile.groups[i]; break; }
+    }
+    if (g) {
+      groupsContext += '\nGROUP: ' + gn + '\nWHY: ' + g.why + '\nOFFER: ' + g.offer + '\nTRIGGER: ' + g.trigger + '\n';
+    }
+  });
 
   var prompt = 'You are scoring leads for a small business.\n\n' +
     'THE BUSINESS: ' + (businessContext || '').slice(0, 1500) + '\n\n' +
-    'TARGET GROUP: ' + groupName + '\n' +
-    (group ? 'WHY: ' + group.why + '\nOFFER: ' + group.offer + '\nTRIGGER: ' + group.trigger + '\n' : '') +
+    'TARGET GROUPS:' + groupsContext +
     '\nCANDIDATES:\n' + candidateList + '\n\n' +
-    'Score each candidate 1-10 for fit. Write a one-line reason citing ONLY facts from the data above ' +
+    'Score each candidate 1-10 for fit against their assigned group. Write a one-line reason citing ONLY facts from the data above ' +
     '(name, location, rating, review count, type). Never mention anything not in the data.\n\n' +
-    'Reject (score 0) candidates that clearly do not match the target group.\n\n' +
+    'Reject (score 0) candidates that clearly do not match their target group.\n\n' +
     'Output ONLY JSON array:\n[{"idx":1,"score":8,"reason":"..."},...]';
 
   var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
@@ -2545,7 +2591,79 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
   return leads;
 }
 
-/* ── Run daily leads for one firm ── */
+/* ── Pool helpers — read/write lead_pool in D1 ── */
+
+/* Read fresh pool candidates for a firm (not yet promoted to customers, < 30 days old) */
+async function readPool(env, firmCode) {
+  if (!env.DB) return [];
+  try {
+    var cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    var rows = await env.DB.prepare(
+      "SELECT place_id, group_name, query, facts, found_at FROM lead_pool WHERE firm_code = ? AND found_at > ? ORDER BY found_at DESC"
+    ).bind(firmCode, cutoff).all();
+    return (rows.results || []).map(function(r) {
+      var f = {};
+      try { f = JSON.parse(r.facts || '{}'); } catch (e) {}
+      return {
+        placeId: r.place_id,
+        name: f.name || '',
+        primaryType: f.primaryType || '',
+        rating: f.rating || 0,
+        reviews: f.ratingCount || 0,
+        status: f.businessStatus || '',
+        types: f.types || [],
+        lat: f.lat || 0,
+        lng: f.lng || 0,
+        _groupName: r.group_name,
+        _query: r.query,
+        _fromPool: true
+      };
+    });
+  } catch (e) { return []; }
+}
+
+/* Write new candidates to pool (ignore duplicates via ON CONFLICT) */
+async function writePool(env, firmCode, candidates) {
+  if (!env.DB || candidates.length === 0) return;
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    if (!c.placeId) continue;
+    var facts = JSON.stringify({
+      name: c.name, primaryType: c.primaryType || '', types: (c.types || []).slice(0, 8),
+      lat: c.lat, lng: c.lng, rating: c.rating, ratingCount: c.reviews,
+      businessStatus: c.status || ''
+    });
+    try {
+      await env.DB.prepare(
+        "INSERT INTO lead_pool (firm_code, place_id, group_name, query, facts) VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT (firm_code, place_id) DO NOTHING"
+      ).bind(firmCode, c.placeId, c._groupName || '', c._query || '', facts).run();
+    } catch (e) {}
+  }
+}
+
+/* Remove candidates from pool (promoted to customers or expired) */
+async function removeFromPool(env, firmCode, placeIds) {
+  if (!env.DB || placeIds.length === 0) return;
+  for (var i = 0; i < placeIds.length; i++) {
+    try {
+      await env.DB.prepare("DELETE FROM lead_pool WHERE firm_code = ? AND place_id = ?")
+        .bind(firmCode, placeIds[i]).run();
+    } catch (e) {}
+  }
+}
+
+/* Purge expired pool entries (> 30 days old) */
+async function purgeExpiredPool(env, firmCode) {
+  if (!env.DB) return;
+  try {
+    var cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    await env.DB.prepare("DELETE FROM lead_pool WHERE firm_code = ? AND found_at <= ?")
+      .bind(firmCode, cutoff).run();
+  } catch (e) {}
+}
+
+/* ── Main lead generation — pool-first, max 1-2 Text Search/day ── */
 async function runLeadsForFirm(env, firmCode, day, cost) {
   var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
   if (!profileJson) return { status: 'no_profile' };
@@ -2559,11 +2677,6 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
   var existing = await env.G7_KV.get(todayKey);
   if (existing) return { status: 'already_generated' };
-
-  /* Check Places daily cap (40 calls/firm/day) */
-  var placesDayKey = 'scout:leads:places:' + firmCode + ':' + day;
-  var placesUsed = parseInt(await env.G7_KV.get(placesDayKey) || '0', 10);
-  if (placesUsed >= 40) return { status: 'places_cap' };
 
   /* Budget check */
   var bc = await budgetCheck(env, day, firmCode);
@@ -2589,11 +2702,9 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var typeMatch = context.match(/TYPE:\s*(.+)/);
   if (typeMatch) ownCategory = typeMatch[1].trim().toLowerCase();
 
-  /* Determine rotation: pick (group, area) pairs for today */
   var enabledGroups = profileJson.groups.filter(function(g) { return g.enabled !== false; });
   if (enabledGroups.length === 0) return { status: 'no_enabled_groups' };
 
-  /* Use day-of-year as rotation index */
   var dayOfYear = Math.floor((new Date(day + 'T00:00:00Z').getTime() - new Date(day.slice(0, 4) + '-01-01T00:00:00Z').getTime()) / 86400000);
   var areas = profileJson.areas || [];
   if (areas.length === 0) areas = [city || ''];
@@ -2607,175 +2718,248 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
       ).bind(firmCode).all();
       (statsRows.results || []).forEach(function(r) {
         if (r.td >= 10 && r.td > 0 && r.td / (r.tu + r.td) >= 0.6) {
-          groupWeights[r.group_name] = 0.3; /* Downweight groups with 60%+ thumbs down */
+          groupWeights[r.group_name] = 0.3;
         }
       });
     } catch (e) {}
   }
 
-  /* Collect all candidates across groups */
-  var allCandidates = [];
-  var placesCallCount = 0;
+  /* ── STEP 1: Read pool ── */
+  await purgeExpiredPool(env, firmCode);
+  var pool = await readPool(env, firmCode);
+
+  /* Remove pool entries that are already customers */
+  var existingPlaceIds = new Set();
+  if (env.DB) {
+    try {
+      var existRows = await env.DB.prepare(
+        "SELECT place_id FROM customers WHERE firm_code = ? AND place_id IS NOT NULL"
+      ).bind(firmCode).all();
+      (existRows.results || []).forEach(function(r) { if (r.place_id) existingPlaceIds.add(r.place_id); });
+    } catch (e) {}
+  }
+  pool = pool.filter(function(p) { return !existingPlaceIds.has(p.placeId); });
+
+  var textSearchCalls = 0;
+  var detailsCalls = 0;
   var shortfallReasons = [];
 
-  for (var gi = 0; gi < enabledGroups.length; gi++) {
-    var group = enabledGroups[(gi + dayOfYear) % enabledGroups.length];
+  /* ── STEP 2: Search Places only when pool < 10 fresh candidates ── */
+  if (pool.length < 10) {
+    /* Pick today's (group, area) via rotation */
+    var group = enabledGroups[dayOfYear % enabledGroups.length];
     var queries = group.queries || [];
-    if (queries.length === 0) continue;
-
-    /* Apply learning: skip downweighted groups 70% of the time */
-    var gw = groupWeights[group.name];
-    if (gw && gw < 1 && Math.random() > gw) continue;
-
-    /* Pick today's query (rotate) */
-    var queryIdx = dayOfYear % queries.length;
-    var query = queries[queryIdx];
-
-    /* Pick today's area (rotate) */
-    var areaIdx = (dayOfYear + gi) % areas.length;
-    var area = areas[areaIdx];
-
-    /* Geocode area: use city center as fallback, append area to query */
-    var searchQuery = query + ' near ' + area + (city ? ', ' + city : '');
-    var radiusM = (profileJson.radiusKm || 3) * 1000;
-
-    /* Get area coordinates — use a simple search for the area name */
-    var lat = 0, lng = 0;
-    try {
-      var geoResults = await placesTextSearch(env, area + (city ? ', ' + city : ''), 0, 0, 50000, 1);
-      placesCallCount++;
-      if (geoResults.length > 0) { lat = geoResults[0].lat; lng = geoResults[0].lng; }
-    } catch (e) {
-      shortfallReasons.push('geo_failed:' + area);
+    if (queries.length > 0) {
+      /* Apply learning: skip downweighted groups 70% of the time */
+      var gw = groupWeights[group.name];
+      var skipGroup = gw && gw < 1 && Math.random() > gw;
+      if (skipGroup) {
+        /* Fall through to next group */
+        group = enabledGroups[(dayOfYear + 1) % enabledGroups.length];
+        queries = group.queries || [];
+      }
     }
 
-    if (placesUsed + placesCallCount >= 40) {
-      shortfallReasons.push('places_cap_reached');
-      break;
-    }
+    if (queries.length > 0) {
+      var queryIdx = dayOfYear % queries.length;
+      var query = queries[queryIdx];
+      var areaIdx = dayOfYear % areas.length;
+      var area = areas[areaIdx];
 
-    try {
-      var results = await placesTextSearch(env, searchQuery, lat, lng, radiusM, 20);
-      placesCallCount++;
+      var searchQuery = query + ' near ' + area + (city ? ', ' + city : '');
+      var radiusM = (profileJson.radiusKm || 3) * 1000;
 
-      /* Apply review size hint */
-      results = results.filter(function(r) {
-        if (group.minReviews && r.reviews < group.minReviews) return false;
-        if (group.maxReviews && r.reviews > group.maxReviews) return false;
-        return true;
-      });
-
-      /* Apply distance filter */
-      if (lat && lng) {
-        results = results.filter(function(r) {
-          if (!r.lat || !r.lng) return true;
-          return haversineKm(lat, lng, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
-        });
+      /* Use stored area coordinates (geocoded at profile creation).
+         Only call Places to geocode if coords are missing (old profiles). */
+      var areaCoords = (profileJson.areaCoords || {})[area];
+      var lat = areaCoords ? areaCoords.lat : 0;
+      var lng = areaCoords ? areaCoords.lng : 0;
+      if (!lat && !lng) {
+        try {
+          var geoResults = await placesTextSearch(env, area + (city ? ', ' + city : ''), 0, 0, 50000, 1);
+          textSearchCalls++;
+          if (geoResults.length > 0) {
+            lat = geoResults[0].lat; lng = geoResults[0].lng;
+            /* Cache for next time */
+            if (!profileJson.areaCoords) profileJson.areaCoords = {};
+            profileJson.areaCoords[area] = { lat: lat, lng: lng };
+            try { await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profileJson), { expirationTtl: 30 * 86400 }); } catch(e2) {}
+          }
+        } catch (e) {
+          shortfallReasons.push('geo_failed:' + area);
+        }
       }
 
-      /* Tag with group info */
-      results.forEach(function(r) {
-        r._groupName = group.name;
-        r._groupOffer = group.offer || '';
-        r._groupChannel = group.channel || 'message';
-        r._area = area;
-        r._query = query;
-        r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
-      });
+      /* 1st Text Search */
+      try {
+        var results = await placesTextSearch(env, searchQuery, lat, lng, radiusM, 20);
+        textSearchCalls++;
 
-      allCandidates = allCandidates.concat(results);
-    } catch (e) {
-      shortfallReasons.push('search_failed:' + group.name + ':' + String(e.message || e).slice(0, 100));
-      await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'places_search', message: String(e.message || e) });
-    }
-  }
+        /* Apply review size hint */
+        results = results.filter(function(r) {
+          if (group.minReviews && r.reviews < group.minReviews) return false;
+          if (group.maxReviews && r.reviews > group.maxReviews) return false;
+          return true;
+        });
 
-  /* Update Places daily counter and cost */
-  await kvPut(env, placesDayKey, String(placesUsed + placesCallCount), { expirationTtl: 86400 });
-  recordPlacesCost(cost, placesCallCount);
-
-  /* Hard filters */
-  var filtered = await filterPlacesCandidates(env, firmCode, allCandidates, profileJson, ownCategory);
-
-  if (filtered.length === 0) {
-    /* Shortfall: widen radius once */
-    if (shortfallReasons.indexOf('widened') === -1 && enabledGroups.length > 0 && placesUsed + placesCallCount < 38) {
-      var wGroup = enabledGroups[0];
-      var wQuery = (wGroup.queries || [])[0];
-      if (wQuery) {
-        try {
-          var wResults = await placesTextSearch(env, wQuery + ' in ' + (city || areas[0]), 0, 0, 15000, 20);
-          placesCallCount++;
-          wResults.forEach(function(r) {
-            r._groupName = wGroup.name;
-            r._groupOffer = wGroup.offer || '';
-            r._groupChannel = wGroup.channel || 'message';
-            r._area = city || areas[0];
-            r._query = wQuery;
+        /* Apply distance filter */
+        if (lat && lng) {
+          results = results.filter(function(r) {
+            if (!r.lat || !r.lng) return true;
+            return haversineKm(lat, lng, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
           });
-          filtered = await filterPlacesCandidates(env, firmCode, wResults, profileJson, ownCategory);
-          shortfallReasons.push('widened');
-        } catch (e) {
-          shortfallReasons.push('widen_failed');
+        }
+
+        /* Tag with group info */
+        results.forEach(function(r) {
+          r._groupName = group.name;
+          r._groupOffer = group.offer || '';
+          r._groupChannel = group.channel || 'message';
+          r._area = area;
+          r._query = query;
+          r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
+        });
+
+        /* Hard filter new search results */
+        var filtered = await filterPlacesCandidates(env, firmCode, results, profileJson, ownCategory);
+
+        /* Store filtered candidates in pool */
+        await writePool(env, firmCode, filtered);
+        pool = pool.concat(filtered);
+      } catch (e) {
+        shortfallReasons.push('search_failed:' + group.name + ':' + String(e.message || e).slice(0, 100));
+        await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'places_search', message: String(e.message || e) });
+      }
+
+      /* 2nd Text Search ONLY if pool still < 5 candidates */
+      if (pool.length < 5) {
+        var group2 = enabledGroups[(dayOfYear + 1) % enabledGroups.length];
+        var queries2 = group2.queries || [];
+        if (queries2.length > 0) {
+          var query2 = queries2[(dayOfYear + 1) % queries2.length];
+          var area2 = areas[(dayOfYear + 1) % areas.length];
+          var searchQuery2 = query2 + ' near ' + area2 + (city ? ', ' + city : '');
+          /* Use area2's stored coords if available */
+          var ac2 = (profileJson.areaCoords || {})[area2];
+          var lat2 = ac2 ? ac2.lat : lat;
+          var lng2 = ac2 ? ac2.lng : lng;
+          try {
+            var results2 = await placesTextSearch(env, searchQuery2, lat2, lng2, radiusM, 20);
+            textSearchCalls++;
+            results2 = results2.filter(function(r) {
+              if (group2.minReviews && r.reviews < group2.minReviews) return false;
+              if (group2.maxReviews && r.reviews > group2.maxReviews) return false;
+              return true;
+            });
+            if (lat2 && lng2) {
+              results2 = results2.filter(function(r) {
+                if (!r.lat || !r.lng) return true;
+                return haversineKm(lat2, lng2, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
+              });
+            }
+            results2.forEach(function(r) {
+              r._groupName = group2.name;
+              r._groupOffer = group2.offer || '';
+              r._groupChannel = group2.channel || 'message';
+              r._area = area2;
+              r._query = query2;
+              r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
+            });
+            var filtered2 = await filterPlacesCandidates(env, firmCode, results2, profileJson, ownCategory);
+            await writePool(env, firmCode, filtered2);
+            pool = pool.concat(filtered2);
+            shortfallReasons.push('2nd_search');
+          } catch (e) {
+            shortfallReasons.push('2nd_search_failed');
+          }
         }
       }
     }
-    /* Next group */
-    if (filtered.length === 0 && enabledGroups.length > 1 && placesUsed + placesCallCount < 38) {
-      var nextGroup = enabledGroups[(dayOfYear + 1) % enabledGroups.length];
-      var nQuery = (nextGroup.queries || [])[0];
-      if (nQuery) {
-        try {
-          var nResults = await placesTextSearch(env, nQuery + ' in ' + (city || areas[0]), 0, 0, 10000, 20);
-          placesCallCount++;
-          nResults.forEach(function(r) {
-            r._groupName = nextGroup.name;
-            r._groupOffer = nextGroup.offer || '';
-            r._groupChannel = nextGroup.channel || 'message';
-            r._area = city || areas[0];
-            r._query = nQuery;
-          });
-          filtered = await filterPlacesCandidates(env, firmCode, nResults, profileJson, ownCategory);
-          shortfallReasons.push('next_group');
-        } catch (e) {}
-      }
+  }
+
+  /* Deduplicate pool by placeId */
+  var seenIds = new Set();
+  pool = pool.filter(function(p) {
+    if (!p.placeId || seenIds.has(p.placeId)) return false;
+    seenIds.add(p.placeId);
+    return true;
+  });
+
+  /* Enrich pool candidates with group metadata (offer, channel, area) */
+  var groupMap = {};
+  enabledGroups.forEach(function(g) { groupMap[g.name] = g; });
+  pool.forEach(function(p) {
+    var g = groupMap[p._groupName];
+    if (g) {
+      if (!p._groupOffer) p._groupOffer = g.offer || '';
+      if (!p._groupChannel) p._groupChannel = g.channel || 'message';
+    } else {
+      if (!p._groupOffer) p._groupOffer = '';
+      if (!p._groupChannel) p._groupChannel = 'message';
     }
-  }
+    if (!p._area) p._area = areas[0] || '';
+  });
 
-  /* Update Places counter again */
-  await kvPut(env, placesDayKey, String(placesUsed + placesCallCount), { expirationTtl: 86400 });
+  /* Record Places cost (text searches only — details tracked separately below) */
+  recordPlacesCost(cost, textSearchCalls, 0);
 
-  if (filtered.length === 0) {
-    shortfallReasons.push('no_candidates_after_all_fallbacks');
+  if (pool.length === 0) {
+    shortfallReasons.push('no_candidates_after_pool_and_search');
     console.log(JSON.stringify({ leads: firmCode, day: day, shortfall: shortfallReasons }));
-    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, placesUsed: placesCallCount }), { expirationTtl: 2 * 86400 });
-    return { status: 'no_leads', shortfall: shortfallReasons, placesUsed: placesCallCount };
+    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls }), { expirationTtl: 2 * 86400 });
+    return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls };
   }
 
-  /* Fit scoring */
-  var scored = await scoreLeadFit(env, filtered, profileJson, filtered[0]._groupName, context, cost);
+  /* ── STEP 3: Fit scoring on pool candidates ── */
+  var scored = await scoreLeadFit(env, pool, profileJson, pool[0]._groupName, context, cost);
 
-  /* Pick top 5, balanced across groups */
+  /* ── STEP 4: Pick top 5, balanced across groups ── */
   var picked = [];
   var groupCounts = {};
   scored.forEach(function(s) {
     if (picked.length >= 5) return;
     var gn = s._groupName;
     groupCounts[gn] = (groupCounts[gn] || 0);
-    if (groupCounts[gn] >= 3) return; /* max 3 from one group */
-    /* Reachable rule: needs WhatsApp, call or email. Visit-only for visit groups */
-    if (s._groupChannel !== 'visit' && !s.phone && !s.website) return;
+    if (groupCounts[gn] >= 3) return;
     picked.push(s);
     groupCounts[gn]++;
   });
 
-  /* Enrich with website data */
+  if (picked.length === 0) {
+    shortfallReasons.push('no_scored_candidates');
+    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls }), { expirationTtl: 2 * 86400 });
+    return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls };
+  }
+
+  /* ── STEP 5: Fetch Place Details for final picked leads (phone, website, address) ── */
+  for (var di = 0; di < picked.length; di++) {
+    if (picked[di].placeId) {
+      try {
+        var details = await placeDetails(env, picked[di].placeId);
+        detailsCalls++;
+        picked[di].address = details.address;
+        picked[di].phone = details.phone;
+        picked[di].website = details.website;
+        picked[di].mapsUrl = details.mapsUrl;
+      } catch (e) {
+        picked[di].address = '';
+        picked[di].phone = '';
+        picked[di].website = '';
+        picked[di].mapsUrl = '';
+        shortfallReasons.push('details_failed:' + picked[di].placeId);
+      }
+    }
+  }
+
+  /* Record Place Details cost */
+  recordPlacesCost(cost, 0, detailsCalls);
+
+  /* ── STEP 6: Enrich with website data, classify phone, determine channels ── */
   for (var pi = 0; pi < picked.length; pi++) {
     try {
       var enriched = await enrichLeadWebsite(picked[pi].website);
       picked[pi].enrichment = enriched;
       picked[pi].phoneType = classifyIndianPhone(picked[pi].phone);
-      /* Determine best channels */
       var channels = [];
       var phoneDig = (picked[pi].phone || '').replace(/\D/g, '').slice(-10);
       if (phoneDig.length === 10 && phoneDig[0] >= '6') channels.push('whatsapp');
@@ -2799,7 +2983,11 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   /* Generate messages */
   picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost);
 
-  /* Save to D1 as customers with stage=found, source=places */
+  /* ── STEP 7: Remove promoted leads from pool ── */
+  var promotedIds = picked.map(function(p) { return p.placeId; }).filter(Boolean);
+  await removeFromPool(env, firmCode, promotedIds);
+
+  /* ── STEP 8: Save to D1 as customers with stage=found, source=places ── */
   var savedLeads = [];
   if (env.DB) {
     for (var si = 0; si < picked.length; si++) {
@@ -2811,7 +2999,7 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
         group: lead._groupName,
         fit_reason: lead.fitReason,
         fit_score: lead.fitScore,
-        facts: { rating: lead.rating, reviews: lead.reviews, types: lead.types.slice(0, 5), distance: lead._distance },
+        facts: { rating: lead.rating, reviews: lead.reviews, types: (lead.types || []).slice(0, 5), distance: lead._distance },
         channels: lead.channels,
         messages: lead.messages,
         enrichment: lead.enrichment || {},
@@ -2865,28 +3053,32 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
     leads: savedLeads,
     day: day,
     shortfall: shortfallReasons.length > 0 ? shortfallReasons : null,
-    placesUsed: placesCallCount,
+    textSearchCalls: textSearchCalls,
+    detailsCalls: detailsCalls,
+    poolSize: pool.length - picked.length,
     generatedAt: new Date().toISOString()
   };
   await kvPut(env, todayKey, JSON.stringify(leadsResult), { expirationTtl: 2 * 86400 });
 
   console.log(JSON.stringify({
     leads: firmCode, day: day, found: savedLeads.length,
-    placesUsed: placesCallCount, shortfall: shortfallReasons
+    textSearchCalls: textSearchCalls, detailsCalls: detailsCalls,
+    poolSize: pool.length - picked.length, shortfall: shortfallReasons
   }));
 
-  return { status: 'ok', found: savedLeads.length, placesUsed: placesCallCount, shortfall: shortfallReasons };
+  return { status: 'ok', found: savedLeads.length, textSearchCalls: textSearchCalls, detailsCalls: detailsCalls, poolSize: pool.length - picked.length, shortfall: shortfallReasons };
 }
 
 /* ── Places cost entries for COST_TABLE ──
-   Google Places Text Search (New) — Basic SKU:
-   $0.032 per request (up to $32/1000).
+   Google Places Text Search (New) — Basic SKU: $0.032 per request
+   Google Place Details (New) — Basic SKU:      $0.005 per request
    We track this separately from Anthropic costs. */
-var PLACES_COST_PER_CALL = 0.032;
+var PLACES_TEXT_SEARCH_COST = 0.032;
+var PLACES_DETAILS_COST = 0.005;
 
-function recordPlacesCost(cost, calls) {
+function recordPlacesCost(cost, textSearchCalls, detailsCalls) {
   if (!cost) return;
-  cost.usd += calls * PLACES_COST_PER_CALL;
+  cost.usd += (textSearchCalls || 0) * PLACES_TEXT_SEARCH_COST + (detailsCalls || 0) * PLACES_DETAILS_COST;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5778,7 +5970,9 @@ export default {
               day: _alDay,
               count: (_alData && _alData.leads) ? _alData.leads.length : 0,
               shortfall: (_alData && _alData.shortfall) || null,
-              placesUsed: (_alData && _alData.placesUsed) || 0,
+              textSearchCalls: (_alData && _alData.textSearchCalls) || (_alData && _alData.placesUsed) || 0,
+              detailsCalls: (_alData && _alData.detailsCalls) || 0,
+              poolSize: (_alData && _alData.poolSize) || 0,
               generatedAt: (_alData && _alData.generatedAt) || null
             });
           }
@@ -5794,7 +5988,7 @@ export default {
         for (var _alK2 of _alPage2.keys) {
           if (_alK2.name.indexOf(':' + _alDay) !== -1) {
             var _alVal = parseInt(await env.G7_KV.get(_alK2.name) || '0', 10);
-            _alPlacesCost += _alVal * PLACES_COST_PER_CALL;
+            _alPlacesCost += _alVal * PLACES_TEXT_SEARCH_COST;
           }
         }
         _alCursor2 = _alPage2.list_complete ? undefined : _alPage2.cursor;
