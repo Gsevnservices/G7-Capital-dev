@@ -417,6 +417,7 @@ async function flushCost(env, day, firmCode, cost) {
    Returns { ok, used, limit, feature } */
 var FEAT_LIMITS = {
   ask:      { paid: 10, free: 3 },   /* Ask Scout = /scout/briefing */
+  /* leads uses custom gate: paid 5/day, free 5 lifetime — see /scout/leads routes */
   /* news + move are once-a-day via cron/cache — no counter needed.
      analyse + checkin keep their existing monthly gates. */
 };
@@ -506,7 +507,8 @@ var PAID_LIMITS = {
   ask:      { limit: 10, period: 'day' },
   analysis: { limit: 3,  period: 'month' },
   checkin:  { limit: 8,  period: 'month' },
-  places:   { limit: 5,  period: 'day' }
+  places:   { limit: 5,  period: 'day' },
+  leads:    { limit: 5,  period: 'day' }
 };
 
 function limitResponse(feature, plan, used, limit, period, message, reason) {
@@ -2081,6 +2083,810 @@ async function findBusinesses(env, query, cap, cost) {
   } catch (e) {}
 
   return out.slice(0, want);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CUSTOMER FINDER v2 — daily verified leads from Google Places
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/* ── B2C partner map — hardcoded groups that Haiku may extend ── */
+var B2C_PARTNER_MAP = {
+  gym:        ['physios','dieticians','sports stores','small offices','coaching centres','college sports cells','societies'],
+  cafe:       ['small offices','co-working spaces','coaching centres','colleges','event planners','nearby shops'],
+  restaurant: ['small offices','co-working spaces','coaching centres','colleges','event planners','nearby shops'],
+  salon:      ['boutiques','bridal stores','wedding planners','photographers','makeup academies'],
+  clinic:     ['gyms','pharmacies','labs','schools','offices'],
+  tutor:      ['schools','play schools','bookstores','stationery shops'],
+  _default:   ['small offices','societies','complementary businesses']
+};
+
+/* ── Places Text Search (New) — single search call ── */
+async function placesTextSearch(env, query, lat, lng, radiusM, maxResults) {
+  if (!env.GOOGLE_PLACES_KEY) throw new Error('No GOOGLE_PLACES_KEY');
+  var body = {
+    textQuery: query,
+    maxResultCount: Math.min(maxResults || 20, 20)
+  };
+  if (lat && lng) {
+    body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: Math.min(radiusM || 5000, 50000) } };
+  }
+  var r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': env.GOOGLE_PLACES_KEY,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.businessStatus,places.types,places.websiteUri,places.googleMapsUri,places.location'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) {
+    var errText = await r.text().catch(function() { return ''; });
+    throw new Error('Places API ' + r.status + ': ' + errText.slice(0, 200));
+  }
+  var data = await r.json();
+  return (data.places || []).map(function(p) {
+    return {
+      placeId: p.id || '',
+      name: (p.displayName && p.displayName.text) || '',
+      address: p.formattedAddress || '',
+      phone: p.nationalPhoneNumber || p.internationalPhoneNumber || '',
+      rating: p.rating || 0,
+      reviews: p.userRatingCount || 0,
+      status: p.businessStatus || '',
+      types: p.types || [],
+      website: p.websiteUri || '',
+      mapsUrl: p.googleMapsUri || '',
+      lat: (p.location && p.location.latitude) || 0,
+      lng: (p.location && p.location.longitude) || 0
+    };
+  });
+}
+
+/* ── Haversine distance in km ── */
+function haversineKm(lat1, lng1, lat2, lng2) {
+  var toRad = Math.PI / 180;
+  var dLat = (lat2 - lat1) * toRad;
+  var dLng = (lng2 - lng1) * toRad;
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/* ── Known chains (lowercase) — places with same name 3+ times are also flagged ── */
+var KNOWN_CHAINS = [
+  'starbucks','mcdonald','subway','domino','pizza hut','burger king','kfc',
+  'cafe coffee day','ccd','costa coffee','tim hortons','dunkin',
+  'jawed habib','lakme salon','naturals salon','vlcc','apollo pharmacy',
+  'medplus','netmeds','reliance digital','croma','lenskart',
+  'byju','unacademy','whitehat','vedantu','allen','aakash','fiitjee',
+  'kidzee','eurokids','podar','smartkidz','decathlon','cult.fit','anytime fitness',
+  'gold gym','talwalkars','snap fitness'
+];
+
+/* ── Lead profile generation (Haiku) ──
+   Reads the analysis, generates groups with search queries, areas, exclusions.
+   KV key: scout:leadprofile:{FIRM}
+   Also stores scout:leadprofile:src:{FIRM} = hash of analysis text that generated it.
+*/
+async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
+  /* Extract business type from analysis */
+  var typeLine = '';
+  var sellsLine = '';
+  var lines = String(analysisText || '').split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].indexOf('TYPE:') === 0) typeLine = lines[i].slice(5).trim();
+    if (lines[i].indexOf('SELLS:') === 0) sellsLine = lines[i].slice(6).trim();
+  }
+
+  var isB2B = /\bb2b\b|wholesale|distributor|manufacturer|exporter|supplier/i.test(typeLine + ' ' + sellsLine + ' ' + analysisText.slice(0, 2000));
+
+  var partnerHint = '';
+  if (!isB2B) {
+    /* Find matching B2C partner map */
+    var bucket = (typeLine + ' ' + sellsLine).toLowerCase();
+    var matched = null;
+    for (var bk in B2C_PARTNER_MAP) {
+      if (bk === '_default') continue;
+      if (bucket.indexOf(bk) !== -1) { matched = B2C_PARTNER_MAP[bk]; break; }
+    }
+    if (!matched) matched = B2C_PARTNER_MAP._default;
+    partnerHint = '\n\nThis is a B2C business. Focus on GROUP BUYERS and PARTNERS who can send repeat customers, not individual consumers. ' +
+      'Start with these partner types: ' + matched.join(', ') + '. You may add 1-2 more if clearly relevant.';
+  }
+
+  var prompt = 'You are a lead-generation strategist for small businesses in India.\n\n' +
+    'BUSINESS ANALYSIS:\n' + analysisText.slice(0, 6000) + '\n\nCITY: ' + (city || 'not specified') +
+    partnerHint +
+    '\n\nGenerate a lead profile as JSON. The profile tells a search engine WHO to find for this business.\n\n' +
+    'Rules:\n' +
+    '- 2-4 groups, each a distinct type of potential customer/partner\n' +
+    '- Each group gets 2-4 Google Places search queries (specific, local, realistic)\n' +
+    '- placesTypes: Google Places types that match (e.g. "gym", "school", "accounting")\n' +
+    '- areas: 3-6 specific localities/neighbourhoods near the business, realistic for the city\n' +
+    '- exclude: competitor types, chains, irrelevant categories\n' +
+    '- trigger: a one-line reason why this group would buy\n' +
+    '- channel: "message" (WhatsApp/call) or "visit" (walk-in pitch)\n' +
+    '- minReviews/maxReviews: size hint (e.g. small offices 0-50 reviews, large ones 50+)\n\n' +
+    'Output ONLY this JSON, no other text:\n' +
+    '{"groups":[{"name":"...","why":"...","offer":"...","placesTypes":["..."],"queries":["..."],' +
+    '"minReviews":0,"maxReviews":100,"trigger":"...","channel":"message"}],' +
+    '"areas":["..."],"radiusKm":3,"exclude":["..."]}';
+
+  var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      thinking: { type: 'disabled' },
+      messages: [{ role: 'user', content: prompt }]
+    })
+  }, 'leads/profile');
+  if (!r.ok) throw new Error('Haiku profile ' + r.status);
+  var data = await r.json();
+  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+
+  var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+  var profile;
+  try {
+    var j1 = text.indexOf('{'), j2 = text.lastIndexOf('}');
+    if (j1 !== -1 && j2 > j1) profile = JSON.parse(text.slice(j1, j2 + 1));
+  } catch (e) { throw new Error('Could not parse lead profile JSON'); }
+  if (!profile || !Array.isArray(profile.groups) || profile.groups.length === 0) {
+    throw new Error('Lead profile has no groups');
+  }
+
+  /* Sanitize and validate */
+  profile.groups = profile.groups.slice(0, 6).map(function(g) {
+    return {
+      name: String(g.name || '').slice(0, 60),
+      why: String(g.why || '').slice(0, 200),
+      offer: String(g.offer || '').slice(0, 200),
+      placesTypes: (Array.isArray(g.placesTypes) ? g.placesTypes : []).slice(0, 8),
+      queries: (Array.isArray(g.queries) ? g.queries : []).slice(0, 4).map(function(q) { return String(q).slice(0, 120); }),
+      minReviews: typeof g.minReviews === 'number' ? g.minReviews : 0,
+      maxReviews: typeof g.maxReviews === 'number' ? g.maxReviews : 200,
+      trigger: String(g.trigger || '').slice(0, 200),
+      channel: g.channel === 'visit' ? 'visit' : 'message',
+      enabled: true
+    };
+  });
+  profile.areas = (Array.isArray(profile.areas) ? profile.areas : []).slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
+  profile.radiusKm = typeof profile.radiusKm === 'number' ? Math.min(profile.radiusKm, 15) : 3;
+  profile.exclude = (Array.isArray(profile.exclude) ? profile.exclude : []).slice(0, 20).map(function(e) { return String(e).slice(0, 60).toLowerCase(); });
+  profile.confirmedAt = null;
+  profile.createdAt = new Date().toISOString();
+
+  return profile;
+}
+
+/* ── Hard filters for Places candidates ── */
+async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCategory) {
+  /* Load existing place_ids and phones for this firm (including deleted) */
+  var existingPlaces = new Set();
+  var existingPhones = new Set();
+  if (env.DB) {
+    try {
+      var rows = await env.DB.prepare(
+        "SELECT place_id, phone FROM customers WHERE firm_code = ? AND place_id IS NOT NULL"
+      ).bind(firmCode).all();
+      (rows.results || []).forEach(function(r) {
+        if (r.place_id) existingPlaces.add(r.place_id);
+        if (r.phone) existingPhones.add(r.phone.replace(/\D/g, '').slice(-10));
+      });
+    } catch (e) {}
+    /* Also check phones without place_id */
+    try {
+      var phoneRows = await env.DB.prepare(
+        "SELECT phone FROM customers WHERE firm_code = ? AND phone != ''"
+      ).bind(firmCode).all();
+      (phoneRows.results || []).forEach(function(r) {
+        if (r.phone) existingPhones.add(r.phone.replace(/\D/g, '').slice(-10));
+      });
+    } catch (e) {}
+  }
+
+  var excludeSet = new Set(profile.exclude || []);
+  if (ownCategory) excludeSet.add(ownCategory.toLowerCase());
+
+  /* Track name frequency for chain detection */
+  var nameCounts = {};
+  candidates.forEach(function(c) {
+    var key = c.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    nameCounts[key] = (nameCounts[key] || 0) + 1;
+  });
+
+  var out = [];
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+
+    /* Not operational */
+    if (c.status && c.status !== 'OPERATIONAL') continue;
+
+    /* Duplicate place_id */
+    if (c.placeId && existingPlaces.has(c.placeId)) continue;
+
+    /* Duplicate phone */
+    if (c.phone) {
+      var phoneTail = c.phone.replace(/\D/g, '').slice(-10);
+      if (phoneTail.length >= 10 && existingPhones.has(phoneTail)) continue;
+    }
+
+    /* Excluded types */
+    var excluded = false;
+    for (var j = 0; j < c.types.length; j++) {
+      if (excludeSet.has(c.types[j].toLowerCase())) { excluded = true; break; }
+    }
+    if (excluded) continue;
+
+    /* Excluded by name pattern */
+    var nameLower = c.name.toLowerCase();
+    for (var ex of excludeSet) {
+      if (nameLower.indexOf(ex) !== -1) { excluded = true; break; }
+    }
+    if (excluded) continue;
+
+    /* Known chain */
+    var isChain = false;
+    for (var k = 0; k < KNOWN_CHAINS.length; k++) {
+      if (nameLower.indexOf(KNOWN_CHAINS[k]) !== -1) { isChain = true; break; }
+    }
+    if (isChain) continue;
+
+    /* Same name 3+ times = chain */
+    var nameKey = nameLower.replace(/[^a-z0-9]/g, '');
+    if (nameCounts[nameKey] >= 3) continue;
+
+    out.push(c);
+  }
+
+  return out;
+}
+
+/* ── Haiku fit scoring: score candidates and write a fact-based reason ── */
+async function scoreLeadFit(env, candidates, profile, groupName, businessContext, cost) {
+  if (candidates.length === 0) return [];
+  var batch = candidates.slice(0, 30);
+
+  var candidateList = batch.map(function(c, i) {
+    return (i + 1) + '. ' + c.name + ' | ' + c.address + ' | rating:' + c.rating +
+      ' reviews:' + c.reviews + ' | types:' + c.types.slice(0, 5).join(',');
+  }).join('\n');
+
+  var group = null;
+  for (var g = 0; g < profile.groups.length; g++) {
+    if (profile.groups[g].name === groupName) { group = profile.groups[g]; break; }
+  }
+
+  var prompt = 'You are scoring leads for a small business.\n\n' +
+    'THE BUSINESS: ' + (businessContext || '').slice(0, 1500) + '\n\n' +
+    'TARGET GROUP: ' + groupName + '\n' +
+    (group ? 'WHY: ' + group.why + '\nOFFER: ' + group.offer + '\nTRIGGER: ' + group.trigger + '\n' : '') +
+    '\nCANDIDATES:\n' + candidateList + '\n\n' +
+    'Score each candidate 1-10 for fit. Write a one-line reason citing ONLY facts from the data above ' +
+    '(name, location, rating, review count, type). Never mention anything not in the data.\n\n' +
+    'Reject (score 0) candidates that clearly do not match the target group.\n\n' +
+    'Output ONLY JSON array:\n[{"idx":1,"score":8,"reason":"..."},...]';
+
+  var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2000,
+      thinking: { type: 'disabled' },
+      messages: [{ role: 'user', content: prompt }]
+    })
+  }, 'leads/fit');
+  if (!r.ok) throw new Error('Haiku fit ' + r.status);
+  var data = await r.json();
+  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+
+  var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+  var scores = [];
+  try {
+    var a1 = text.indexOf('['), a2 = text.lastIndexOf(']');
+    if (a1 !== -1 && a2 > a1) scores = JSON.parse(text.slice(a1, a2 + 1));
+  } catch (e) {}
+
+  /* Merge scores back into candidates */
+  var scoreMap = {};
+  (Array.isArray(scores) ? scores : []).forEach(function(s) {
+    if (s && typeof s.idx === 'number') scoreMap[s.idx] = s;
+  });
+  var result = [];
+  for (var i = 0; i < batch.length; i++) {
+    var s = scoreMap[i + 1];
+    if (!s || s.score <= 0) continue;
+    var entry = Object.assign({}, batch[i]);
+    entry.fitScore = s.score || 0;
+    entry.fitReason = String(s.reason || '').slice(0, 200);
+    result.push(entry);
+  }
+  result.sort(function(a, b) { return b.fitScore - a.fitScore; });
+  return result;
+}
+
+/* ── Website enrichment: fetch homepage + /contact, extract contact info ── */
+async function enrichLeadWebsite(website) {
+  if (!website) return {};
+  var result = { emails: [], mobiles: [], waLinks: [], linkedIn: '' };
+  var urls = [website];
+  /* Try /contact page too */
+  try {
+    var base = new URL(website);
+    var contactUrl = base.origin + '/contact';
+    if (contactUrl !== website) urls.push(contactUrl);
+  } catch (e) {}
+
+  for (var i = 0; i < urls.length; i++) {
+    try {
+      var controller = new AbortController();
+      var timeout = setTimeout(function() { controller.abort(); }, 5000);
+      var r = await fetch(urls[i], {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'G7Scout/1.0' },
+        redirect: 'follow'
+      });
+      clearTimeout(timeout);
+      if (!r.ok) continue;
+      /* Cap at 200KB */
+      var text = await r.text();
+      text = text.slice(0, 200000);
+
+      /* Extract emails */
+      var emailMatches = text.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [];
+      emailMatches.forEach(function(e) {
+        var lower = e.toLowerCase();
+        if (lower.indexOf('example.com') === -1 && lower.indexOf('sentry.io') === -1 &&
+            lower.indexOf('wixpress') === -1 && result.emails.indexOf(lower) === -1) {
+          result.emails.push(lower);
+        }
+      });
+
+      /* Extract Indian mobiles (10 digits starting with 6-9) */
+      var phoneMatches = text.match(/(?:\+91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}/g) || [];
+      phoneMatches.forEach(function(p) {
+        var digits = p.replace(/\D/g, '').slice(-10);
+        if (digits.length === 10 && result.mobiles.indexOf(digits) === -1) {
+          result.mobiles.push(digits);
+        }
+      });
+
+      /* wa.me links */
+      var waMatches = text.match(/wa\.me\/\d+/g) || [];
+      waMatches.forEach(function(w) {
+        if (result.waLinks.indexOf(w) === -1) result.waLinks.push(w);
+      });
+
+      /* LinkedIn company page */
+      var liMatch = text.match(/https?:\/\/(?:www\.)?linkedin\.com\/company\/[a-zA-Z0-9\-]+/);
+      if (liMatch && !result.linkedIn) result.linkedIn = liMatch[0];
+    } catch (e) { /* timeout or fetch error — skip */ }
+  }
+
+  return result;
+}
+
+/* ── Classify phone as mobile or landline ── */
+function classifyIndianPhone(phone) {
+  var digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length > 10) digits = digits.slice(-10);
+  if (digits.length < 10) return 'unknown';
+  var first = digits[0];
+  return (first >= '6' && first <= '9') ? 'mobile' : 'landline';
+}
+
+/* ── Generate messages with Haiku ── */
+async function generateLeadMessages(env, leads, profile, businessContext, lang, cost) {
+  if (leads.length === 0) return leads;
+
+  var leadDescs = leads.map(function(l, i) {
+    return (i + 1) + '. ' + l.name + ' (' + l._groupName + ') — ' + l.fitReason;
+  }).join('\n');
+
+  var prompt = 'You write short business outreach messages for a small business owner in India.\n\n' +
+    'BUSINESS: ' + (businessContext || '').slice(0, 1000) + '\n\n' +
+    'LANGUAGE: ' + (lang || 'Hinglish') + '\n\n' +
+    'LEADS:\n' + leadDescs + '\n\n' +
+    'For each lead, write:\n' +
+    '1. first_message: a WhatsApp-style intro (2-3 sentences, friendly, specific to their business)\n' +
+    '2. reminder1: follow-up after 2 days if no reply (1-2 sentences)\n' +
+    '3. reminder2: final follow-up after 4 days (1-2 sentences)\n' +
+    '4. visit_pitch: 30-second in-person pitch (2-3 sentences, for walk-in)\n\n' +
+    'Use informal greeting style appropriate for the language. Keep it short and natural.\n\n' +
+    'Output ONLY JSON array:\n[{"idx":1,"first_message":"...","reminder1":"...","reminder2":"...","visit_pitch":"..."},...]';
+
+  var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 3000,
+      thinking: { type: 'disabled' },
+      messages: [{ role: 'user', content: prompt }]
+    })
+  }, 'leads/messages');
+  if (!r.ok) throw new Error('Haiku messages ' + r.status);
+  var data = await r.json();
+  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+
+  var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+  var msgs = [];
+  try {
+    var a1 = text.indexOf('['), a2 = text.lastIndexOf(']');
+    if (a1 !== -1 && a2 > a1) msgs = JSON.parse(text.slice(a1, a2 + 1));
+  } catch (e) {}
+
+  var msgMap = {};
+  (Array.isArray(msgs) ? msgs : []).forEach(function(m) { if (m && typeof m.idx === 'number') msgMap[m.idx] = m; });
+
+  for (var i = 0; i < leads.length; i++) {
+    var m = msgMap[i + 1] || {};
+    leads[i].messages = {
+      first: String(m.first_message || '').slice(0, 500),
+      reminder1: String(m.reminder1 || '').slice(0, 300),
+      reminder2: String(m.reminder2 || '').slice(0, 300),
+      visitPitch: String(m.visit_pitch || '').slice(0, 400)
+    };
+  }
+  return leads;
+}
+
+/* ── Run daily leads for one firm ── */
+async function runLeadsForFirm(env, firmCode, day, cost) {
+  var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  if (!profileJson) return { status: 'no_profile' };
+  if (!profileJson.confirmedAt) {
+    /* Auto-start 24h after creation */
+    var createdMs = new Date(profileJson.createdAt || 0).getTime();
+    if (Date.now() - createdMs < 24 * 3600000) return { status: 'awaiting_confirmation' };
+  }
+
+  /* Check if leads already generated today */
+  var todayKey = 'scout:leads:' + firmCode + ':' + day;
+  var existing = await env.G7_KV.get(todayKey);
+  if (existing) return { status: 'already_generated' };
+
+  /* Check Places daily cap (40 calls/firm/day) */
+  var placesDayKey = 'scout:leads:places:' + firmCode + ':' + day;
+  var placesUsed = parseInt(await env.G7_KV.get(placesDayKey) || '0', 10);
+  if (placesUsed >= 40) return { status: 'places_cap' };
+
+  /* Budget check */
+  var bc = await budgetCheck(env, day, firmCode);
+  if (!bc.ok) return { status: 'budget_exceeded' };
+
+  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  if (!saved || !saved.context) return { status: 'no_context' };
+  var context = saved.context;
+  var city = saved.city || '';
+
+  /* Get language preference */
+  var lang = 'Hinglish';
+  try {
+    var st = await loadScoutState(env, firmCode);
+    if (st) {
+      var pr = st.pick('scout_pending_result');
+      if (pr && pr.language) lang = pr.language;
+    }
+  } catch (e) {}
+
+  /* Get own business category for exclusion */
+  var ownCategory = '';
+  var typeMatch = context.match(/TYPE:\s*(.+)/);
+  if (typeMatch) ownCategory = typeMatch[1].trim().toLowerCase();
+
+  /* Determine rotation: pick (group, area) pairs for today */
+  var enabledGroups = profileJson.groups.filter(function(g) { return g.enabled !== false; });
+  if (enabledGroups.length === 0) return { status: 'no_enabled_groups' };
+
+  /* Use day-of-year as rotation index */
+  var dayOfYear = Math.floor((new Date(day + 'T00:00:00Z').getTime() - new Date(day.slice(0, 4) + '-01-01T00:00:00Z').getTime()) / 86400000);
+  var areas = profileJson.areas || [];
+  if (areas.length === 0) areas = [city || ''];
+
+  /* Weight groups by learning stats */
+  var groupWeights = {};
+  if (env.DB) {
+    try {
+      var statsRows = await env.DB.prepare(
+        "SELECT group_name, SUM(thumbs_up) as tu, SUM(thumbs_down) as td FROM lead_stats WHERE firm_code = ? GROUP BY group_name"
+      ).bind(firmCode).all();
+      (statsRows.results || []).forEach(function(r) {
+        if (r.td >= 10 && r.td > 0 && r.td / (r.tu + r.td) >= 0.6) {
+          groupWeights[r.group_name] = 0.3; /* Downweight groups with 60%+ thumbs down */
+        }
+      });
+    } catch (e) {}
+  }
+
+  /* Collect all candidates across groups */
+  var allCandidates = [];
+  var placesCallCount = 0;
+  var shortfallReasons = [];
+
+  for (var gi = 0; gi < enabledGroups.length; gi++) {
+    var group = enabledGroups[(gi + dayOfYear) % enabledGroups.length];
+    var queries = group.queries || [];
+    if (queries.length === 0) continue;
+
+    /* Apply learning: skip downweighted groups 70% of the time */
+    var gw = groupWeights[group.name];
+    if (gw && gw < 1 && Math.random() > gw) continue;
+
+    /* Pick today's query (rotate) */
+    var queryIdx = dayOfYear % queries.length;
+    var query = queries[queryIdx];
+
+    /* Pick today's area (rotate) */
+    var areaIdx = (dayOfYear + gi) % areas.length;
+    var area = areas[areaIdx];
+
+    /* Geocode area: use city center as fallback, append area to query */
+    var searchQuery = query + ' near ' + area + (city ? ', ' + city : '');
+    var radiusM = (profileJson.radiusKm || 3) * 1000;
+
+    /* Get area coordinates — use a simple search for the area name */
+    var lat = 0, lng = 0;
+    try {
+      var geoResults = await placesTextSearch(env, area + (city ? ', ' + city : ''), 0, 0, 50000, 1);
+      placesCallCount++;
+      if (geoResults.length > 0) { lat = geoResults[0].lat; lng = geoResults[0].lng; }
+    } catch (e) {
+      shortfallReasons.push('geo_failed:' + area);
+    }
+
+    if (placesUsed + placesCallCount >= 40) {
+      shortfallReasons.push('places_cap_reached');
+      break;
+    }
+
+    try {
+      var results = await placesTextSearch(env, searchQuery, lat, lng, radiusM, 20);
+      placesCallCount++;
+
+      /* Apply review size hint */
+      results = results.filter(function(r) {
+        if (group.minReviews && r.reviews < group.minReviews) return false;
+        if (group.maxReviews && r.reviews > group.maxReviews) return false;
+        return true;
+      });
+
+      /* Apply distance filter */
+      if (lat && lng) {
+        results = results.filter(function(r) {
+          if (!r.lat || !r.lng) return true;
+          return haversineKm(lat, lng, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
+        });
+      }
+
+      /* Tag with group info */
+      results.forEach(function(r) {
+        r._groupName = group.name;
+        r._groupOffer = group.offer || '';
+        r._groupChannel = group.channel || 'message';
+        r._area = area;
+        r._query = query;
+        r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
+      });
+
+      allCandidates = allCandidates.concat(results);
+    } catch (e) {
+      shortfallReasons.push('search_failed:' + group.name + ':' + String(e.message || e).slice(0, 100));
+      await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'places_search', message: String(e.message || e) });
+    }
+  }
+
+  /* Update Places daily counter and cost */
+  await kvPut(env, placesDayKey, String(placesUsed + placesCallCount), { expirationTtl: 86400 });
+  recordPlacesCost(cost, placesCallCount);
+
+  /* Hard filters */
+  var filtered = await filterPlacesCandidates(env, firmCode, allCandidates, profileJson, ownCategory);
+
+  if (filtered.length === 0) {
+    /* Shortfall: widen radius once */
+    if (shortfallReasons.indexOf('widened') === -1 && enabledGroups.length > 0 && placesUsed + placesCallCount < 38) {
+      var wGroup = enabledGroups[0];
+      var wQuery = (wGroup.queries || [])[0];
+      if (wQuery) {
+        try {
+          var wResults = await placesTextSearch(env, wQuery + ' in ' + (city || areas[0]), 0, 0, 15000, 20);
+          placesCallCount++;
+          wResults.forEach(function(r) {
+            r._groupName = wGroup.name;
+            r._groupOffer = wGroup.offer || '';
+            r._groupChannel = wGroup.channel || 'message';
+            r._area = city || areas[0];
+            r._query = wQuery;
+          });
+          filtered = await filterPlacesCandidates(env, firmCode, wResults, profileJson, ownCategory);
+          shortfallReasons.push('widened');
+        } catch (e) {
+          shortfallReasons.push('widen_failed');
+        }
+      }
+    }
+    /* Next group */
+    if (filtered.length === 0 && enabledGroups.length > 1 && placesUsed + placesCallCount < 38) {
+      var nextGroup = enabledGroups[(dayOfYear + 1) % enabledGroups.length];
+      var nQuery = (nextGroup.queries || [])[0];
+      if (nQuery) {
+        try {
+          var nResults = await placesTextSearch(env, nQuery + ' in ' + (city || areas[0]), 0, 0, 10000, 20);
+          placesCallCount++;
+          nResults.forEach(function(r) {
+            r._groupName = nextGroup.name;
+            r._groupOffer = nextGroup.offer || '';
+            r._groupChannel = nextGroup.channel || 'message';
+            r._area = city || areas[0];
+            r._query = nQuery;
+          });
+          filtered = await filterPlacesCandidates(env, firmCode, nResults, profileJson, ownCategory);
+          shortfallReasons.push('next_group');
+        } catch (e) {}
+      }
+    }
+  }
+
+  /* Update Places counter again */
+  await kvPut(env, placesDayKey, String(placesUsed + placesCallCount), { expirationTtl: 86400 });
+
+  if (filtered.length === 0) {
+    shortfallReasons.push('no_candidates_after_all_fallbacks');
+    console.log(JSON.stringify({ leads: firmCode, day: day, shortfall: shortfallReasons }));
+    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, placesUsed: placesCallCount }), { expirationTtl: 2 * 86400 });
+    return { status: 'no_leads', shortfall: shortfallReasons, placesUsed: placesCallCount };
+  }
+
+  /* Fit scoring */
+  var scored = await scoreLeadFit(env, filtered, profileJson, filtered[0]._groupName, context, cost);
+
+  /* Pick top 5, balanced across groups */
+  var picked = [];
+  var groupCounts = {};
+  scored.forEach(function(s) {
+    if (picked.length >= 5) return;
+    var gn = s._groupName;
+    groupCounts[gn] = (groupCounts[gn] || 0);
+    if (groupCounts[gn] >= 3) return; /* max 3 from one group */
+    /* Reachable rule: needs WhatsApp, call or email. Visit-only for visit groups */
+    if (s._groupChannel !== 'visit' && !s.phone && !s.website) return;
+    picked.push(s);
+    groupCounts[gn]++;
+  });
+
+  /* Enrich with website data */
+  for (var pi = 0; pi < picked.length; pi++) {
+    try {
+      var enriched = await enrichLeadWebsite(picked[pi].website);
+      picked[pi].enrichment = enriched;
+      picked[pi].phoneType = classifyIndianPhone(picked[pi].phone);
+      /* Determine best channels */
+      var channels = [];
+      var phoneDig = (picked[pi].phone || '').replace(/\D/g, '').slice(-10);
+      if (phoneDig.length === 10 && phoneDig[0] >= '6') channels.push('whatsapp');
+      if (picked[pi].phone) channels.push('call');
+      if (enriched.emails && enriched.emails.length > 0) channels.push('email');
+      if (enriched.linkedIn) channels.push('linkedin');
+      channels.push('visit');
+      picked[pi].channels = channels;
+    } catch (e) {
+      picked[pi].enrichment = {};
+      picked[pi].channels = picked[pi].phone ? ['call', 'visit'] : ['visit'];
+    }
+  }
+
+  /* Reachable filter: must have whatsapp, call, or email; visit-only only for visit groups */
+  picked = picked.filter(function(p) {
+    if (p._groupChannel === 'visit') return true;
+    return p.channels.indexOf('whatsapp') !== -1 || p.channels.indexOf('call') !== -1 || p.channels.indexOf('email') !== -1;
+  });
+
+  /* Generate messages */
+  picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost);
+
+  /* Save to D1 as customers with stage=found, source=places */
+  var savedLeads = [];
+  if (env.DB) {
+    for (var si = 0; si < picked.length; si++) {
+      var lead = picked[si];
+      var custId = 'lead_' + day.replace(/-/g, '') + '_' + si;
+      var custData = {
+        place_id: lead.placeId,
+        lead_day: day,
+        group: lead._groupName,
+        fit_reason: lead.fitReason,
+        fit_score: lead.fitScore,
+        facts: { rating: lead.rating, reviews: lead.reviews, types: lead.types.slice(0, 5), distance: lead._distance },
+        channels: lead.channels,
+        messages: lead.messages,
+        enrichment: lead.enrichment || {},
+        area: lead._area,
+        query: lead._query,
+        mapsUrl: lead.mapsUrl,
+        phoneType: lead.phoneType
+      };
+      try {
+        await env.DB.prepare(
+          "INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, data, place_id, created_at, updated_at, synced_at) " +
+          "VALUES (?, ?, ?, ?, ?, 'found', 'places', ?, ?, datetime('now'), datetime('now'), datetime('now')) " +
+          "ON CONFLICT (firm_code, id) DO UPDATE SET data = excluded.data, updated_at = datetime('now'), synced_at = datetime('now')"
+        ).bind(
+          firmCode, custId, lead.name, lead.phone || '', lead._groupName,
+          JSON.stringify(custData), lead.placeId || null
+        ).run();
+
+        /* Update lead_stats */
+        await env.DB.prepare(
+          "INSERT INTO lead_stats (firm_code, group_name, query, found) VALUES (?, ?, ?, 1) " +
+          "ON CONFLICT (firm_code, group_name, query) DO UPDATE SET found = found + 1, updated_at = datetime('now')"
+        ).bind(firmCode, lead._groupName, lead._query || '').run();
+
+        savedLeads.push({
+          id: custId,
+          name: lead.name,
+          phone: lead.phone,
+          address: lead.address,
+          group: lead._groupName,
+          fitReason: lead.fitReason,
+          fitScore: lead.fitScore,
+          rating: lead.rating,
+          reviews: lead.reviews,
+          channels: lead.channels,
+          messages: lead.messages,
+          mapsUrl: lead.mapsUrl,
+          website: lead.website,
+          area: lead._area,
+          distance: lead._distance,
+          enrichment: lead.enrichment || {}
+        });
+      } catch (e) {
+        await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'save_failed', message: String(e.message || e) });
+      }
+    }
+  }
+
+  /* Cache today's leads in KV for fast retrieval */
+  var leadsResult = {
+    leads: savedLeads,
+    day: day,
+    shortfall: shortfallReasons.length > 0 ? shortfallReasons : null,
+    placesUsed: placesCallCount,
+    generatedAt: new Date().toISOString()
+  };
+  await kvPut(env, todayKey, JSON.stringify(leadsResult), { expirationTtl: 2 * 86400 });
+
+  console.log(JSON.stringify({
+    leads: firmCode, day: day, found: savedLeads.length,
+    placesUsed: placesCallCount, shortfall: shortfallReasons
+  }));
+
+  return { status: 'ok', found: savedLeads.length, placesUsed: placesCallCount, shortfall: shortfallReasons };
+}
+
+/* ── Places cost entries for COST_TABLE ──
+   Google Places Text Search (New) — Basic SKU:
+   $0.032 per request (up to $32/1000).
+   We track this separately from Anthropic costs. */
+var PLACES_COST_PER_CALL = 0.032;
+
+function recordPlacesCost(cost, calls) {
+  if (!cost) return;
+  cost.usd += calls * PLACES_COST_PER_CALL;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4247,6 +5053,24 @@ export default {
         var _ctxOld = await env.G7_KV.get(_ctxKey);
         if (_ctxNew !== _ctxOld) {
           await kvPut(env, _ctxKey, _ctxNew, { expirationTtl: 7 * 86400 });
+          /* Auto-generate lead profile when analysis changes */
+          ctx.waitUntil((async function() {
+            try {
+              var _lpSrcKey = 'scout:leadprofile:src:' + session.firmCode;
+              var _lpSrcHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(context.slice(0, 3000)));
+              var _lpNewHash = Array.from(new Uint8Array(_lpSrcHash)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 16);
+              var _lpOldHash = await env.G7_KV.get(_lpSrcKey);
+              if (_lpNewHash !== _lpOldHash) {
+                var _lpC = newCostAccum();
+                var _lpProf = await generateLeadProfile(env, session.firmCode, context, city, _lpC);
+                await kvPut(env, 'scout:leadprofile:' + session.firmCode, JSON.stringify(_lpProf), { expirationTtl: 30 * 86400 });
+                await kvPut(env, _lpSrcKey, _lpNewHash, { expirationTtl: 30 * 86400 });
+                await flushCost(env, day, session.firmCode, _lpC);
+              }
+            } catch (e) {
+              try { await recordError(env, { source: 'worker', route: 'leads/auto-profile', firmCode: session.firmCode, kind: 'auto_gen', message: String(e.message || e) }); } catch(e2) {}
+            }
+          })());
         } else {
           // Value unchanged — still refresh TTL once per day so the key
           // doesn't expire while the firm is actively using the product.
@@ -4655,6 +5479,328 @@ export default {
       }
       var list = await env.G7_KV.get('scout:analysis-failures', 'json') || [];
       return jsonResponse({ failures: list });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CUSTOMER FINDER v2 — Lead routes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── GET /scout/lead-profile — read the firm's lead profile ──
+    if (request.method === 'GET' && path === '/scout/lead-profile') {
+      var _lpSess = await validateSession(request, env);
+      if (!_lpSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _lpData = await env.G7_KV.get('scout:leadprofile:' + _lpSess.firmCode, 'json');
+      return jsonResponse({ profile: _lpData || null });
+    }
+
+    // ── POST /scout/lead-profile — generate or confirm the lead profile ──
+    if (request.method === 'POST' && path === '/scout/lead-profile') {
+      var _lpSess2 = await validateSession(request, env);
+      if (!_lpSess2) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _lpBody;
+      try { _lpBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      /* Confirm existing profile */
+      if (_lpBody.action === 'confirm') {
+        var _lpExisting = await env.G7_KV.get('scout:leadprofile:' + _lpSess2.firmCode, 'json');
+        if (!_lpExisting) return jsonResponse({ error: 'No profile to confirm' }, 404);
+        _lpExisting.confirmedAt = new Date().toISOString();
+        /* Apply group toggles if provided */
+        if (Array.isArray(_lpBody.enabledGroups)) {
+          var _enSet = new Set(_lpBody.enabledGroups);
+          _lpExisting.groups.forEach(function(g) { g.enabled = _enSet.has(g.name); });
+        }
+        /* Apply area edits if provided */
+        if (Array.isArray(_lpBody.areas)) {
+          _lpExisting.areas = _lpBody.areas.slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
+        }
+        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpExisting), { expirationTtl: 30 * 86400 });
+        /* Trigger first lead generation immediately */
+        var _lpDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+        var _lpCost = newCostAccum();
+        ctx.waitUntil((async function() {
+          try {
+            await runLeadsForFirm(env, _lpSess2.firmCode, _lpDay, _lpCost);
+            await flushCost(env, _lpDay, _lpSess2.firmCode, _lpCost);
+          } catch (e) {
+            await recordError(env, { source: 'worker', route: 'leads/first', firmCode: _lpSess2.firmCode, kind: 'first_run', message: String(e.message || e) });
+          }
+        })());
+        return jsonResponse({ ok: true, profile: _lpExisting });
+      }
+
+      /* Generate new profile */
+      var _lpSaved = await env.G7_KV.get('market:ctx:' + _lpSess2.firmCode, 'json');
+      if (!_lpSaved || !_lpSaved.context) return jsonResponse({ error: 'Run a business analysis first.' }, 400);
+
+      var _lpCost2 = newCostAccum();
+      var _lpDay2 = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      try {
+        var _lpProfile = await generateLeadProfile(env, _lpSess2.firmCode, _lpSaved.context, _lpSaved.city || '', _lpCost2);
+        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpProfile), { expirationTtl: 30 * 86400 });
+        /* Store hash of analysis that generated it */
+        var _lpSrcHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(_lpSaved.context.slice(0, 3000)));
+        var _lpSrcHex = Array.from(new Uint8Array(_lpSrcHash)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 16);
+        await kvPut(env, 'scout:leadprofile:src:' + _lpSess2.firmCode, _lpSrcHex, { expirationTtl: 30 * 86400 });
+        ctx.waitUntil(flushCost(env, _lpDay2, _lpSess2.firmCode, _lpCost2));
+        return jsonResponse({ ok: true, profile: _lpProfile });
+      } catch (e) {
+        ctx.waitUntil(flushCost(env, _lpDay2, _lpSess2.firmCode, _lpCost2));
+        await recordError(env, { source: 'worker', route: 'leads/profile', firmCode: _lpSess2.firmCode, kind: 'generate_failed', message: String(e.message || e) });
+        return jsonResponse({ error: 'Could not generate lead profile: ' + String(e.message || e).slice(0, 200) }, 500);
+      }
+    }
+
+    // ── GET /scout/leads/today — today's leads for this firm ──
+    if (request.method === 'GET' && path === '/scout/leads/today') {
+      var _ltSess = await validateSession(request, env);
+      if (!_ltSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _ltDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+
+      /* Check KV cache first */
+      var _ltCached = await env.G7_KV.get('scout:leads:' + _ltSess.firmCode + ':' + _ltDay, 'json');
+      if (_ltCached) {
+        /* Also load reminders due */
+        var _ltReminders = [];
+        if (env.DB) {
+          try {
+            var _ltRemRows = await env.DB.prepare(
+              "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND source = 'places' AND stage = 'contacted' " +
+              "AND deleted_at IS NULL ORDER BY updated_at ASC LIMIT 20"
+            ).bind(_ltSess.firmCode).all();
+            var _now = Date.now();
+            (_ltRemRows.results || []).forEach(function(r) {
+              var d;
+              try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
+              if (!d.contactedAt) return;
+              var contactedMs = new Date(d.contactedAt).getTime();
+              var daysSince = (_now - contactedMs) / 86400000;
+              var reminderNum = 0;
+              if (daysSince >= 4 && !d.reminder2Sent) reminderNum = 2;
+              else if (daysSince >= 2 && !d.reminder1Sent) reminderNum = 1;
+              if (reminderNum > 0) {
+                _ltReminders.push({
+                  id: r.id, name: r.name, phone: r.phone,
+                  reminderNum: reminderNum,
+                  message: reminderNum === 1 ? (d.messages && d.messages.reminder1) : (d.messages && d.messages.reminder2),
+                  channels: d.channels || [],
+                  daysSince: Math.floor(daysSince)
+                });
+              }
+            });
+          } catch (e) {}
+        }
+        return jsonResponse({ day: _ltDay, leads: _ltCached.leads || [], reminders: _ltReminders, shortfall: _ltCached.shortfall, generatedAt: _ltCached.generatedAt });
+      }
+
+      /* No leads yet today — return empty */
+      return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null });
+    }
+
+    // ── POST /scout/leads/action — record an action on a lead ──
+    if (request.method === 'POST' && path === '/scout/leads/action') {
+      var _laSess = await validateSession(request, env);
+      if (!_laSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _laBody;
+      try { _laBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _laId = _laBody.id;
+      var _laAction = _laBody.action; /* contacted, replied, not_interested, wrong_number, skip, thumbs_up, thumbs_down, reminder_sent, visited */
+      if (!_laId || !_laAction) return jsonResponse({ error: 'id and action required' }, 400);
+
+      if (!env.DB) return jsonResponse({ error: 'no database' }, 501);
+
+      /* Read current customer */
+      var _laRow = await env.DB.prepare(
+        "SELECT id, name, stage, data FROM customers WHERE firm_code = ? AND id = ?"
+      ).bind(_laSess.firmCode, _laId).first();
+      if (!_laRow) return jsonResponse({ error: 'Lead not found' }, 404);
+
+      var _laData;
+      try { _laData = JSON.parse(_laRow.data || '{}'); } catch (e) { _laData = {}; }
+      var _laNewStage = _laRow.stage;
+      var _laNote = _laBody.note || '';
+
+      switch (_laAction) {
+        case 'contacted':
+          _laNewStage = 'contacted';
+          _laData.contactedAt = new Date().toISOString();
+          _laData.contactChannel = _laBody.channel || 'whatsapp';
+          /* Update the message if user edited it */
+          if (_laBody.message && _laData.messages) {
+            _laData.messages.first = _laBody.message;
+          }
+          break;
+        case 'replied':
+          _laNewStage = 'replied';
+          _laData.repliedAt = new Date().toISOString();
+          break;
+        case 'not_interested':
+          _laNewStage = 'lost';
+          _laData.lostReason = 'not_interested';
+          break;
+        case 'wrong_number':
+          _laNewStage = 'lost';
+          _laData.lostReason = 'wrong_number';
+          break;
+        case 'skip':
+          _laNewStage = 'lost';
+          _laData.lostReason = 'skipped';
+          break;
+        case 'visited':
+          _laData.visitedAt = new Date().toISOString();
+          if (_laRow.stage === 'found') _laNewStage = 'contacted';
+          break;
+        case 'reminder_sent':
+          var _remNum = _laBody.reminderNum || 1;
+          if (_remNum === 1) _laData.reminder1Sent = new Date().toISOString();
+          else _laData.reminder2Sent = new Date().toISOString();
+          /* After reminder 2 with no reply → finished (stays as contacted, will age out) */
+          break;
+        case 'thumbs_up':
+          _laData.fitVote = 'up';
+          break;
+        case 'thumbs_down':
+          _laData.fitVote = 'down';
+          break;
+      }
+
+      /* Update customer row */
+      await env.DB.prepare(
+        "UPDATE customers SET stage = ?, data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
+      ).bind(_laNewStage, JSON.stringify(_laData), _laSess.firmCode, _laId).run();
+
+      /* Write event if stage changed */
+      if (_laNewStage !== _laRow.stage) {
+        await env.DB.prepare(
+          "INSERT INTO customer_events (firm_code, customer_id, type, from_stage, to_stage, note, at) " +
+          "VALUES (?, ?, 'stage_change', ?, ?, ?, datetime('now'))"
+        ).bind(_laSess.firmCode, _laId, _laRow.stage, _laNewStage, _laNote || _laAction).run();
+      }
+
+      /* Update lead_stats */
+      if (_laData.group && (_laAction === 'thumbs_up' || _laAction === 'thumbs_down' || _laAction === 'contacted' || _laAction === 'replied' || _laNewStage === 'won')) {
+        var _statCol = '';
+        if (_laAction === 'thumbs_up') _statCol = 'thumbs_up';
+        else if (_laAction === 'thumbs_down') _statCol = 'thumbs_down';
+        else if (_laAction === 'contacted') _statCol = 'contacted';
+        else if (_laAction === 'replied') _statCol = 'replied';
+        else if (_laNewStage === 'won') _statCol = 'won';
+        if (_statCol) {
+          try {
+            await env.DB.prepare(
+              "UPDATE lead_stats SET " + _statCol + " = " + _statCol + " + 1, updated_at = datetime('now') " +
+              "WHERE firm_code = ? AND group_name = ? AND query = ?"
+            ).bind(_laSess.firmCode, _laData.group, _laData.query || '').run();
+          } catch (e) {}
+        }
+      }
+
+      return jsonResponse({ ok: true, stage: _laNewStage });
+    }
+
+    // ── GET /scout/leads/stats — weekly proof: funnel + fit rate + reach rate ──
+    if (request.method === 'GET' && path === '/scout/leads/stats') {
+      var _lsSess = await validateSession(request, env);
+      if (!_lsSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ stats: null });
+
+      try {
+        /* Overall funnel this week */
+        var _lsWeekAgo = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
+        var _lsFunnel = await env.DB.prepare(
+          "SELECT stage, COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' " +
+          "AND created_at >= ? AND deleted_at IS NULL GROUP BY stage"
+        ).bind(_lsSess.firmCode, _lsWeekAgo).all();
+
+        /* lead_stats totals */
+        var _lsStats = await env.DB.prepare(
+          "SELECT SUM(found) as found, SUM(thumbs_up) as tu, SUM(thumbs_down) as td, " +
+          "SUM(contacted) as contacted, SUM(replied) as replied, SUM(won) as won FROM lead_stats WHERE firm_code = ?"
+        ).bind(_lsSess.firmCode).first();
+
+        return jsonResponse({
+          stats: _lsStats || {},
+          weekFunnel: (_lsFunnel && _lsFunnel.results) || []
+        });
+      } catch (e) {
+        return jsonResponse({ stats: null, error: String(e.message || e).slice(0, 200) });
+      }
+    }
+
+    // ── POST /admin/generate-leads — admin trigger for a specific firm ──
+    if (request.method === 'POST' && path === '/admin/generate-leads') {
+      var _glBody;
+      try { _glBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_glBody.adminPassword || _glBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Unauthorized' }, 401);
+      var _glFirm = _glBody.firmCode;
+      if (!_glFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+
+      var _glDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _glCost = newCostAccum();
+
+      /* Generate profile if needed */
+      var _glProfile = await env.G7_KV.get('scout:leadprofile:' + _glFirm, 'json');
+      if (!_glProfile) {
+        var _glSaved = await env.G7_KV.get('market:ctx:' + _glFirm, 'json');
+        if (!_glSaved || !_glSaved.context) return jsonResponse({ error: 'No analysis for this firm' }, 400);
+        _glProfile = await generateLeadProfile(env, _glFirm, _glSaved.context, _glSaved.city || '', _glCost);
+        _glProfile.confirmedAt = new Date().toISOString(); /* Admin auto-confirms */
+        await kvPut(env, 'scout:leadprofile:' + _glFirm, JSON.stringify(_glProfile), { expirationTtl: 30 * 86400 });
+      }
+
+      /* Force regenerate today's leads */
+      var _glTodayKey = 'scout:leads:' + _glFirm + ':' + _glDay;
+      await env.G7_KV.delete(_glTodayKey);
+
+      var _glResult = await runLeadsForFirm(env, _glFirm, _glDay, _glCost);
+      await flushCost(env, _glDay, _glFirm, _glCost);
+      return jsonResponse({ result: _glResult, cost: _glCost });
+    }
+
+    // ── GET /admin/leads — today's leads overview for all firms ──
+    if (request.method === 'GET' && path === '/admin/leads') {
+      var _alPwd = url.searchParams.get('adminPassword');
+      if (!_alPwd || _alPwd !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Unauthorized' }, 401);
+      var _alDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+
+      /* Scan all firms for today's leads */
+      var _alFirms = [];
+      var _alCursor;
+      do {
+        var _alPage = await env.G7_KV.list({ prefix: 'scout:leads:', cursor: _alCursor });
+        for (var _alK of _alPage.keys) {
+          if (_alK.name.indexOf(':' + _alDay) !== -1) {
+            var _alParts = _alK.name.split(':');
+            var _alFc = _alParts[2]; /* scout:leads:{firm}:{day} */
+            var _alData = await env.G7_KV.get(_alK.name, 'json');
+            _alFirms.push({
+              firmCode: _alFc,
+              day: _alDay,
+              count: (_alData && _alData.leads) ? _alData.leads.length : 0,
+              shortfall: (_alData && _alData.shortfall) || null,
+              placesUsed: (_alData && _alData.placesUsed) || 0,
+              generatedAt: (_alData && _alData.generatedAt) || null
+            });
+          }
+        }
+        _alCursor = _alPage.list_complete ? undefined : _alPage.cursor;
+      } while (_alCursor);
+
+      /* Places cost: sum across all firms */
+      var _alPlacesCost = 0;
+      var _alCursor2;
+      do {
+        var _alPage2 = await env.G7_KV.list({ prefix: 'scout:leads:places:', cursor: _alCursor2 });
+        for (var _alK2 of _alPage2.keys) {
+          if (_alK2.name.indexOf(':' + _alDay) !== -1) {
+            var _alVal = parseInt(await env.G7_KV.get(_alK2.name) || '0', 10);
+            _alPlacesCost += _alVal * PLACES_COST_PER_CALL;
+          }
+        }
+        _alCursor2 = _alPage2.list_complete ? undefined : _alPage2.cursor;
+      } while (_alCursor2);
+
+      return jsonResponse({ day: _alDay, firms: _alFirms, totalPlacesCostUsd: _alPlacesCost });
     }
 
     // =========================================================================
@@ -5630,6 +6776,32 @@ export default {
       }
       cursor = page.list_complete ? undefined : page.cursor;
     } while (cursor);
+    /* ── Customer Finder v2: generate daily leads for each firm ──
+       Runs after morning content so budget is mostly consumed by news first. */
+    var _leadReport = [];
+    let leadCursor;
+    do {
+      var leadPage = await env.G7_KV.list({ prefix: 'scout:leadprofile:', cursor: leadCursor });
+      for (var _lk of leadPage.keys) {
+        /* Only process profile keys, not src hashes */
+        if (_lk.name.indexOf(':src:') !== -1) continue;
+        var _lfirm = _lk.name.slice('scout:leadprofile:'.length);
+        if (!_lfirm) continue;
+        var _lt0 = Date.now();
+        var _lCost = newCostAccum();
+        try {
+          var _lResult = await runLeadsForFirm(env, _lfirm, day, _lCost);
+          await flushCost(env, day, _lfirm, _lCost);
+          _leadReport.push({ firm: _lfirm, status: _lResult.status, found: _lResult.found || 0, ms: Date.now() - _lt0 });
+        } catch (e) {
+          _leadReport.push({ firm: _lfirm, status: 'error', error: String(e.message || e).slice(0, 200), ms: Date.now() - _lt0 });
+          try { await recordError(env, { source: 'worker', route: 'cron/leads', firmCode: _lfirm, kind: 'lead_gen', message: String(e.message || e) }); } catch(e2) {}
+        }
+      }
+      leadCursor = leadPage.list_complete ? undefined : leadPage.cursor;
+    } while (leadCursor);
+    report.leads = _leadReport;
+
     report.state = 'done';
     delete report.current;
     report.finishedAt = new Date().toISOString();
