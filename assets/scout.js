@@ -2061,6 +2061,53 @@ function displayName(raw) {
   });
 })();
 
+/* ── Compact mobile bottom nav ──
+   Shows on ≤768px: Today · Customers · Dashboard · Settings
+   Fixed to bottom, hides desktop top nav links (already hidden via CSS). */
+(function() {
+  document.addEventListener('DOMContentLoaded', function() {
+    /* Skip on non-app pages (landing, privacy, terms, etc.) */
+    var page = location.pathname.split('/').pop() || '';
+    var appPages = ['index.html','today.html','pipeline.html','history.html','news.html',
+                    'checkin.html','settings.html','result.html','onboard.html'];
+    if (appPages.indexOf(page) === -1) return;
+
+    var bar = document.createElement('nav');
+    bar.className = 'scout-bottom-nav';
+    var items = [
+      { label: 'Today',     href: 'today.html',    icon: '📋' },
+      { label: 'Customers', href: 'pipeline.html',  icon: '👥' },
+      { label: 'Dashboard', href: 'index.html',     icon: '📊' },
+      { label: 'Settings',  href: 'settings.html',  icon: '⚙️' }
+    ];
+    items.forEach(function(it) {
+      var a = document.createElement('a');
+      a.href = it.href;
+      a.className = 'sbn-item' + (page === it.href ? ' sbn-active' : '');
+      a.innerHTML = '<span class="sbn-icon">' + it.icon + '</span><span class="sbn-label">' + it.label + '</span>';
+      bar.appendChild(a);
+    });
+    document.body.appendChild(bar);
+
+    /* Inject styles */
+    var css = document.createElement('style');
+    css.textContent =
+      '.scout-bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:997;' +
+      'background:rgba(8,8,8,0.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);' +
+      'border-top:1px solid rgba(201,168,76,0.15);padding:6px 0 env(safe-area-inset-bottom,6px);' +
+      'justify-content:space-around;align-items:center}' +
+      '@media(max-width:768px){.scout-bottom-nav{display:flex}' +
+      'body{padding-bottom:64px}}' +
+      '.sbn-item{display:flex;flex-direction:column;align-items:center;text-decoration:none;' +
+      'padding:4px 8px;min-width:56px;color:#8A8880;transition:color .2s}' +
+      '.sbn-item.sbn-active{color:#C9A84C}' +
+      '.sbn-icon{font-size:18px;line-height:1}' +
+      '.sbn-label{font-family:"Tenor Sans",sans-serif;font-size:9px;letter-spacing:.12em;' +
+      'text-transform:uppercase;margin-top:2px}';
+    document.head.appendChild(css);
+  });
+})();
+
 // ─────────────────────────────────────────────────────────────
 // REPORT ANALYSIS FAILURE
 // Fire-and-forget POST to /scout/analysis-failed.
