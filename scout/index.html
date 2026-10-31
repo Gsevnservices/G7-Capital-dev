@@ -9,8 +9,8 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=47"></script>
-<script src="../assets/pipeline.js?v=26"></script>
+<script src="../assets/scout.js?v=48"></script>
+<script src="../assets/pipeline.js?v=27"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -647,6 +647,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 <nav>
   <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
   <div class="nav-right">
+    <a href="today.html" class="nav-link">Today</a>
     <a href="index.html" class="nav-link active">Dashboard</a>
     <a href="news.html" class="nav-link">News</a>
     <a href="onboard.html" class="nav-link">New Analysis</a>
@@ -763,6 +764,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
           <div class="cc-label">Scout's move</div>
           <div id="ccMove"><div style="font-size:12px;color:var(--grey2);line-height:1.5">Scout is preparing today's move&hellip;</div></div>
         </div>
+        <!-- Leads summary card -->
+        <div class="cc-panel" id="ccLeadsPanel" style="display:none">
+          <div class="cc-label-row">
+            <div class="cc-label">Customer Finder</div>
+            <span class="cc-note" id="ccLeadsNote"></span>
+          </div>
+          <div id="ccLeads"></div>
+        </div>
         <div class="cc-panel hot">
           <div class="cc-label-row">
             <div class="cc-label" id="ccTodayLabel">Today</div>
@@ -836,6 +845,39 @@ window.addEventListener('DOMContentLoaded', async function() {
   ccRender();
   scoutMarketLoad(); /* preload for voice/briefing — not rendered into #ccMarket */
   scoutNewsLoad().then(scoutNewsRender);
+
+  /* Leads summary card — non-blocking */
+  (async function() {
+    try {
+      var _leadsR = await fetch(SCOUT_WORKER + '/scout/leads/today', {
+        headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
+      });
+      if (!_leadsR.ok) return;
+      var _leadsD = await _leadsR.json();
+      var _ll = _leadsD.leads || [];
+      var _lr = _leadsD.reminders || [];
+      if (_ll.length === 0 && _lr.length === 0) return;
+      var panel = document.getElementById('ccLeadsPanel');
+      var note = document.getElementById('ccLeadsNote');
+      var body = document.getElementById('ccLeads');
+      if (!panel) return;
+      panel.style.display = '';
+      note.textContent = _ll.length + ' new' + (_lr.length > 0 ? ' \u00b7 ' + _lr.length + ' follow-up' : '');
+      var h = '';
+      _ll.slice(0, 3).forEach(function(l) {
+        h += '<div style="margin-bottom:10px;padding:10px 12px;background:var(--black3);border:1px solid var(--border2)">';
+        h += '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">';
+        h += '<span style="font-family:\'Cormorant Garamond\',serif;font-size:16px;font-weight:300;color:var(--white)">' + escHtml(l.name) + '</span>';
+        h += '<span style="font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber)">' + escHtml(l.group) + '</span>';
+        h += '</div>';
+        h += '<div style="font-size:11px;color:var(--grey1);line-height:1.5">' + escHtml(l.fitReason || '') + '</div>';
+        h += '</div>';
+      });
+      if (_ll.length > 3) h += '<div style="font-size:11px;color:var(--grey2);margin-top:4px">+' + (_ll.length - 3) + ' more</div>';
+      h += '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">View all leads \u2192</a>';
+      body.innerHTML = h;
+    } catch (e) {}
+  })();
 
   /* Plan chip — non-blocking */
   (async function() {

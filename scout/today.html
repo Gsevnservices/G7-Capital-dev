@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Today's Leads — Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/env.js?v=1"></script>
+<script src="../assets/auth.js?v=19"></script>
+<script src="../assets/scout.js?v=48"></script>
+<script src="../assets/pipeline.js?v=27"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;font-size:16px}
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;--black4:#1E1E1E;
+  --amber:#E0922F;--amber-d:#D17B2E;--amber-l:#F0B968;
+  --gold:#C9A84C;--gold2:#E2C97E;--gold3:#A8873A;
+  --white:#FAFAF8;--white2:#F0EFE9;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(224,146,47,0.18);--border2:rgba(250,250,248,0.08);
+  --green:#4CAF50;--red:#C45A5A
+}
+body{font-family:'Tenor Sans',sans-serif;background:var(--black);color:var(--white);overflow-x:hidden;cursor:none;min-height:100vh;visibility:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:.4}
+.cursor{position:fixed;width:8px;height:8px;background:var(--amber);border-radius:50%;pointer-events:none;z-index:9999;transition:transform .15s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+.cursor-ring{position:fixed;width:36px;height:36px;border:1px solid rgba(224,146,47,.5);border-radius:50%;pointer-events:none;z-index:9998;transition:all .12s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+@media(max-width:480px){.cursor,.cursor-ring{display:none}body{cursor:auto}}
+
+nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:center;justify-content:space-between;padding:0 64px;height:80px;background:rgba(8,8,8,.92);backdrop-filter:blur(24px);border-bottom:1px solid var(--border2)}
+.nav-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:300;letter-spacing:.25em;text-transform:uppercase;color:var(--white);text-decoration:none}
+.nav-logo em{font-style:normal;color:var(--amber)}
+.nav-right{display:flex;align-items:center;gap:32px}
+.nav-link{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .3s}
+.nav-link:hover{color:var(--white)}
+.nav-link.active{color:var(--amber)}
+.nav-firm-indicator{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:rgba(224,146,47,0.6);margin-right:8px}
+.nav-logout{font-size:9px;letter-spacing:.15em;text-transform:uppercase;background:transparent;border:1px solid rgba(224,146,47,0.4);color:var(--amber);padding:6px 16px;cursor:pointer;transition:all .3s;font-family:'Tenor Sans',sans-serif}
+.nav-logout:hover{border-color:var(--amber);background:rgba(224,146,47,0.08)}
+@media(max-width:768px){nav{padding:0 24px}.nav-link{display:none}}
+
+.page-wrap{margin-top:80px;padding:48px 64px 80px;max-width:840px;margin-left:auto;margin-right:auto}
+@media(max-width:768px){.page-wrap{padding:32px 20px 60px}}
+
+.page-eyebrow{font-size:8px;letter-spacing:.28em;text-transform:uppercase;color:var(--amber);margin-bottom:8px}
+.page-heading{font-family:'Cormorant Garamond',serif;font-size:clamp(28px,4vw,40px);font-weight:300;color:var(--white);margin-bottom:4px}
+.page-sub{font-size:12px;color:var(--grey1);letter-spacing:.04em;line-height:1.7;margin-bottom:40px}
+
+.section-label{font-size:8px;letter-spacing:.28em;text-transform:uppercase;color:var(--amber);margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+
+/* ── Lead card ── */
+.lead-card{background:var(--black2);border:1px solid var(--border2);padding:24px 28px;margin-bottom:20px;transition:border-color .3s}
+.lead-card:hover{border-color:var(--border)}
+.lead-card.done{opacity:.5}
+.lead-top{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.lead-name{font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:300;color:var(--white)}
+.lead-group{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);padding:2px 8px;border:1px solid rgba(224,146,47,0.3);display:inline-block}
+.lead-meta{display:flex;gap:16px;font-size:11px;color:var(--grey1);margin-bottom:10px;flex-wrap:wrap}
+.lead-meta span{display:inline-flex;align-items:center;gap:4px}
+.lead-reason{font-size:12px;color:var(--amber-l);margin-bottom:16px;line-height:1.6;font-style:italic}
+
+/* ── Channel buttons ── */
+.ch-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.ch-btn{font-size:9px;letter-spacing:.12em;text-transform:uppercase;padding:10px 16px;cursor:pointer;font-family:'Tenor Sans',sans-serif;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;min-height:44px}
+.ch-btn.wa{background:#25D366;border:1px solid #25D366;color:#fff}
+.ch-btn.wa:hover{background:#20bd5a}
+.ch-btn.call{background:transparent;border:1px solid rgba(224,146,47,0.4);color:var(--amber)}
+.ch-btn.call:hover{border-color:var(--amber);background:rgba(224,146,47,0.08)}
+.ch-btn.email{background:transparent;border:1px solid var(--border2);color:var(--grey1)}
+.ch-btn.email:hover{border-color:var(--amber);color:var(--amber)}
+.ch-btn.maps{background:transparent;border:1px solid var(--border2);color:var(--grey1)}
+.ch-btn.maps:hover{border-color:var(--amber);color:var(--amber)}
+.ch-btn.li{background:transparent;border:1px solid #0A66C2;color:#0A66C2}
+.ch-btn.li:hover{background:rgba(10,102,194,0.1)}
+
+/* ── Editable message ── */
+.lead-msg{background:var(--black3);border:1px solid var(--border2);padding:14px 16px;font-size:13px;color:var(--white2);line-height:1.8;margin-bottom:16px;min-height:60px;outline:none;white-space:pre-wrap;font-family:'Tenor Sans',sans-serif}
+.lead-msg:focus{border-color:var(--amber)}
+
+/* ── Action row ── */
+.lead-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.act-btn{font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:8px 14px;cursor:pointer;font-family:'Tenor Sans',sans-serif;transition:all .2s;background:transparent;border:1px solid var(--border2);color:var(--grey2);min-height:44px}
+.act-btn:hover{border-color:var(--amber);color:var(--amber)}
+.act-btn.positive{border-color:rgba(76,175,80,0.4);color:var(--green)}
+.act-btn.positive:hover{border-color:var(--green);background:rgba(76,175,80,0.08)}
+.act-btn.negative{border-color:rgba(196,90,90,0.3);color:var(--red)}
+.act-btn.negative:hover{border-color:var(--red);background:rgba(196,90,90,0.08)}
+.act-btn.thumb{font-size:14px;padding:6px 10px;min-height:44px}
+
+/* ── Reminder card ── */
+.reminder-card{background:var(--black2);border-left:3px solid var(--amber);padding:20px 24px;margin-bottom:14px}
+.reminder-top{display:flex;align-items:baseline;gap:12px;margin-bottom:8px;flex-wrap:wrap}
+.reminder-name{font-family:'Cormorant Garamond',serif;font-size:18px;font-weight:300;color:var(--white)}
+.reminder-tag{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber-l);padding:2px 8px;border:1px solid rgba(224,146,47,0.3)}
+.reminder-msg{font-size:12px;color:var(--grey1);line-height:1.7;margin-bottom:12px}
+.reminder-btns{display:flex;flex-wrap:wrap;gap:8px}
+
+/* ── Empty / loading states ── */
+.empty-state{text-align:center;padding:60px 24px}
+.empty-icon{font-size:40px;margin-bottom:16px;opacity:.5}
+.empty-title{font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:300;color:var(--white);margin-bottom:8px}
+.empty-text{font-size:12px;color:var(--grey1);line-height:1.7;max-width:400px;margin:0 auto}
+
+/* ── Stats bar ── */
+.stats-bar{display:flex;gap:24px;margin-bottom:32px;flex-wrap:wrap}
+.stat-item{font-size:11px;color:var(--grey1);letter-spacing:.06em}
+.stat-item strong{color:var(--amber);font-weight:400}
+</style>
+</head>
+<body>
+
+<div class="cursor" id="cursor"></div>
+<div class="cursor-ring" id="cursorRing"></div>
+
+<nav>
+  <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
+  <div class="nav-right">
+    <a href="today.html" class="nav-link active">Today</a>
+    <a href="index.html" class="nav-link">Dashboard</a>
+    <a href="news.html" class="nav-link">News</a>
+    <a href="onboard.html" class="nav-link">New Analysis</a>
+    <a href="history.html" class="nav-link">History</a>
+    <a href="checkin.html" class="nav-link">Check-In</a>
+    <a href="pipeline.html" class="nav-link">Customers</a>
+    <a href="settings.html" class="nav-link">Settings</a>
+    <span class="nav-firm-indicator" id="navFirmName"></span>
+    <button class="nav-logout" onclick="handleLogout()">Sign Out</button>
+  </div>
+</nav>
+
+<div class="page-wrap">
+  <div class="page-eyebrow">Customer Finder</div>
+  <h1 class="page-heading" id="pageTitle">Today's Leads</h1>
+  <div class="page-sub" id="pageSub">Loading&hellip;</div>
+
+  <div id="statsBar" class="stats-bar" style="display:none"></div>
+
+  <!-- Leads section -->
+  <div id="leadsSection" style="display:none">
+    <div class="section-label">New leads</div>
+    <div id="leadsList"></div>
+  </div>
+
+  <!-- Reminders section -->
+  <div id="remindersSection" style="display:none">
+    <div class="section-label" style="margin-top:40px">Reminders due</div>
+    <div id="remindersList"></div>
+  </div>
+
+  <!-- Empty state -->
+  <div id="emptyState" style="display:none">
+    <div class="empty-state">
+      <div class="empty-icon">&#x1F50D;</div>
+      <div class="empty-title" id="emptyTitle">No leads yet</div>
+      <div class="empty-text" id="emptyText">Scout is looking for customers for you. New leads appear here every morning.</div>
+    </div>
+  </div>
+
+  <!-- Setup state — need analysis or profile -->
+  <div id="setupState" style="display:none">
+    <div class="empty-state">
+      <div class="empty-icon">&#x2699;</div>
+      <div class="empty-title">Set up Customer Finder</div>
+      <div class="empty-text" id="setupText">Run a business analysis first, then Scout will find customers for you.</div>
+      <a href="onboard.html" class="ch-btn call" style="margin-top:20px;display:inline-flex">Run Analysis</a>
+    </div>
+  </div>
+</div>
+
+<script>
+
+var _auth = {};
+var _todayData = null;
+
+window.addEventListener('DOMContentLoaded', async function() {
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) { window.location.href = '../login.html?product=scout'; return; }
+  document.body.style.visibility = 'visible';
+  _auth = { 'Authorization': 'Bearer ' + token };
+
+  migrateUnscopedScoutKeys();
+  /* Set firm name in nav */
+  var firmName = localStorage.getItem('g7_session_firm') || '';
+  if (firmName) document.getElementById('navFirmName').textContent = firmName;
+
+  await loadToday();
+});
+
+async function loadToday() {
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/leads/today', { headers: _auth });
+    if (r.status === 401) { scoutSessionExpired(); return; }
+    if (!r.ok) throw new Error('Failed to load');
+    _todayData = await r.json();
+  } catch (e) {
+    document.getElementById('pageSub').textContent = 'Could not load leads. Check your connection.';
+    return;
+  }
+
+  var leads = _todayData.leads || [];
+  var reminders = _todayData.reminders || [];
+
+  /* Check if profile exists */
+  var profileRes = await fetch(SCOUT_WORKER + '/scout/lead-profile', { headers: _auth });
+  var profileData = {};
+  if (profileRes.ok) profileData = await profileRes.json();
+  if (!profileData.profile) {
+    /* No profile yet — check if analysis exists */
+    document.getElementById('setupState').style.display = '';
+    document.getElementById('pageSub').textContent = '';
+    return;
+  }
+
+  if (!profileData.profile.confirmedAt) {
+    document.getElementById('pageSub').textContent = 'Confirm your lead profile in Settings \u2192 Customer Finder to start getting leads.';
+    document.getElementById('emptyState').style.display = '';
+    document.getElementById('emptyTitle').textContent = 'Almost ready';
+    document.getElementById('emptyText').textContent = 'Confirm which customer groups Scout should look for.';
+    return;
+  }
+
+  /* Has a confirmed profile */
+  if (leads.length === 0 && reminders.length === 0) {
+    document.getElementById('emptyState').style.display = '';
+    document.getElementById('pageSub').textContent = _todayData.generatedAt
+      ? 'Scout searched but could not find new leads today. It will try again tomorrow.'
+      : 'New leads arrive each morning around 6 AM.';
+    return;
+  }
+
+  /* Show leads */
+  document.getElementById('pageSub').textContent = leads.length + ' new lead' + (leads.length !== 1 ? 's' : '') + ' today' +
+    (reminders.length > 0 ? ' \u00b7 ' + reminders.length + ' reminder' + (reminders.length !== 1 ? 's' : '') + ' due' : '');
+
+  if (leads.length > 0) {
+    document.getElementById('leadsSection').style.display = '';
+    renderLeads(leads);
+  }
+
+  if (reminders.length > 0) {
+    document.getElementById('remindersSection').style.display = '';
+    renderReminders(reminders);
+  }
+
+  /* Load stats */
+  loadStats();
+}
+
+function renderLeads(leads) {
+  var html = '';
+  for (var i = 0; i < leads.length; i++) {
+    var l = leads[i];
+    var dist = l.distance != null ? l.distance.toFixed(1) + ' km' : '';
+    var channels = l.channels || [];
+    var phone = l.phone || '';
+    var phoneDig = phone.replace(/\D/g, '').slice(-10);
+    var msg = (l.messages && l.messages.first) || '';
+    var enrichEmails = (l.enrichment && l.enrichment.emails) || [];
+
+    html += '<div class="lead-card" id="lead-' + esc(l.id) + '">';
+    html += '<div class="lead-top">';
+    html += '<span class="lead-name">' + esc(l.name) + '</span>';
+    html += '<span class="lead-group">' + esc(l.group) + '</span>';
+    html += '</div>';
+
+    html += '<div class="lead-meta">';
+    if (l.rating) html += '<span>\u2605 ' + l.rating + ' (' + (l.reviews || 0) + ')</span>';
+    if (l.area) html += '<span>' + esc(l.area) + '</span>';
+    if (dist) html += '<span>' + dist + '</span>';
+    html += '</div>';
+
+    html += '<div class="lead-reason">\u201C' + esc(l.fitReason) + '\u201D</div>';
+
+    /* Editable message */
+    html += '<div class="lead-msg" contenteditable="true" id="msg-' + esc(l.id) + '">' + esc(msg) + '</div>';
+
+    /* Channel buttons */
+    html += '<div class="ch-btns">';
+    if (channels.indexOf('whatsapp') !== -1 && phoneDig.length === 10) {
+      var waMsg = encodeURIComponent(msg);
+      html += '<a href="https://wa.me/91' + phoneDig + '?text=' + waMsg + '" target="_blank" rel="noopener" class="ch-btn wa" ' +
+        'onclick="markContacted(\'' + esc(l.id) + '\',\'whatsapp\')">WhatsApp</a>';
+    }
+    if (channels.indexOf('call') !== -1 && phone) {
+      html += '<a href="tel:' + esc(phone) + '" class="ch-btn call" onclick="markContacted(\'' + esc(l.id) + '\',\'call\')">Call</a>';
+    }
+    if (channels.indexOf('email') !== -1 && enrichEmails.length > 0) {
+      var emailSubj = encodeURIComponent('Quick introduction');
+      var emailBody = encodeURIComponent(msg);
+      html += '<a href="mailto:' + esc(enrichEmails[0]) + '?subject=' + emailSubj + '&body=' + emailBody + '" class="ch-btn email" ' +
+        'onclick="markContacted(\'' + esc(l.id) + '\',\'email\')">Email</a>';
+    }
+    if (l.mapsUrl) {
+      html += '<a href="' + esc(l.mapsUrl) + '" target="_blank" rel="noopener" class="ch-btn maps">Maps</a>';
+    }
+    if (channels.indexOf('linkedin') !== -1 && l.enrichment && l.enrichment.linkedIn) {
+      html += '<a href="' + esc(l.enrichment.linkedIn) + '" target="_blank" rel="noopener" class="ch-btn li">LinkedIn</a>';
+    }
+    html += '</div>';
+
+    /* Action buttons */
+    html += '<div class="lead-actions">';
+    html += '<button class="act-btn positive" onclick="leadAction(\'' + esc(l.id) + '\',\'replied\')">Replied</button>';
+    html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'not_interested\')">Not interested</button>';
+    html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'wrong_number\')">Wrong number</button>';
+    html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'skip\')">Skip</button>';
+    html += '<button class="act-btn thumb" onclick="leadAction(\'' + esc(l.id) + '\',\'thumbs_up\')" title="Good fit">\uD83D\uDC4D</button>';
+    html += '<button class="act-btn thumb" onclick="leadAction(\'' + esc(l.id) + '\',\'thumbs_down\')" title="Bad fit">\uD83D\uDC4E</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  document.getElementById('leadsList').innerHTML = html;
+}
+
+function renderReminders(reminders) {
+  var html = '';
+  for (var i = 0; i < reminders.length; i++) {
+    var r = reminders[i];
+    var phone = r.phone || '';
+    var phoneDig = phone.replace(/\D/g, '').slice(-10);
+    var msg = r.message || '';
+    var channels = r.channels || [];
+
+    html += '<div class="reminder-card" id="reminder-' + esc(r.id) + '">';
+    html += '<div class="reminder-top">';
+    html += '<span class="reminder-name">' + esc(r.name) + '</span>';
+    html += '<span class="reminder-tag">Reminder ' + r.reminderNum + ' \u00b7 ' + r.daysSince + ' days</span>';
+    html += '</div>';
+    html += '<div class="reminder-msg">' + esc(msg) + '</div>';
+
+    html += '<div class="reminder-btns">';
+    if (channels.indexOf('whatsapp') !== -1 && phoneDig.length === 10) {
+      html += '<a href="https://wa.me/91' + phoneDig + '?text=' + encodeURIComponent(msg) + '" target="_blank" rel="noopener" class="ch-btn wa" ' +
+        'onclick="sendReminder(\'' + esc(r.id) + '\',' + r.reminderNum + ')">Send WhatsApp</a>';
+    }
+    if (phone) {
+      html += '<a href="tel:' + esc(phone) + '" class="ch-btn call" onclick="sendReminder(\'' + esc(r.id) + '\',' + r.reminderNum + ')">Call</a>';
+    }
+    html += '<button class="act-btn positive" onclick="leadAction(\'' + esc(r.id) + '\',\'replied\')">They replied</button>';
+    html += '<button class="act-btn negative" onclick="leadAction(\'' + esc(r.id) + '\',\'not_interested\')">No interest</button>';
+    html += '</div>';
+    html += '</div>';
+  }
+  document.getElementById('remindersList').innerHTML = html;
+}
+
+async function loadStats() {
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/leads/stats', { headers: _auth });
+    if (!r.ok) return;
+    var d = await r.json();
+    var s = d.stats;
+    if (!s || !s.found) return;
+    var bar = document.getElementById('statsBar');
+    bar.innerHTML =
+      '<div class="stat-item">Found <strong>' + (s.found || 0) + '</strong></div>' +
+      '<div class="stat-item">Contacted <strong>' + (s.contacted || 0) + '</strong></div>' +
+      '<div class="stat-item">Replied <strong>' + (s.replied || 0) + '</strong></div>' +
+      '<div class="stat-item">Won <strong>' + (s.won || 0) + '</strong></div>' +
+      '<div class="stat-item">Fit \u2605 <strong>' + (s.tu > 0 ? Math.round(s.tu / (s.tu + s.td) * 100) : 0) + '%</strong></div>';
+    bar.style.display = '';
+  } catch (e) {}
+}
+
+function markContacted(id, channel) {
+  /* Read potentially edited message */
+  var msgEl = document.getElementById('msg-' + id);
+  var message = msgEl ? msgEl.textContent : '';
+  fetch(SCOUT_WORKER + '/scout/leads/action', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+    body: JSON.stringify({ id: id, action: 'contacted', channel: channel, message: message })
+  }).catch(function() {});
+}
+
+function sendReminder(id, num) {
+  fetch(SCOUT_WORKER + '/scout/leads/action', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+    body: JSON.stringify({ id: id, action: 'reminder_sent', reminderNum: num })
+  }).catch(function() {});
+}
+
+async function leadAction(id, action) {
+  try {
+    await fetch(SCOUT_WORKER + '/scout/leads/action', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+      body: JSON.stringify({ id: id, action: action })
+    });
+  } catch (e) {}
+  /* Visual feedback */
+  var card = document.getElementById('lead-' + id) || document.getElementById('reminder-' + id);
+  if (card) {
+    card.classList.add('done');
+    card.style.pointerEvents = 'none';
+  }
+}
+
+function esc(s) { return escHtml(String(s || '')); }
+
+function handleLogout() {
+  scoutClearLocalState();
+  ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){ localStorage.removeItem(k); });
+  window.location.href = 'landing.html';
+}
+
+/* ── Custom cursor ── */
+(function() {
+  var c = document.getElementById('cursor'), r = document.getElementById('cursorRing');
+  if (!c || !r) return;
+  document.addEventListener('mousemove', function(e){ c.style.left=e.clientX+'px';c.style.top=e.clientY+'px';r.style.left=e.clientX+'px';r.style.top=e.clientY+'px'; });
+  document.addEventListener('mousedown', function(){ c.style.transform='translate(-50%,-50%) scale(0.7)';r.style.transform='translate(-50%,-50%) scale(0.8)'; });
+  document.addEventListener('mouseup',   function(){ c.style.transform='translate(-50%,-50%) scale(1)';r.style.transform='translate(-50%,-50%) scale(1)'; });
+})();
+
+</script>
+</body>
+</html>
