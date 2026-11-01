@@ -2086,6 +2086,272 @@ async function findBusinesses(env, query, cap, cost) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// LOCAL CREATORS — find Instagram/YouTube creators for B2C firms
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/* B2C types eligible for creator outreach */
+var CREATOR_B2C_TYPES = /cafe|coffee|restaurant|food|bakery|salon|beauty|hair|spa|gym|fitness|yoga|boutique|cloth|fashion|clinic|dental|dermat/i;
+
+/* Check if a firm qualifies for creators based on its ownPrimaryType or context TYPE line */
+function isCreatorEligible(profile, context) {
+  if (profile && profile.ownPrimaryType && CREATOR_B2C_TYPES.test(profile.ownPrimaryType)) return true;
+  if (context) {
+    var tm = context.match(/TYPE:\s*(.+)/);
+    if (tm && CREATOR_B2C_TYPES.test(tm[1])) return true;
+  }
+  return false;
+}
+
+/* Find up to 3 local creators via Anthropic web search.
+   Only returns creators with a public contact (business email or contact link). */
+async function findLocalCreators(env, firmCode, profile, city, lang, cost) {
+  var businessName = profile.ownName || profile.businessName || '';
+  var businessType = profile.ownPrimaryType || '';
+
+  /* Build a niche keyword from the business type */
+  var niche = 'food';
+  if (/salon|beauty|hair|spa/i.test(businessType)) niche = 'beauty and lifestyle';
+  else if (/gym|fitness|yoga/i.test(businessType)) niche = 'fitness';
+  else if (/boutique|cloth|fashion/i.test(businessType)) niche = 'fashion';
+  else if (/clinic|dental|dermat/i.test(businessType)) niche = 'health and wellness';
+
+  var searchPrompt = 'Find 5 Instagram or YouTube creators in ' + (city || 'India') + ' who create ' + niche + ' content. ' +
+    'They should be micro or nano creators (roughly 1K–100K followers) who would be good for a collaboration with a local ' + businessType + '.\n\n' +
+    'RULES:\n' +
+    '- Each creator MUST have a publicly visible contact: a business email OR a contact link on their profile. Creators without any public contact must be excluded.\n' +
+    '- Do NOT include personal phone numbers, home addresses, or any private information.\n' +
+    '- Only include information that is publicly posted by the creator on their profile.\n' +
+    '- Provide the creator\'s handle (e.g. @handle), profile URL, approximate follower count if visible (label as "approx."), and their public email or contact link.\n\n' +
+    'Output ONLY this JSON and nothing else:\n' +
+    '{"creators":[{"handle":"@handle","profileUrl":"https://...","followers":"approx. 12K","email":"their@email.com","contactUrl":"","niche":"food blogger"}]}';
+
+  var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-5-5',
+      max_tokens: 3000,
+      thinking: { type: 'disabled' },
+      system: 'You find local social media creators for small business collaborations. ' +
+        'Only include creators whose public profiles show a business email or contact link. ' +
+        'Never include personal/private information. Only publicly posted profile data.',
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search', max_uses: 2,
+          user_location: { type: 'approximate', country: 'IN', timezone: 'Asia/Kolkata' } }
+      ],
+      messages: [{ role: 'user', content: searchPrompt }]
+    })
+  }, 'creators');
+
+  if (!r.ok) throw new Error('Creator search failed: ' + r.status);
+  var data = await r.json();
+  recordCost(cost, 'claude-haiku-5-5', data);
+
+  /* Parse JSON response */
+  var text = (data.content || []).filter(function(b) { return b.type === 'text'; })
+    .map(function(b) { return b.text; }).join('');
+  var parsed = { creators: [] };
+  try {
+    var a = text.indexOf('{"creators"'), z = text.lastIndexOf('}');
+    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+  } catch (e) {}
+
+  /* Filter: must have public contact */
+  var out = [];
+  (Array.isArray(parsed.creators) ? parsed.creators : []).forEach(function(c) {
+    if (!c || !c.handle) return;
+    var hasContact = !!(c.email && c.email.indexOf('@') !== -1) || !!(c.contactUrl && /^https?:\/\//i.test(c.contactUrl));
+    if (!hasContact) return;
+    out.push({
+      handle: String(c.handle || '').slice(0, 80),
+      profileUrl: String(c.profileUrl || '').slice(0, 300),
+      followers: String(c.followers || '').slice(0, 30),
+      email: String(c.email || '').slice(0, 120),
+      contactUrl: String(c.contactUrl || '').slice(0, 300),
+      niche: String(c.niche || niche).slice(0, 60)
+    });
+  });
+
+  return out.slice(0, 5);
+}
+
+/* Run creator outreach for a firm: find creators, dedup, save, generate messages */
+async function runCreatorsForFirm(env, firmCode, day, cost) {
+  var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  if (!profileJson) return { status: 'no_profile' };
+  if (!profileJson.confirmedAt) {
+    var createdMs = new Date(profileJson.createdAt || 0).getTime();
+    if (Date.now() - createdMs < 24 * 3600000) return { status: 'awaiting_confirmation' };
+  }
+
+  /* Every-other-day check */
+  var creatorLastKey = 'scout:creators:last:' + firmCode;
+  var lastRun = await env.G7_KV.get(creatorLastKey);
+  if (lastRun) {
+    var lastMs = new Date(lastRun).getTime();
+    if (Date.now() - lastMs < 36 * 3600000) return { status: 'too_soon' };
+  }
+
+  /* Check B2C eligibility */
+  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  if (!saved || !saved.context) return { status: 'no_context' };
+  if (!isCreatorEligible(profileJson, saved.context)) return { status: 'not_b2c' };
+
+  var city = saved.city || '';
+  var lang = 'Hinglish';
+  try {
+    var st = await loadScoutState(env, firmCode);
+    if (st) { var pr = st.pick('scout_pending_result'); if (pr && pr.language) lang = pr.language; }
+  } catch (e) {}
+
+  /* Budget check */
+  var bc = await budgetCheck(env, day, firmCode);
+  if (!bc.ok) return { status: 'budget_exceeded' };
+
+  /* Find creators */
+  var creators = await findLocalCreators(env, firmCode, profileJson, city, lang, cost);
+  if (creators.length === 0) return { status: 'none_found' };
+
+  /* Dedup against existing customers (by handle or email) */
+  var existingHandles = new Set();
+  var existingEmails = new Set();
+  if (env.DB) {
+    try {
+      var rows = await env.DB.prepare(
+        "SELECT name, data FROM customers WHERE firm_code = ? AND kind = 'creators' AND deleted_at IS NULL"
+      ).bind(firmCode).all();
+      (rows.results || []).forEach(function(r) {
+        if (r.name) existingHandles.add(r.name.toLowerCase());
+        try {
+          var d = JSON.parse(r.data || '{}');
+          if (d.email) existingEmails.add(d.email.toLowerCase());
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  var newCreators = creators.filter(function(c) {
+    if (existingHandles.has(c.handle.toLowerCase())) return false;
+    if (c.email && existingEmails.has(c.email.toLowerCase())) return false;
+    return true;
+  }).slice(0, 3);
+
+  if (newCreators.length === 0) return { status: 'all_dupes' };
+
+  /* Generate collab messages via Haiku */
+  var businessName = profileJson.ownName || profileJson.businessName || 'our business';
+  var businessType = profileJson.ownPrimaryType || '';
+  var msgPrompt = 'You are ' + businessName + ', a local ' + businessType + '. ' +
+    'Draft a short, friendly DM and a short email for each creator below, inviting them for a free collab ' +
+    '(e.g. "free tasting for an honest review/reel" or "complimentary session for a story"). ' +
+    'Language: ' + (lang || 'English') + '. Keep each under 80 words. Be genuine, not salesy.\n\n' +
+    'CREATORS:\n' + newCreators.map(function(c, i) {
+      return (i + 1) + '. ' + c.handle + ' (' + c.niche + ', ' + c.followers + ')';
+    }).join('\n') + '\n\n' +
+    'Output ONLY JSON:\n[{"idx":1,"dm":"...","email_subject":"...","email_body":"..."}]';
+
+  var messages = [];
+  try {
+    var mr = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        thinking: { type: 'disabled' },
+        messages: [{ role: 'user', content: msgPrompt }]
+      })
+    }, 'creators/msg');
+    if (mr.ok) {
+      var md = await mr.json();
+      recordCost(cost, 'claude-haiku-4-5-20251001', md);
+      var mt = (md.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+      try {
+        var m1 = mt.indexOf('['), m2 = mt.lastIndexOf(']');
+        if (m1 !== -1 && m2 > m1) messages = JSON.parse(mt.slice(m1, m2 + 1));
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  /* Save to D1 */
+  var savedCount = 0;
+  if (env.DB) {
+    for (var i = 0; i < newCreators.length; i++) {
+      var c = newCreators[i];
+      var msg = messages[i] || {};
+      var id = 'cr_' + Date.now().toString(36) + '_' + i;
+      var cData = {
+        handle: c.handle,
+        profileUrl: c.profileUrl,
+        followers: c.followers,
+        email: c.email,
+        contactUrl: c.contactUrl,
+        niche: c.niche,
+        lead_day: day,
+        group: 'creators',
+        channels: [],
+        messages: {}
+      };
+      /* Build channels and messages */
+      if (c.email) {
+        cData.channels.push('email');
+        cData.messages.email = { subject: msg.email_subject || 'Collab with ' + businessName, body: msg.email_body || '' };
+      }
+      if (c.profileUrl) {
+        cData.channels.push('dm');
+        cData.messages.dm = msg.dm || '';
+      }
+
+      try {
+        await env.DB.prepare(
+          "INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, data, created_at, updated_at, synced_at) " +
+          "VALUES (?, ?, ?, '', 'creators', 'found', 'websearch', ?, datetime('now'), datetime('now'), datetime('now')) " +
+          "ON CONFLICT (firm_code, id) DO NOTHING"
+        ).bind(firmCode, id, c.handle, JSON.stringify(cData)).run();
+        savedCount++;
+
+        /* Record in lead_stats */
+        await env.DB.prepare(
+          "INSERT INTO lead_stats (firm_code, group_name, query, found) VALUES (?, 'creators', 'websearch', 1) " +
+          "ON CONFLICT (firm_code, group_name, query) DO UPDATE SET found = found + 1, updated_at = datetime('now')"
+        ).bind(firmCode).run();
+      } catch (e) {}
+    }
+  }
+
+  /* Mark last run */
+  await kvPut(env, creatorLastKey, new Date().toISOString(), { expirationTtl: 7 * 86400 });
+
+  /* Store in today's KV for display */
+  var todayCreators = newCreators.map(function(c, i) {
+    var msg = messages[i] || {};
+    return {
+      id: 'cr_' + Date.now().toString(36) + '_' + i,
+      name: c.handle,
+      group: 'creators',
+      handle: c.handle,
+      profileUrl: c.profileUrl,
+      followers: c.followers,
+      email: c.email,
+      contactUrl: c.contactUrl,
+      niche: c.niche,
+      channels: c.email ? ['email', 'dm'] : ['dm'],
+      messages: {
+        dm: msg.dm || '',
+        email: c.email ? { subject: msg.email_subject || '', body: msg.email_body || '' } : null
+      }
+    };
+  });
+  await kvPut(env, 'scout:creators:' + firmCode + ':' + day, JSON.stringify(todayCreators), { expirationTtl: 7 * 86400 });
+
+  return { status: 'ok', found: newCreators.length, saved: savedCount };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CUSTOMER FINDER v2 — daily verified leads from Google Places
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2281,12 +2547,19 @@ async function generateKeySearches(env, analysisText, city, cost) {
 }
 
 /* ── Run rank check for a firm: for each key search, find own position ── */
-async function runRankCheck(env, firmCode, profile, cost) {
+async function runRankCheck(env, firmCode, profile, cost, ownDetails) {
   var ownPlaceId = profile.ownPlaceId;
   var ownLat = profile.ownLocation ? profile.ownLocation.lat : 0;
   var ownLng = profile.ownLocation ? profile.ownLocation.lng : 0;
   var keySearches = profile.keySearches || [];
   if (!ownPlaceId || keySearches.length === 0) return null;
+
+  /* Authoritative rating/reviews from Place Details (not search results).
+     If ownDetails was passed (pre-fetched by caller), reuse it. */
+  if (!ownDetails) {
+    ownDetails = await placeDetailsWithReviews(env, ownPlaceId);
+    if (cost) cost.usd += RANK_DETAILS_COST;
+  }
 
   var radiusM = 5000;
   var results = [];
@@ -2314,17 +2587,18 @@ async function runRankCheck(env, firmCode, profile, cost) {
     }
   }
 
-  /* Rating vs nearby: own rating vs average of top 10 same-type (deduplicated) */
-  var ownRating = 0, ownReviews = 0;
+  /* Own rating/reviews: always from Place Details (accurate even when not in top 20) */
+  var ownRating = ownDetails.rating || 0;
+  var ownReviews = ownDetails.reviews || 0;
+
+  /* Nearby: average of top 10 same-type (deduplicated, excludes own place) */
   var nearbySeen = new Set();
   var nearbyPlaces = [];  /* { rating, reviews } */
   results.forEach(function(r) {
     if (!r.places) return;
     r.places.forEach(function(p) {
-      if (p.placeId === ownPlaceId) {
-        ownRating = p.rating;
-        ownReviews = p.reviews;
-      } else if (!nearbySeen.has(p.placeId) && nearbyPlaces.length < 10) {
+      if (p.placeId === ownPlaceId) return;  /* skip own */
+      if (!nearbySeen.has(p.placeId) && nearbyPlaces.length < 10) {
         nearbySeen.add(p.placeId);
         nearbyPlaces.push({ rating: p.rating, reviews: p.reviews });
       }
@@ -2367,7 +2641,7 @@ async function runRankCheck(env, firmCode, profile, cost) {
   /* Record cost */
   if (cost) cost.usd += textSearchCalls * RANK_TEXT_SEARCH_COST;
 
-  return { rankData: rankData, searchResults: results };
+  return { rankData: rankData, searchResults: results, ownDetails: ownDetails };
 }
 
 /* ── ISO week string: "2026-W44" ── */
@@ -2381,12 +2655,18 @@ function getISOWeek() {
 }
 
 /* ── Fetch reviews for own place + draft replies with Haiku ── */
-async function fetchOwnReviews(env, firmCode, profile, lang, cost) {
+async function fetchOwnReviews(env, firmCode, profile, lang, cost, preDetails) {
   var ownPlaceId = profile.ownPlaceId;
   if (!ownPlaceId) return null;
 
-  var details = await placeDetailsWithReviews(env, ownPlaceId);
-  if (cost) cost.usd += RANK_DETAILS_COST;
+  /* Reuse pre-fetched details from runRankCheck to avoid a duplicate API call */
+  var details;
+  if (preDetails) {
+    details = preDetails;
+  } else {
+    details = await placeDetailsWithReviews(env, ownPlaceId);
+    if (cost) cost.usd += RANK_DETAILS_COST;
+  }
 
   var reviewList = details.reviewList || [];
   if (reviewList.length === 0) return { reviews: [], draftReplies: [], fetchedAt: new Date().toISOString() };
@@ -6267,7 +6547,16 @@ export default {
             });
           } catch (e) {}
         }
-        return jsonResponse({ day: _ltDay, leads: _ltCached.leads || [], reminders: _ltReminders, shortfall: _ltCached.shortfall, generatedAt: _ltCached.generatedAt });
+        /* Merge creators into today's leads */
+        var _ltCreators = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
+        var _ltAllLeads = (_ltCached.leads || []).concat(_ltCreators || []);
+        return jsonResponse({ day: _ltDay, leads: _ltAllLeads, reminders: _ltReminders, shortfall: _ltCached.shortfall, generatedAt: _ltCached.generatedAt });
+      }
+
+      /* Check if there are creators even without leads */
+      var _ltCreatorsOnly = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
+      if (_ltCreatorsOnly && _ltCreatorsOnly.length > 0) {
+        return jsonResponse({ day: _ltDay, leads: _ltCreatorsOnly, reminders: [], shortfall: null, generatedAt: null });
       }
 
       /* No leads yet today — return empty */
@@ -6523,13 +6812,13 @@ export default {
       try {
         var _grcResult = await runRankCheck(env, _grcSess.firmCode, _grcProfile, _grcCost);
 
-        /* Also fetch reviews */
+        /* Fetch reviews — reuse ownDetails from rank check */
         var _grcLang = 'English';
         try {
           var _grcSt = await loadScoutState(env, _grcSess.firmCode);
           if (_grcSt) { var _grcPr = _grcSt.pick('scout_pending_result'); if (_grcPr && _grcPr.language) _grcLang = _grcPr.language; }
         } catch (e) {}
-        var _grcReviews = await fetchOwnReviews(env, _grcSess.firmCode, _grcProfile, _grcLang, _grcCost);
+        var _grcReviews = await fetchOwnReviews(env, _grcSess.firmCode, _grcProfile, _grcLang, _grcCost, _grcResult ? _grcResult.ownDetails : null);
 
         /* Competitor snapshot */
         var _grcComp = await runCompetitorSnapshot(env, _grcSess.firmCode, _grcProfile, _grcResult.searchResults, _grcCost);
@@ -6555,6 +6844,135 @@ export default {
       if (!_grvSess) return jsonResponse({ error: 'unauthorized' }, 401);
       var _grvData = await env.G7_KV.get('scout:googlereviews:' + _grvSess.firmCode, 'json');
       return jsonResponse({ reviews: _grvData || null });
+    }
+
+    // ── POST /scout/regulars/setup — create or update regulars QR config ──
+    if (request.method === 'POST' && path === '/scout/regulars/setup') {
+      var _rsSess = await validateSession(request, env);
+      if (!_rsSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _rsBody;
+      try { _rsBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      var _rsOfferText = String(_rsBody.offerText || '').trim().slice(0, 200);
+      var _rsBringBackDays = typeof _rsBody.bringBackDays === 'number' ? Math.max(7, Math.min(_rsBody.bringBackDays, 90)) : 21;
+
+      /* Load or create opaque code */
+      var _rsProfile = await env.G7_KV.get('scout:leadprofile:' + _rsSess.firmCode, 'json');
+      var _rsBizName = (_rsProfile && _rsProfile.ownName) || _rsSess.firmCode;
+
+      var _rsCodeKey = 'scout:regulars:code:' + _rsSess.firmCode;
+      var _rsExistingCode = await env.G7_KV.get(_rsCodeKey);
+      var _rsCode = _rsExistingCode;
+      if (!_rsCode) {
+        /* Generate opaque 8-char code */
+        _rsCode = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        _rsCode = _rsCode.slice(-8);
+        await kvPut(env, _rsCodeKey, _rsCode);
+      }
+
+      /* Store code → firm mapping */
+      await kvPut(env, 'regular:code:' + _rsCode, JSON.stringify({
+        firmCode: _rsSess.firmCode,
+        businessName: _rsBizName,
+        offerText: _rsOfferText
+      }));
+
+      /* Store regulars config in lead profile */
+      if (_rsProfile) {
+        _rsProfile.regularsConfig = {
+          code: _rsCode,
+          offerText: _rsOfferText,
+          bringBackDays: _rsBringBackDays,
+          updatedAt: new Date().toISOString()
+        };
+        await kvPut(env, 'scout:leadprofile:' + _rsSess.firmCode, JSON.stringify(_rsProfile));
+      }
+
+      return jsonResponse({ ok: true, code: _rsCode, offerText: _rsOfferText, bringBackDays: _rsBringBackDays });
+    }
+
+    // ── GET /scout/regulars — list regulars for this firm ──
+    if (request.method === 'GET' && path === '/scout/regulars') {
+      var _rlSess = await validateSession(request, env);
+      if (!_rlSess) return jsonResponse({ error: 'unauthorized' }, 401);
+
+      var _rlRegulars = [];
+      var _rlConfig = null;
+      if (env.DB) {
+        try {
+          var _rlRows = await env.DB.prepare(
+            "SELECT id, name, phone, data, created_at, updated_at FROM customers WHERE firm_code = ? AND source = 'qr' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 200"
+          ).bind(_rlSess.firmCode).all();
+          (_rlRows.results || []).forEach(function(r) {
+            var d;
+            try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
+            _rlRegulars.push({
+              id: r.id,
+              name: r.name,
+              phone: r.phone,
+              whatsapp: d.whatsapp || r.phone,
+              birthday: d.birthday || '',
+              visits: d.visits || 1,
+              lastVisitAt: d.lastVisitAt || r.updated_at,
+              consentAt: d.consentAt || r.created_at
+            });
+          });
+        } catch (e) {}
+      }
+
+      /* Load config */
+      var _rlProfile = await env.G7_KV.get('scout:leadprofile:' + _rlSess.firmCode, 'json');
+      if (_rlProfile && _rlProfile.regularsConfig) _rlConfig = _rlProfile.regularsConfig;
+
+      return jsonResponse({ regulars: _rlRegulars, config: _rlConfig });
+    }
+
+    // ── POST /scout/regulars/bring-back — draft a bring-back message ──
+    if (request.method === 'POST' && path === '/scout/regulars/bring-back') {
+      var _rbSess = await validateSession(request, env);
+      if (!_rbSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _rbBody;
+      try { _rbBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      var _rbName = String(_rbBody.name || 'friend').slice(0, 80);
+      var _rbProfile = await env.G7_KV.get('scout:leadprofile:' + _rbSess.firmCode, 'json');
+      var _rbBizName = (_rbProfile && _rbProfile.ownName) || '';
+      var _rbOffer = (_rbProfile && _rbProfile.regularsConfig && _rbProfile.regularsConfig.offerText) || '';
+
+      var _rbLang = 'Hinglish';
+      try {
+        var _rbSt = await loadScoutState(env, _rbSess.firmCode);
+        if (_rbSt) { var _rbPr = _rbSt.pick('scout_pending_result'); if (_rbPr && _rbPr.language) _rbLang = _rbPr.language; }
+      } catch (e) {}
+
+      var _rbMsg = 'Hi ' + _rbName + '! We miss you at ' + _rbBizName + '. ' +
+        (_rbOffer ? _rbOffer + '. ' : '') + 'Hope to see you soon!';
+
+      return jsonResponse({ ok: true, message: _rbMsg });
+    }
+
+    // ── POST /scout/delivery-platforms — save Zomato/Swiggy links + manual ratings ──
+    if (request.method === 'POST' && path === '/scout/delivery-platforms') {
+      var _dpSess = await validateSession(request, env);
+      if (!_dpSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _dpBody;
+      try { _dpBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      var _dpProfile = await env.G7_KV.get('scout:leadprofile:' + _dpSess.firmCode, 'json');
+      if (!_dpProfile) return jsonResponse({ error: 'no profile' }, 400);
+
+      _dpProfile.deliveryPlatforms = {
+        zomatoUrl: String(_dpBody.zomatoUrl || '').slice(0, 300),
+        swiggyUrl: String(_dpBody.swiggyUrl || '').slice(0, 300),
+        zomatoRating: Math.min(5, Math.max(0, parseFloat(_dpBody.zomatoRating) || 0)),
+        zomatoReviews: Math.max(0, parseInt(_dpBody.zomatoReviews, 10) || 0),
+        swiggyRating: Math.min(5, Math.max(0, parseFloat(_dpBody.swiggyRating) || 0)),
+        swiggyReviews: Math.max(0, parseInt(_dpBody.swiggyReviews, 10) || 0),
+        updatedAt: new Date().toISOString()
+      };
+
+      await kvPut(env, 'scout:leadprofile:' + _dpSess.firmCode, JSON.stringify(_dpProfile));
+      return jsonResponse({ ok: true });
     }
 
     // ── POST /admin/generate-leads — admin trigger for a specific firm ──
@@ -7422,6 +7840,108 @@ export default {
       });
     }
 
+    // ── ROUTE — GET /r/info — public: get business name + offer for a regulars code ──
+    if (request.method === 'GET' && path === '/r/info') {
+      var _riCode = url.searchParams.get('f') || '';
+      if (!_riCode || _riCode.length > 40) return jsonResponse({ error: 'invalid code' }, 400);
+      var _riData = await env.G7_KV.get('regular:code:' + _riCode, 'json');
+      if (!_riData) return jsonResponse({ error: 'not found' }, 404);
+      return jsonResponse({ businessName: _riData.businessName || '', offerText: _riData.offerText || '' });
+    }
+
+    // ── ROUTE — POST /r/join — public: customer joins via QR scan ──
+    if (request.method === 'POST' && path === '/r/join') {
+      var _rjIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      var _rjDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+
+      /* IP rate limit: 10 per day */
+      var _rjIpKey = 'regular:rl:ip:' + _rjIp + ':' + _rjDay;
+      var _rjIpCount = parseInt(await env.G7_KV.get(_rjIpKey) || '0', 10);
+      if (_rjIpCount >= 10) return jsonResponse({ error: 'Too many requests. Please try again tomorrow.' }, 429);
+
+      var _rjBody;
+      try { _rjBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      var _rjCode = String(_rjBody.code || '').slice(0, 40);
+      if (!_rjCode) return jsonResponse({ error: 'missing code' }, 400);
+
+      /* Honeypot check */
+      if (_rjBody.hp) return jsonResponse({ ok: true }); /* silently accept — bot */
+
+      /* Code rate limit: 300 per day */
+      var _rjCodeKey = 'regular:rl:code:' + _rjCode + ':' + _rjDay;
+      var _rjCodeCount = parseInt(await env.G7_KV.get(_rjCodeKey) || '0', 10);
+      if (_rjCodeCount >= 300) return jsonResponse({ error: 'This page has reached its daily limit.' }, 429);
+
+      /* Validate code */
+      var _rjData = await env.G7_KV.get('regular:code:' + _rjCode, 'json');
+      if (!_rjData || !_rjData.firmCode) return jsonResponse({ error: 'invalid code' }, 400);
+
+      var _rjFirm = _rjData.firmCode;
+      var _rjName = String(_rjBody.name || '').trim().slice(0, 80);
+      var _rjPhone = String(_rjBody.phone || '').replace(/\D/g, '').slice(-10);
+      var _rjBirthday = String(_rjBody.birthday || '').slice(0, 10);
+      var _rjConsent = !!_rjBody.consent;
+
+      if (!_rjName) return jsonResponse({ error: 'Name is required.' }, 400);
+      if (_rjPhone.length !== 10 || !/^[6-9]/.test(_rjPhone)) return jsonResponse({ error: 'Please enter a valid 10-digit Indian mobile number.' }, 400);
+      if (!_rjConsent) return jsonResponse({ error: 'Consent is required.' }, 400);
+
+      var _rjNow = new Date().toISOString();
+      var _rjConsentText = 'I agree to receive offers from ' + (_rjData.businessName || 'this business') + ' on WhatsApp.';
+
+      /* Increment rate limits */
+      await kvPut(env, _rjIpKey, String(_rjIpCount + 1), { expirationTtl: 2 * 86400 });
+      await kvPut(env, _rjCodeKey, String(_rjCodeCount + 1), { expirationTtl: 2 * 86400 });
+
+      /* Dedup by phone: check if this phone already exists for this firm */
+      var _rjReturning = false;
+      var _rjVisits = 1;
+      if (env.DB) {
+        try {
+          var _rjExisting = await env.DB.prepare(
+            "SELECT id, data FROM customers WHERE firm_code = ? AND phone = ? AND source = 'qr' AND deleted_at IS NULL LIMIT 1"
+          ).bind(_rjFirm, _rjPhone).first();
+
+          if (_rjExisting) {
+            /* Returning customer — update visit count and lastVisitAt */
+            var _rjOldData;
+            try { _rjOldData = JSON.parse(_rjExisting.data || '{}'); } catch (e) { _rjOldData = {}; }
+            _rjOldData.visits = (_rjOldData.visits || 1) + 1;
+            _rjOldData.lastVisitAt = _rjNow;
+            _rjVisits = _rjOldData.visits;
+            if (_rjBirthday && !_rjOldData.birthday) _rjOldData.birthday = _rjBirthday;
+            await env.DB.prepare(
+              "UPDATE customers SET name = ?, data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
+            ).bind(_rjName, JSON.stringify(_rjOldData), _rjFirm, _rjExisting.id).run();
+            _rjReturning = true;
+          } else {
+            /* New regular */
+            var _rjId = 'reg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+            var _rjCustData = {
+              whatsapp: _rjPhone,
+              birthday: _rjBirthday,
+              consentAt: _rjNow,
+              consentText: _rjConsentText,
+              visits: 1,
+              lastVisitAt: _rjNow,
+              source: 'qr',
+              regularCode: _rjCode
+            };
+            await env.DB.prepare(
+              "INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, data, created_at, updated_at, synced_at) " +
+              "VALUES (?, ?, ?, ?, 'regular', 'regular', 'qr', ?, datetime('now'), datetime('now'), datetime('now')) " +
+              "ON CONFLICT (firm_code, id) DO NOTHING"
+            ).bind(_rjFirm, _rjId, _rjName, _rjPhone, JSON.stringify(_rjCustData)).run();
+          }
+        } catch (e) {
+          return jsonResponse({ error: 'Could not save. Please try again.' }, 500);
+        }
+      }
+
+      return jsonResponse({ ok: true, returning: _rjReturning, visits: _rjVisits });
+    }
+
     // ── ROUTE — POST /log/client-error ────────────────────────────────────────
     // Browser-side errors from scout.js. Rate-limited per IP (in-memory).
     // No auth required. Records to D1 errors table with source='client'.
@@ -7634,6 +8154,31 @@ export default {
     } while (leadCursor);
     report.leads = _leadReport;
 
+    /* ── Local creators — every other day for B2C firms ── */
+    var _creatorReport = [];
+    var creatorCursor;
+    do {
+      var creatorPage = await env.G7_KV.list({ prefix: 'scout:leadprofile:', cursor: creatorCursor });
+      for (var _ck of creatorPage.keys) {
+        if (_ck.name.indexOf(':src:') !== -1) continue;
+        var _cFirm = _ck.name.slice('scout:leadprofile:'.length);
+        if (!_cFirm) continue;
+        var _ct0 = Date.now();
+        var _cCost = newCostAccum();
+        try {
+          var _cResult = await runCreatorsForFirm(env, _cFirm, day, _cCost);
+          await flushCost(env, day, _cFirm, _cCost);
+          _creatorReport.push({ firm: _cFirm, status: _cResult.status, found: _cResult.found || 0, ms: Date.now() - _ct0 });
+        } catch (e) {
+          await flushCost(env, day, _cFirm, _cCost);
+          _creatorReport.push({ firm: _cFirm, status: 'error', error: String(e.message || e).slice(0, 200), ms: Date.now() - _ct0 });
+          try { await recordError(env, { source: 'worker', route: 'cron/creators', firmCode: _cFirm, kind: 'creator_search', message: String(e.message || e) }); } catch(e2) {}
+        }
+      }
+      creatorCursor = creatorPage.list_complete ? undefined : creatorPage.cursor;
+    } while (creatorCursor);
+    report.creators = _creatorReport;
+
     /* ── "How people find you on Google" — weekly on Monday ──
        Runs rank check, review fetch, competitor snapshot for each firm with ownPlaceId. */
     var _isMonday = ist.getDay() === 1;
@@ -7658,13 +8203,13 @@ export default {
             try {
               var _rResult = await runRankCheck(env, _rFirm, _rProfile, _rCost);
 
-              /* Fetch reviews */
+              /* Fetch reviews — reuse ownDetails from rank check to avoid duplicate Place Details call */
               var _rLang = 'English';
               try {
                 var _rSt = await loadScoutState(env, _rFirm);
                 if (_rSt) { var _rPr = _rSt.pick('scout_pending_result'); if (_rPr && _rPr.language) _rLang = _rPr.language; }
               } catch (e) {}
-              await fetchOwnReviews(env, _rFirm, _rProfile, _rLang, _rCost);
+              await fetchOwnReviews(env, _rFirm, _rProfile, _rLang, _rCost, _rResult ? _rResult.ownDetails : null);
 
               /* Competitor snapshot */
               await runCompetitorSnapshot(env, _rFirm, _rProfile, _rResult.searchResults, _rCost);

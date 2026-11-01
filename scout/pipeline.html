@@ -243,6 +243,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div id="everyoneSection"><!-- rendered by JS --></div>
   </div>
 
+  <!-- ══════════════════════════════════════
+       SECTION 3 — REGULARS
+  ══════════════════════════════════════ -->
+  <div class="section-block" id="regularsBlock" style="display:none">
+    <div class="section-label">Regulars</div>
+    <div id="regularsSection"><!-- rendered by JS --></div>
+  </div>
+
 </div><!-- /page-wrap -->
 
 <script>
@@ -581,6 +589,26 @@ async function loadGoogleRank() {
       html += '</div>';
     }
 
+    /* ── Delivery platform links ── */
+    var dp = profile.deliveryPlatforms;
+    if (dp && (dp.zomatoUrl || dp.swiggyUrl)) {
+      html += '<div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">';
+      if (dp.zomatoUrl) {
+        html += '<a href="' + escHtml(dp.zomatoUrl) + '" target="_blank" rel="noopener" class="grank-btn" style="background:rgba(203,60,51,0.12);border-color:rgba(203,60,51,0.3);color:#e23744;text-decoration:none">Zomato';
+        if (dp.zomatoRating) html += ' ' + dp.zomatoRating + '\u2605';
+        if (dp.zomatoReviews) html += ' (' + dp.zomatoReviews + ')';
+        html += '</a>';
+      }
+      if (dp.swiggyUrl) {
+        html += '<a href="' + escHtml(dp.swiggyUrl) + '" target="_blank" rel="noopener" class="grank-btn" style="background:rgba(252,92,15,0.12);border-color:rgba(252,92,15,0.3);color:#fc5c0f;text-decoration:none">Swiggy';
+        if (dp.swiggyRating) html += ' ' + dp.swiggyRating + '\u2605';
+        if (dp.swiggyReviews) html += ' (' + dp.swiggyReviews + ')';
+        html += '</a>';
+      }
+      if (dp.updatedAt) html += '<span style="font-size:9px;color:var(--grey2)">Updated ' + new Date(dp.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + '</span>';
+      html += '</div>';
+    }
+
     /* ── QR Card button ── */
     if (profile.ownPlaceId) {
       html += '<div style="margin-top:16px;text-align:center">';
@@ -655,6 +683,119 @@ function openReviewQR() {
   window.open('review-qr.html', '_blank');
 }
 
+/* ═══════════════════════════════════════════
+   REGULARS
+═══════════════════════════════════════════ */
+async function loadRegulars() {
+  var block = document.getElementById('regularsBlock');
+  var sec = document.getElementById('regularsSection');
+  if (!block || !sec) return;
+
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) return;
+
+  try {
+    var r = await fetch(G7_WORKER_URL + '/scout/regulars', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) return;
+    var d = await r.json();
+    var regulars = d.regulars || [];
+    var config = d.config;
+
+    if (!config && regulars.length === 0) return; /* No regulars system set up */
+
+    block.style.display = 'block';
+    var bringBackDays = (config && config.bringBackDays) || 21;
+    var now = Date.now();
+
+    var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">';
+    html += '<span style="font-size:24px;font-family:\'Cormorant Garamond\',serif;font-weight:300;color:var(--white)">' + regulars.length + '</span>';
+    html += '<span style="font-size:11px;color:var(--grey1);letter-spacing:.08em">regulars</span>';
+    if (config && config.code) {
+      html += '<button class="grank-btn" onclick="openRegularCard()" style="margin-left:auto">Print Table Card</button>';
+    }
+    html += '</div>';
+
+    /* Bring-back list */
+    var bringBack = regulars.filter(function(reg) {
+      if (!reg.lastVisitAt) return false;
+      var daysSince = (now - new Date(reg.lastVisitAt).getTime()) / 86400000;
+      return daysSince >= bringBackDays;
+    });
+
+    if (bringBack.length > 0) {
+      html += '<div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-bottom:10px">Bring Back (' + bringBack.length + ')</div>';
+      bringBack.forEach(function(reg) {
+        var daysSince = Math.floor((now - new Date(reg.lastVisitAt).getTime()) / 86400000);
+        var waNum = (reg.whatsapp || reg.phone || '').replace(/\D/g, '').slice(-10);
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border2);flex-wrap:wrap">';
+        html += '<span style="font-size:13px;color:var(--white);min-width:100px">' + escHtml(reg.name) + '</span>';
+        html += '<span style="font-size:11px;color:var(--grey2)">' + daysSince + ' days ago</span>';
+        html += '<span style="font-size:11px;color:var(--grey2)">' + reg.visits + ' visits</span>';
+        if (waNum.length === 10) {
+          html += '<button class="grank-btn bring-back-btn" style="margin-left:auto;font-size:9px;padding:6px 12px" ' +
+            'data-name="' + escHtml(reg.name) + '" data-wa="' + waNum + '" data-id="' + escHtml(reg.id) + '">Bring Back</button>';
+        }
+        html += '</div>';
+      });
+    }
+
+    /* All regulars list */
+    html += '<div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey2);margin:20px 0 10px">All Regulars</div>';
+    if (regulars.length === 0) {
+      html += '<div style="font-size:12px;color:var(--grey2)">No regulars yet. Print a table card from Settings to get started.</div>';
+    } else {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      html += '<thead><tr><th style="text-align:left;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--grey2);padding:6px 8px 6px 0">Name</th>';
+      html += '<th style="text-align:left;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--grey2);padding:6px 8px 6px 0">Visits</th>';
+      html += '<th style="text-align:left;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--grey2);padding:6px 8px 6px 0">Last visit</th>';
+      html += '<th style="text-align:left;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--grey2);padding:6px 8px 6px 0">Birthday</th></tr></thead><tbody>';
+      regulars.forEach(function(reg) {
+        var lastVisit = reg.lastVisitAt ? new Date(reg.lastVisitAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—';
+        html += '<tr>';
+        html += '<td style="padding:6px 8px 6px 0;color:var(--white)">' + escHtml(reg.name) + '</td>';
+        html += '<td style="padding:6px 8px 6px 0;color:var(--grey1)">' + reg.visits + '</td>';
+        html += '<td style="padding:6px 8px 6px 0;color:var(--grey1)">' + lastVisit + '</td>';
+        html += '<td style="padding:6px 8px 6px 0;color:var(--grey1)">' + (reg.birthday || '—') + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    sec.innerHTML = html;
+
+    /* Attach bring-back button handlers via delegation (avoids single-quote injection) */
+    sec.querySelectorAll('.bring-back-btn').forEach(function(btn) {
+      btn.onclick = function() {
+        bringBackRegular(btn.getAttribute('data-name'), btn.getAttribute('data-wa'), btn.getAttribute('data-id'));
+      };
+    });
+  } catch (e) { /* silently fail */ }
+}
+
+function openRegularCard() {
+  window.open('regular-card.html', '_blank');
+}
+
+async function bringBackRegular(name, waNum, regId) {
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) return;
+  try {
+    var r = await fetch(G7_WORKER_URL + '/scout/regulars/bring-back', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name })
+    });
+    var d = await r.json();
+    var msg = d.message || 'Hi ' + name + '! We miss you. Hope to see you soon!';
+    var waUrl = 'https://wa.me/91' + waNum + '?text=' + encodeURIComponent(msg);
+    window.open(waUrl, '_blank');
+  } catch (e) {
+    alert('Could not generate message');
+  }
+}
+
 window.addEventListener('DOMContentLoaded', async function() {
   var token = localStorage.getItem('g7_session_token');
   if (!token) {
@@ -676,6 +817,9 @@ window.addEventListener('DOMContentLoaded', async function() {
 
   /* Load Google rank section (non-blocking) */
   loadGoogleRank();
+
+  /* Load Regulars section (non-blocking) */
+  loadRegulars();
 
   /* If navigated via pipeline.html#add, focus the name field */
   if (location.hash === '#add') {

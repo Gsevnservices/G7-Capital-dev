@@ -251,6 +251,46 @@ function renderLeads(leads) {
   var html = '';
   for (var i = 0; i < leads.length; i++) {
     var l = leads[i];
+
+    /* ── Creator cards ── */
+    if (l.group === 'creators') {
+      var dm = (l.messages && l.messages.dm) || '';
+      var emData = (l.messages && l.messages.email) || {};
+      html += '<div class="lead-card" id="lead-' + esc(l.id) + '">';
+      html += '<div class="lead-top">';
+      html += '<span class="lead-name">' + esc(l.handle || l.name) + '</span>';
+      html += '<span class="lead-group" style="background:rgba(155,89,182,0.15);color:#bb86fc">creators</span>';
+      html += '</div>';
+      html += '<div class="lead-meta">';
+      if (l.followers) html += '<span>' + esc(l.followers) + ' followers</span>';
+      if (l.niche) html += '<span>' + esc(l.niche) + '</span>';
+      html += '</div>';
+      /* Editable DM message */
+      html += '<div class="lead-msg" contenteditable="true" id="msg-' + esc(l.id) + '">' + esc(dm) + '</div>';
+      html += '<div class="ch-btns">';
+      if (l.profileUrl) {
+        html += '<a href="' + esc(l.profileUrl) + '" target="_blank" rel="noopener" class="ch-btn" style="border-color:rgba(155,89,182,0.5);color:#bb86fc" ' +
+          'onclick="markContacted(\'' + esc(l.id) + '\',\'dm\')">DM</a>';
+      }
+      if (l.email) {
+        var cSubj = encodeURIComponent(emData.subject || 'Collaboration');
+        var cBody = encodeURIComponent(emData.body || dm);
+        html += '<a href="mailto:' + esc(l.email) + '?subject=' + cSubj + '&body=' + cBody + '" class="ch-btn email" ' +
+          'onclick="markContacted(\'' + esc(l.id) + '\',\'email\')">Email</a>';
+      }
+      html += '</div>';
+      html += '<div class="lead-actions">';
+      html += '<button class="act-btn positive" onclick="leadAction(\'' + esc(l.id) + '\',\'replied\')">Replied</button>';
+      html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'not_interested\')">Not interested</button>';
+      html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'skip\')">Skip</button>';
+      html += '<button class="act-btn thumb" onclick="leadAction(\'' + esc(l.id) + '\',\'thumbs_up\')" title="Good fit">\uD83D\uDC4D</button>';
+      html += '<button class="act-btn thumb" onclick="leadAction(\'' + esc(l.id) + '\',\'thumbs_down\')" title="Bad fit">\uD83D\uDC4E</button>';
+      html += '</div>';
+      html += '</div>';
+      continue;
+    }
+
+    /* ── Standard lead cards ── */
     var dist = l.distance != null ? l.distance.toFixed(1) + ' km' : '';
     var channels = l.channels || [];
     var phone = l.phone || '';
