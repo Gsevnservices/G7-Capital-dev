@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Table Card — Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/env.js?v=1"></script>
+<script src="../assets/auth.js?v=19"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{font-size:16px}
+body{font-family:'Tenor Sans',sans-serif;background:#080808;color:#FAFAF8;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
+
+.tc-loading{text-align:center;color:#8A8880;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
+.tc-card{
+  background:#fff;color:#111;border-radius:16px;padding:48px 40px;
+  max-width:420px;width:100%;text-align:center;
+  box-shadow:0 8px 32px rgba(0,0,0,.4)
+}
+.tc-biz-name{
+  font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:300;
+  margin-bottom:8px;color:#111;line-height:1.3
+}
+.tc-offer{font-size:15px;color:#E0922F;margin-bottom:24px;line-height:1.6;font-weight:600}
+.tc-qr{margin:0 auto 20px;max-width:200px}
+.tc-qr img{width:100%;height:auto;display:block}
+.tc-cta{font-size:14px;color:#444;margin-bottom:8px;line-height:1.5}
+.tc-footer{font-size:10px;color:#999;margin-top:16px;letter-spacing:.08em}
+
+.tc-actions{margin-top:24px;display:flex;gap:12px;justify-content:center}
+.tc-btn{
+  font-family:'Tenor Sans',sans-serif;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  padding:10px 24px;border:1px solid rgba(224,146,47,0.5);background:transparent;
+  color:#E0922F;cursor:pointer;transition:all .3s;border-radius:4px
+}
+.tc-btn:hover{background:rgba(224,146,47,0.1);border-color:#E0922F}
+.tc-error{text-align:center;color:#C45A5A;font-size:13px;max-width:360px}
+.tc-error a{color:#E0922F;text-decoration:none}
+
+@media print{
+  body{background:#fff;padding:0;display:block}
+  .tc-card{box-shadow:none;border:2px solid #ddd;border-radius:8px;margin:40px auto;padding:48px 40px;max-width:100%}
+  .tc-actions{display:none!important}
+}
+</style>
+</head>
+<body>
+
+<div id="tcLoading" class="tc-loading">Loading your table card...</div>
+<div id="tcCard" class="tc-card" style="display:none"></div>
+<div id="tcError" class="tc-error" style="display:none"></div>
+
+<script>
+function makeQrDataUrl(text) {
+  var qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  return qr.createDataURL(8, 0);
+}
+
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+window.addEventListener('DOMContentLoaded', async function() {
+  var loading = document.getElementById('tcLoading');
+  var card = document.getElementById('tcCard');
+  var errDiv = document.getElementById('tcError');
+
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) {
+    loading.style.display = 'none';
+    errDiv.style.display = 'block';
+    errDiv.innerHTML = 'Not signed in. <a href="../login.html?product=scout">Sign in</a> first.';
+    return;
+  }
+
+  try {
+    var r = await fetch(G7_WORKER_URL + '/scout/regulars', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) throw new Error('Could not load regulars config');
+    var d = await r.json();
+    var config = d.config;
+
+    if (!config || !config.code) {
+      loading.style.display = 'none';
+      errDiv.style.display = 'block';
+      errDiv.innerHTML = 'Regulars not set up yet.<br><a href="settings.html#leads">Set up regulars</a> in Settings first.';
+      return;
+    }
+
+    /* Build the public join URL — use current directory as base to handle GitHub Pages subpath */
+    var pathPrefix = location.pathname.replace(/\/[^/]*$/, ''); /* e.g. /G7-Capital/scout or /scout */
+    var baseUrl = location.origin + pathPrefix + '/r.html?f=' + encodeURIComponent(config.code);
+    var bizName = config.businessName || '';
+
+    /* If no businessName in config, try to get from profile */
+    if (!bizName) {
+      try {
+        var pr = await fetch(G7_WORKER_URL + '/scout/lead-profile', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (pr.ok) {
+          var pd = await pr.json();
+          bizName = (pd.profile && pd.profile.ownName) || '';
+        }
+      } catch (e) {}
+    }
+
+    card.innerHTML =
+      '<div class="tc-biz-name">' + escHtml(bizName || 'Welcome') + '</div>' +
+      (config.offerText ? '<div class="tc-offer">' + escHtml(config.offerText) + '</div>' : '') +
+      '<div class="tc-qr"><img src="' + makeQrDataUrl(baseUrl) + '" alt="Join QR code"></div>' +
+      '<div class="tc-cta">Scan to join &amp; get offers on WhatsApp</div>' +
+      '<div class="tc-footer">' + escHtml(bizName) + '</div>' +
+      '<div class="tc-actions">' +
+        '<button class="tc-btn" onclick="window.print()">Print Card</button>' +
+        '<button class="tc-btn" onclick="window.close()">Close</button>' +
+      '</div>';
+
+    loading.style.display = 'none';
+    card.style.display = 'block';
+
+  } catch (e) {
+    loading.style.display = 'none';
+    errDiv.style.display = 'block';
+    errDiv.textContent = 'Error: ' + e.message;
+  }
+});
+</script>
+</body>
+</html>

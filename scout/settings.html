@@ -538,6 +538,70 @@ async function renderLeadsSettings() {
     }
     html += '<div class="s-saved" id="leadsSettingsSaved">Saved</div>';
 
+    /* ── Regulars QR ── */
+    html += '<div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(201,168,76,0.15)">';
+    html += '<div class="s-row-label" style="margin-bottom:12px">Regulars — Table QR</div>';
+    var rc = p.regularsConfig || {};
+    html += '<div style="margin-bottom:10px">';
+    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Offer text (shown on the QR card)</label>';
+    html += '<input type="text" id="regOfferText" value="' + escHtml(rc.offerText || '') + '" placeholder="e.g. 10% off your next visit" ' +
+      'style="width:100%;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:6px;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '</div>';
+    html += '<div style="margin-bottom:10px">';
+    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Bring-back after (days)</label>';
+    html += '<input type="number" id="regBringBackDays" value="' + (rc.bringBackDays || 21) + '" min="7" max="90" ' +
+      'style="width:100px;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:6px;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    html += '<button class="s-btn" id="saveRegBtn">Save regulars</button>';
+    if (rc.code) {
+      html += '<button class="s-btn" id="printRegCardBtn" style="border-color:var(--gold);color:var(--gold)">Print table card</button>';
+    }
+    html += '</div>';
+    html += '<div class="s-saved" id="regSaved">Saved</div>';
+    html += '</div>';
+
+    /* ── Zomato / Swiggy ── */
+    var dp = p.deliveryPlatforms || {};
+    html += '<div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(201,168,76,0.15)">';
+    html += '<div class="s-row-label" style="margin-bottom:12px">Delivery Platforms</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">'; /* 2-col grid */
+    /* Zomato */
+    html += '<div>';
+    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Zomato listing URL</label>';
+    html += '<input type="url" id="dpZomatoUrl" value="' + escHtml(dp.zomatoUrl || '') + '" placeholder="https://zomato.com/..." ' +
+      'style="width:100%;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '</div>';
+    /* Swiggy */
+    html += '<div>';
+    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Swiggy listing URL</label>';
+    html += '<input type="url" id="dpSwiggyUrl" value="' + escHtml(dp.swiggyUrl || '') + '" placeholder="https://swiggy.com/..." ' +
+      'style="width:100%;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '</div>';
+    /* Zomato rating/reviews */
+    html += '<div>';
+    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Zomato rating / reviews</label>';
+    html += '<div style="display:flex;gap:6px">';
+    html += '<input type="number" step="0.1" min="0" max="5" id="dpZomatoRating" value="' + (dp.zomatoRating || '') + '" placeholder="4.2" ' +
+      'style="width:60px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '<input type="number" min="0" id="dpZomatoReviews" value="' + (dp.zomatoReviews || '') + '" placeholder="150" ' +
+      'style="width:80px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '</div></div>';
+    /* Swiggy rating/reviews */
+    html += '<div>';
+    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Swiggy rating / reviews</label>';
+    html += '<div style="display:flex;gap:6px">';
+    html += '<input type="number" step="0.1" min="0" max="5" id="dpSwiggyRating" value="' + (dp.swiggyRating || '') + '" placeholder="4.1" ' +
+      'style="width:60px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '<input type="number" min="0" id="dpSwiggyReviews" value="' + (dp.swiggyReviews || '') + '" placeholder="200" ' +
+      'style="width:80px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '</div></div>';
+    html += '</div>'; /* close grid */
+    if (dp.updatedAt) html += '<div style="font-size:10px;color:var(--grey2);margin-bottom:8px">Last updated: ' + new Date(dp.updatedAt).toLocaleDateString() + '</div>';
+    html += '<button class="s-btn" id="saveDpBtn">Save platforms</button>';
+    html += '<div class="s-saved" id="dpSaved">Saved</div>';
+    html += '</div>';
+
     el.innerHTML = html;
 
     /* ── Listing search handler ── */
@@ -663,6 +727,50 @@ async function renderLeadsSettings() {
         renderLeadsSettings();
       } catch (e) { confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm \u2014 start finding leads'; }
     };
+    /* ── Regulars save handler ── */
+    var saveRegBtn = document.getElementById('saveRegBtn');
+    if (saveRegBtn) saveRegBtn.onclick = async function() {
+      saveRegBtn.disabled = true; saveRegBtn.textContent = 'Saving\u2026';
+      var offerText = (document.getElementById('regOfferText') || {}).value || '';
+      var bringBackDays = parseInt((document.getElementById('regBringBackDays') || {}).value, 10) || 21;
+      try {
+        var rr = await fetch(SCOUT_WORKER + '/scout/regulars/setup', {
+          method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+          body: JSON.stringify({ offerText: offerText, bringBackDays: bringBackDays })
+        });
+        if (rr.ok) { flashSaved('regSaved'); renderLeadsSettings(); }
+        else { flashErr('regSaved', 'Could not save'); }
+      } catch (e) { flashErr('regSaved', 'Error'); }
+      saveRegBtn.disabled = false; saveRegBtn.textContent = 'Save regulars';
+    };
+    var printRegBtn = document.getElementById('printRegCardBtn');
+    if (printRegBtn) printRegBtn.onclick = function() {
+      window.open('regular-card.html', '_blank');
+    };
+
+    /* ── Delivery platforms save handler ── */
+    var saveDpBtn = document.getElementById('saveDpBtn');
+    if (saveDpBtn) saveDpBtn.onclick = async function() {
+      saveDpBtn.disabled = true; saveDpBtn.textContent = 'Saving\u2026';
+      var dpData = {
+        zomatoUrl: (document.getElementById('dpZomatoUrl') || {}).value || '',
+        swiggyUrl: (document.getElementById('dpSwiggyUrl') || {}).value || '',
+        zomatoRating: parseFloat((document.getElementById('dpZomatoRating') || {}).value) || 0,
+        zomatoReviews: parseInt((document.getElementById('dpZomatoReviews') || {}).value, 10) || 0,
+        swiggyRating: parseFloat((document.getElementById('dpSwiggyRating') || {}).value) || 0,
+        swiggyReviews: parseInt((document.getElementById('dpSwiggyReviews') || {}).value, 10) || 0
+      };
+      try {
+        var dr = await fetch(SCOUT_WORKER + '/scout/delivery-platforms', {
+          method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+          body: JSON.stringify(dpData)
+        });
+        if (dr.ok) { flashSaved('dpSaved'); renderLeadsSettings(); }
+        else { flashErr('dpSaved', 'Could not save'); }
+      } catch (e) { flashErr('dpSaved', 'Error'); }
+      saveDpBtn.disabled = false; saveDpBtn.textContent = 'Save platforms';
+    };
+
   } catch (e) {
     el.innerHTML = '<div class="s-note">Could not load customer finder settings.</div>';
   }

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Join — Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{font-size:16px}
+body{font-family:'Tenor Sans',sans-serif;background:#080808;color:#FAFAF8;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:.4}
+
+.join-card{
+  background:#0F0F0F;border:1px solid rgba(224,146,47,0.18);border-radius:12px;
+  padding:40px 32px;max-width:400px;width:100%;position:relative;z-index:1
+}
+.join-biz{
+  font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:300;
+  text-align:center;margin-bottom:6px;color:#FAFAF8
+}
+.join-offer{
+  text-align:center;font-size:14px;color:#E0922F;margin-bottom:28px;line-height:1.6
+}
+.join-field{margin-bottom:16px}
+.join-label{
+  display:block;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  color:#8A8880;margin-bottom:6px
+}
+.join-input{
+  width:100%;padding:12px 14px;background:#161616;border:1px solid rgba(250,250,248,0.08);
+  border-radius:6px;color:#FAFAF8;font-size:14px;font-family:'Tenor Sans',sans-serif;
+  outline:none;transition:border-color .3s
+}
+.join-input:focus{border-color:rgba(224,146,47,0.4)}
+.join-input::placeholder{color:#5A5855}
+.join-optional{font-size:9px;color:#5A5855;margin-left:4px}
+
+.join-consent{
+  display:flex;align-items:flex-start;gap:10px;margin:20px 0 24px;
+  font-size:12px;color:#8A8880;line-height:1.6;cursor:pointer
+}
+.join-consent input[type="checkbox"]{
+  margin-top:3px;accent-color:#E0922F;min-width:18px;min-height:18px;cursor:pointer
+}
+
+.join-btn{
+  width:100%;padding:14px;background:#E0922F;border:none;border-radius:6px;
+  color:#080808;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+  font-family:'Tenor Sans',sans-serif;font-weight:600;cursor:pointer;
+  transition:background .3s
+}
+.join-btn:hover{background:#D17B2E}
+.join-btn:disabled{opacity:.5;cursor:not-allowed}
+
+.join-success{
+  text-align:center;padding:40px 20px
+}
+.join-success-icon{font-size:48px;margin-bottom:16px}
+.join-success-text{font-size:15px;color:#FAFAF8;line-height:1.6}
+
+.join-error{color:#C45A5A;font-size:12px;margin-top:8px;display:none}
+.join-phone-hint{font-size:10px;color:#5A5855;margin-top:4px}
+
+/* Honeypot — hidden from users */
+.join-hp{position:absolute;left:-9999px;opacity:0;height:0;overflow:hidden}
+</style>
+</head>
+<body>
+
+<div class="join-card" id="joinCard">
+  <div id="joinForm">
+    <div class="join-biz" id="bizName">...</div>
+    <div class="join-offer" id="offerText"></div>
+
+    <div class="join-field">
+      <label class="join-label">Your name</label>
+      <input type="text" class="join-input" id="jName" placeholder="Your name" maxlength="80" required>
+    </div>
+
+    <div class="join-field">
+      <label class="join-label">WhatsApp number</label>
+      <input type="tel" class="join-input" id="jPhone" placeholder="10-digit mobile number" maxlength="15" required>
+      <div class="join-phone-hint">Indian mobile number, e.g. 98765 43210</div>
+    </div>
+
+    <div class="join-field">
+      <label class="join-label">Birthday month <span class="join-optional">(optional)</span></label>
+      <select class="join-input" id="jBirthday" style="appearance:auto">
+        <option value="">— select —</option>
+        <option value="Jan">January</option><option value="Feb">February</option>
+        <option value="Mar">March</option><option value="Apr">April</option>
+        <option value="May">May</option><option value="Jun">June</option>
+        <option value="Jul">July</option><option value="Aug">August</option>
+        <option value="Sep">September</option><option value="Oct">October</option>
+        <option value="Nov">November</option><option value="Dec">December</option>
+      </select>
+    </div>
+
+    <!-- Honeypot -->
+    <div class="join-hp" aria-hidden="true">
+      <label>Leave blank</label>
+      <input type="text" id="jWebsite" name="website" tabindex="-1" autocomplete="off">
+    </div>
+
+    <label class="join-consent">
+      <input type="checkbox" id="jConsent">
+      <span id="consentLabel">I agree to receive offers on WhatsApp.</span>
+    </label>
+
+    <button class="join-btn" id="joinBtn" onclick="submitJoin()" disabled>Join</button>
+    <div class="join-error" id="joinError"></div>
+  </div>
+
+  <div id="joinSuccess" class="join-success" style="display:none">
+    <div class="join-success-icon">&#10003;</div>
+    <div class="join-success-text" id="successText">You're in! We'll send you offers on WhatsApp.</div>
+  </div>
+</div>
+
+<script>
+var WORKER_URL = (function() {
+  var h = location.hostname;
+  if (h === 'localhost' || h === '127.0.0.1') return 'http://localhost:8787';
+  if (h === 'gsevnservices.in' || h === 'www.gsevnservices.in')
+    return 'https://g7-proxy.gsevnservices.workers.dev';
+  return 'https://g7-proxy-dev.gsevnservices.workers.dev';
+})();
+
+var code = '';
+
+window.addEventListener('DOMContentLoaded', async function() {
+  /* Extract code from ?f= parameter */
+  var params = new URLSearchParams(location.search);
+  code = params.get('f') || '';
+  if (!code) {
+    document.getElementById('joinForm').innerHTML = '<div style="text-align:center;color:#8A8880;font-size:13px">Invalid link.</div>';
+    return;
+  }
+
+  /* Fetch business info for this code */
+  try {
+    var r = await fetch(WORKER_URL + '/r/info?f=' + encodeURIComponent(code));
+    if (!r.ok) {
+      document.getElementById('joinForm').innerHTML = '<div style="text-align:center;color:#8A8880;font-size:13px">This link is no longer active.</div>';
+      return;
+    }
+    var d = await r.json();
+    document.getElementById('bizName').textContent = d.businessName || 'Welcome';
+    document.getElementById('offerText').textContent = d.offerText || '';
+    document.getElementById('consentLabel').textContent = 'I agree to receive offers from ' + (d.businessName || 'this business') + ' on WhatsApp.';
+  } catch (e) {
+    document.getElementById('joinForm').innerHTML = '<div style="text-align:center;color:#C45A5A;font-size:13px">Could not load. Please try again.</div>';
+    return;
+  }
+
+  /* Enable join button when consent is checked */
+  document.getElementById('jConsent').addEventListener('change', function() {
+    document.getElementById('joinBtn').disabled = !this.checked;
+  });
+});
+
+function validateIndianMobile(val) {
+  var digits = val.replace(/\D/g, '');
+  if (digits.length > 10) digits = digits.slice(-10);
+  if (digits.length !== 10) return null;
+  if (!/^[6-9]/.test(digits)) return null;
+  return digits;
+}
+
+async function submitJoin() {
+  var errEl = document.getElementById('joinError');
+  errEl.style.display = 'none';
+
+  var name = document.getElementById('jName').value.trim();
+  var phoneRaw = document.getElementById('jPhone').value.trim();
+  var birthday = document.getElementById('jBirthday').value;
+  var consent = document.getElementById('jConsent').checked;
+  var honeypot = document.getElementById('jWebsite').value;
+
+  if (!name) { errEl.textContent = 'Please enter your name.'; errEl.style.display = 'block'; return; }
+  var phone = validateIndianMobile(phoneRaw);
+  if (!phone) { errEl.textContent = 'Please enter a valid 10-digit Indian mobile number.'; errEl.style.display = 'block'; return; }
+  if (!consent) { errEl.textContent = 'Please agree to receive offers.'; errEl.style.display = 'block'; return; }
+
+  var btn = document.getElementById('joinBtn');
+  btn.disabled = true;
+  btn.textContent = 'Joining...';
+
+  try {
+    var r = await fetch(WORKER_URL + '/r/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: code,
+        name: name,
+        phone: phone,
+        birthday: birthday,
+        consent: true,
+        hp: honeypot
+      })
+    });
+    var d = await r.json();
+    if (!r.ok) {
+      errEl.textContent = d.error || 'Something went wrong. Please try again.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Join';
+      return;
+    }
+
+    /* Show success */
+    document.getElementById('joinForm').style.display = 'none';
+    document.getElementById('joinSuccess').style.display = 'block';
+    if (d.returning) {
+      document.getElementById('successText').textContent = 'Welcome back! Visit #' + (d.visits || 2) + ' recorded.';
+    }
+  } catch (e) {
+    errEl.textContent = 'Network error. Please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Join';
+  }
+}
+</script>
+</body>
+</html>
