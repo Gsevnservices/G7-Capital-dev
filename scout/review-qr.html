@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review QR Card — Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/env.js?v=1"></script>
+<script src="../assets/auth.js?v=19"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+/* ─── SCREEN STYLES ─── */
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{font-size:16px}
+body{font-family:'Tenor Sans',sans-serif;background:#080808;color:#FAFAF8;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
+
+/* ── Loading state ── */
+.qr-loading{text-align:center;color:#8A8880;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
+
+/* ── Card container ── */
+.qr-card{
+  background:#fff;color:#111;border-radius:16px;padding:48px 40px;
+  max-width:420px;width:100%;text-align:center;
+  box-shadow:0 8px 32px rgba(0,0,0,.4)
+}
+.qr-biz-name{
+  font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:300;
+  margin-bottom:6px;color:#111;line-height:1.3
+}
+.qr-ask{font-size:15px;color:#444;margin-bottom:28px;line-height:1.6}
+.qr-code{margin:0 auto 24px;max-width:220px}
+.qr-code img{width:100%;height:auto;display:block}
+.qr-stars{font-size:32px;letter-spacing:4px;margin-bottom:12px}
+.qr-footer{font-size:11px;color:#888;letter-spacing:.08em;margin-top:16px}
+
+/* ── Screen-only buttons ── */
+.qr-actions{margin-top:24px;display:flex;gap:12px;justify-content:center}
+.qr-btn{
+  font-family:'Tenor Sans',sans-serif;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  padding:10px 24px;border:1px solid rgba(224,146,47,0.5);background:transparent;
+  color:#E0922F;cursor:pointer;transition:all .3s;border-radius:4px
+}
+.qr-btn:hover{background:rgba(224,146,47,0.1);border-color:#E0922F}
+
+/* ── Error state ── */
+.qr-error{text-align:center;color:#C45A5A;font-size:13px;max-width:360px}
+.qr-error a{color:#E0922F;text-decoration:none}
+
+/* ─── PRINT STYLES ─── */
+@media print{
+  body{background:#fff;padding:0;display:block}
+  .qr-card{
+    box-shadow:none;border:2px solid #ddd;border-radius:8px;
+    margin:40px auto;padding:48px 40px;max-width:100%
+  }
+  .qr-actions{display:none!important}
+  .qr-biz-name{color:#111}
+  .qr-ask{color:#333}
+}
+</style>
+</head>
+<body>
+
+<div id="qrLoading" class="qr-loading">Loading your review card...</div>
+<div id="qrCard" class="qr-card" style="display:none"></div>
+<div id="qrError" class="qr-error" style="display:none"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<script>
+/* ── QR code via qrcode-generator (client-side, no deprecated APIs) ── */
+function makeQrDataUrl(text) {
+  var qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  return qr.createDataURL(8, 0);
+}
+
+window.addEventListener('DOMContentLoaded', async function() {
+  var loading = document.getElementById('qrLoading');
+  var card = document.getElementById('qrCard');
+  var errDiv = document.getElementById('qrError');
+
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) {
+    loading.style.display = 'none';
+    errDiv.style.display = 'block';
+    errDiv.innerHTML = 'Not signed in. <a href="../login.html?product=scout">Sign in</a> first.';
+    return;
+  }
+
+  try {
+    var r = await fetch(G7_WORKER_URL + '/scout/lead-profile', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) throw new Error('Could not load profile');
+    var d = await r.json();
+    var profile = d.profile;
+
+    if (!profile || !profile.ownPlaceId) {
+      loading.style.display = 'none';
+      errDiv.style.display = 'block';
+      errDiv.innerHTML = 'No Google listing connected yet.<br><a href="settings.html#s-leads">Connect your listing</a> first.';
+      return;
+    }
+
+    var placeId = profile.ownPlaceId;
+    var bizName = profile.ownName || profile.businessName || 'Our Business';
+    var lang = profile.lang || 'en';
+    var reviewUrl = 'https://search.google.com/local/writereview?placeid=' + placeId;
+
+    /* ── Determine ask text by language ── */
+    var askTexts = {
+      en: 'We\'d love to hear from you!<br>Scan the code to leave us a quick review.',
+      hi: '\u0939\u092E\u0947\u0902 \u0906\u092A\u0915\u0940 \u0930\u093E\u092F \u0938\u0941\u0928\u0928\u093E \u0905\u091A\u094D\u091B\u093E \u0932\u0917\u0947\u0917\u093E!<br>QR \u0915\u094B\u0921 \u0938\u094D\u0915\u0948\u0928 \u0915\u0930\u0947\u0902\u0964',
+      es: '\u00A1Nos encantar\u00EDa saber de usted!<br>Escanee el c\u00F3digo para dejarnos una rese\u00F1a.',
+      fr: 'Votre avis compte pour nous\u00A0!<br>Scannez le code pour laisser un avis.',
+      de: 'Wir freuen uns \u00FCber Ihr Feedback!<br>Scannen Sie den Code f\u00FCr eine Bewertung.',
+      pt: 'Adorar\u00EDamos ouvir voc\u00EA!<br>Escaneie o c\u00F3digo para deixar uma avalia\u00E7\u00E3o.',
+      ja: '\u3054\u611F\u60F3\u3092\u304A\u805E\u304B\u305B\u304F\u3060\u3055\u3044\uFF01<br>QR\u30B3\u30FC\u30C9\u3092\u30B9\u30AD\u30E3\u30F3\u3057\u3066\u30EC\u30D3\u30E5\u30FC\u3092\u6295\u7A3F\u3002',
+      ko: '\uB9AC\uBDF0\uB97C \uB0A8\uACA8\uC8FC\uC138\uC694!<br>QR \uCF54\uB4DC\uB97C \uC2A4\uCE94\uD558\uC138\uC694.',
+      ar: '\u0646\u062D\u0628 \u0623\u0646 \u0646\u0633\u0645\u0639 \u0631\u0623\u064A\u0643\u0645!<br>\u0627\u0645\u0633\u062D \u0631\u0645\u0632 QR \u0644\u062A\u0631\u0643 \u0645\u0631\u0627\u062C\u0639\u0629.'
+    };
+    var askText = askTexts[lang] || askTexts.en;
+
+    /* ── Build card ── */
+    card.innerHTML =
+      '<div class="qr-stars">\u2605\u2605\u2605\u2605\u2605</div>' +
+      '<div class="qr-biz-name">' + escHtml(bizName) + '</div>' +
+      '<div class="qr-ask">' + askText + '</div>' +
+      '<div class="qr-code"><img src="' + makeQrDataUrl(reviewUrl) + '" alt="Review QR code"></div>' +
+      '<div class="qr-footer">Powered by Google Reviews</div>' +
+      '<div class="qr-actions">' +
+        '<button class="qr-btn" onclick="window.print()">Print Card</button>' +
+        '<button class="qr-btn" onclick="window.close()">Close</button>' +
+      '</div>';
+
+    loading.style.display = 'none';
+    card.style.display = 'block';
+
+  } catch (e) {
+    loading.style.display = 'none';
+    errDiv.style.display = 'block';
+    errDiv.textContent = 'Error: ' + e.message;
+  }
+});
+
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

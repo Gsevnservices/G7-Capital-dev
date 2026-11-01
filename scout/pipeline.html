@@ -109,6 +109,54 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 /* ─── FADE IN ─── */
 @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
 .page-wrap{animation:fadeUp .5s ease both}
+
+/* ─── GOOGLE RANK SECTION ─── */
+.grank-section{margin-bottom:48px;padding:28px;background:var(--black2);border:1px solid var(--border);border-radius:4px}
+.grank-section.collapsed .grank-body{display:none}
+.grank-header{display:flex;align-items:center;justify-content:space-between;cursor:pointer}
+.grank-title{font-size:8px;letter-spacing:.28em;text-transform:uppercase;color:var(--amber)}
+.grank-toggle{font-size:10px;color:var(--grey1);background:none;border:none;cursor:pointer;font-family:'Tenor Sans',sans-serif}
+.grank-body{margin-top:20px}
+.grank-connect{text-align:center;padding:32px 16px}
+.grank-connect-text{font-size:13px;color:var(--grey1);margin-bottom:16px;line-height:1.7}
+.grank-connect a{color:var(--amber);text-decoration:none}
+.grank-table{width:100%;border-collapse:collapse;font-size:12px}
+.grank-table th{text-align:left;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey2);padding:8px 12px 8px 0;border-bottom:1px solid var(--border2)}
+.grank-table td{padding:8px 12px 8px 0;border-bottom:1px solid rgba(250,250,248,0.04);color:var(--white);vertical-align:top}
+.grank-rank{font-size:20px;font-family:'Cormorant Garamond',serif;font-weight:300;color:var(--amber);min-width:40px;text-align:center}
+.grank-rank.notfound{font-size:11px;color:var(--grey2)}
+.grank-change{font-size:10px;margin-left:4px}
+.grank-change.up{color:#4caf50}
+.grank-change.down{color:#ef5350}
+.grank-rating-bar{display:flex;align-items:center;gap:16px;margin-top:16px;flex-wrap:wrap}
+.grank-rating-card{padding:16px 20px;background:var(--black3);border-radius:4px;text-align:center;min-width:120px}
+.grank-rating-num{font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:300;color:var(--white)}
+.grank-rating-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey2);margin-top:4px}
+.grank-review{padding:16px 20px;background:var(--black3);border:1px solid var(--border2);border-radius:4px;margin-bottom:12px}
+.grank-review-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.grank-review-author{font-size:12px;color:var(--white)}
+.grank-review-stars{font-size:12px;color:var(--amber)}
+.grank-review-text{font-size:12px;color:var(--grey1);line-height:1.7;margin-bottom:8px}
+.grank-reply-draft{font-size:11px;color:var(--white2);background:rgba(201,168,76,0.06);border-left:2px solid var(--amber);padding:8px 12px;margin-top:8px;line-height:1.6}
+.grank-goal{margin-top:16px;padding:16px 20px;background:var(--black3);border-radius:4px;text-align:center}
+.grank-goal-num{font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:300;color:var(--amber)}
+.grank-goal-text{font-size:11px;color:var(--grey1);margin-top:4px}
+.grank-comp{margin-top:16px}
+.grank-comp-item{font-size:12px;color:var(--grey1);padding:6px 0;border-bottom:1px solid rgba(250,250,248,0.04)}
+.grank-comp-new{color:#4caf50}
+.grank-comp-change{color:var(--amber)}
+.grank-angle{margin-top:12px;padding:12px 16px;background:rgba(201,168,76,0.06);border-radius:4px;font-size:12px;color:var(--white2);line-height:1.6}
+.grank-disclaimer{font-size:9px;color:var(--grey2);margin-top:12px;font-style:italic}
+.grank-btn{background:none;border:1px solid rgba(224,146,47,0.3);color:#E0922F;font-family:'Tenor Sans',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:6px 16px;cursor:pointer;transition:all .3s}
+.grank-btn:hover{border-color:var(--amber);background:rgba(224,146,47,0.08)}
+.grank-btn:disabled{opacity:0.4;cursor:default}
+@media(max-width:768px){
+  .grank-section{padding:20px 16px}
+  .grank-rating-bar{flex-direction:column;gap:8px}
+  .grank-rating-card{width:100%}
+  .grank-table td,.grank-table th{padding:6px 8px 6px 0;font-size:11px}
+  .grank-rank{font-size:16px;min-width:32px}
+}
 </style>
 </head>
 <body>
@@ -139,6 +187,19 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <div class="page-eyebrow">Scout</div>
   <div class="page-heading">Customers</div>
   <div class="page-sub">Track every person you've contacted. Scout tells you who needs a follow-up today.</div>
+
+  <!-- ══════════════════════════════════════
+       HOW PEOPLE FIND YOU ON GOOGLE
+  ══════════════════════════════════════ -->
+  <div class="grank-section" id="grankSection" style="display:none">
+    <div class="grank-header" onclick="toggleGrankSection()">
+      <span class="grank-title">How people find you on Google</span>
+      <span class="grank-toggle" id="grankToggle">&#9660;</span>
+    </div>
+    <div class="grank-body" id="grankBody">
+      <div id="grankContent"><!-- rendered by JS --></div>
+    </div>
+  </div>
 
   <div style="margin:12px 0 4px;text-align:right">
     <button onclick="pipelineExportCsv()" style="background:none;border:1px solid rgba(224,146,47,0.3);color:#E0922F;font-family:'Tenor Sans',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:6px 16px;cursor:pointer">Download CSV</button>
@@ -403,6 +464,197 @@ function skipReviewAsks() {
 /* ═══════════════════════════════════════════
    AUTH + INIT
 ═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════
+   GOOGLE RANK SECTION
+═══════════════════════════════════════════ */
+function toggleGrankSection() {
+  var sec = document.getElementById('grankSection');
+  var tog = document.getElementById('grankToggle');
+  if (!sec) return;
+  sec.classList.toggle('collapsed');
+  if (tog) tog.innerHTML = sec.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+}
+
+async function loadGoogleRank() {
+  var sec = document.getElementById('grankSection');
+  var content = document.getElementById('grankContent');
+  if (!sec || !content) return;
+
+  /* Check if firm has ownPlaceId via lead profile */
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) return;
+  var auth = { 'Authorization': 'Bearer ' + token };
+
+  try {
+    var pr = await fetch(G7_WORKER_URL + '/scout/lead-profile', { headers: auth });
+    if (!pr.ok) return;
+    var pd = await pr.json();
+    var profile = pd.profile;
+    if (!profile) return;
+
+    /* B2B check: if no ownPlaceId, show connect card. B2B firms see collapsed section. */
+    var isB2B = !!(profile.isB2B);
+    sec.style.display = 'block';
+    if (isB2B) sec.classList.add('collapsed');
+
+    if (!profile.ownPlaceId) {
+      content.innerHTML =
+        '<div class="grank-connect">' +
+        '<div class="grank-connect-text">See where customers find you on Google.<br>' +
+        '<a href="settings.html#leads">Connect your Google listing</a> to get started.</div>' +
+        '</div>';
+      return;
+    }
+
+    /* Load rank data */
+    var rr = await fetch(G7_WORKER_URL + '/scout/google-rank', { headers: auth });
+    if (!rr.ok) { content.innerHTML = '<div style="font-size:12px;color:var(--grey2)">Could not load rank data.</div>'; return; }
+    var rd = await rr.json();
+
+    var html = '';
+
+    /* ── Rank table ── */
+    if (rd.rank && rd.rank.ranks && rd.rank.ranks.length > 0) {
+      html += '<table class="grank-table"><thead><tr><th>Search</th><th>Rank</th><th>Top 3</th></tr></thead><tbody>';
+      rd.rank.ranks.forEach(function(r) {
+        var rankDisplay = r.rank ? '#' + r.rank : 'Not in top 20';
+        var rankClass = r.rank ? '' : ' notfound';
+        var changeHtml = '';
+        if (rd.trend && rd.trend.trends) {
+          rd.trend.trends.forEach(function(t) {
+            if (t.query === r.query && t.change) {
+              var cls = t.change > 0 ? 'up' : 'down';
+              var arrow = t.change > 0 ? '\u2191' : '\u2193';
+              changeHtml = ' <span class="grank-change ' + cls + '">' + arrow + Math.abs(t.change) + '</span>';
+            }
+          });
+        }
+        html += '<tr>';
+        html += '<td style="color:var(--grey1);font-size:11px">' + escHtml(r.query) + '</td>';
+        html += '<td><span class="grank-rank' + rankClass + '">' + rankDisplay + '</span>' + changeHtml + '</td>';
+        html += '<td style="font-size:11px;color:var(--grey2)">' + (r.top3 || []).map(function(n) { return escHtml(n); }).join('<br>') + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      html += '<div class="grank-disclaimer">Approximate: Scout\u2019s search, not every customer\u2019s exact view.</div>';
+    }
+
+    /* ── Rating vs nearby ── */
+    if (rd.rank) {
+      html += '<div class="grank-rating-bar">';
+      html += '<div class="grank-rating-card"><div class="grank-rating-num">' + (rd.rank.ownRating || '\u2014') + '</div><div class="grank-rating-label">Your rating</div></div>';
+      html += '<div class="grank-rating-card"><div class="grank-rating-num">' + (rd.rank.ownReviews || 0) + '</div><div class="grank-rating-label">Your reviews</div></div>';
+      html += '<div class="grank-rating-card"><div class="grank-rating-num">' + (rd.rank.nearbyAvgRating || '\u2014') + '</div><div class="grank-rating-label">Nearby avg rating</div></div>';
+      html += '<div class="grank-rating-card"><div class="grank-rating-num">' + (rd.rank.nearbyAvgReviews || 0) + '</div><div class="grank-rating-label">Nearby avg reviews</div></div>';
+      html += '</div>';
+    }
+
+    /* ── Review goal ── */
+    if (rd.rank && rd.rank.reviewGoal) {
+      var rg = rd.rank.reviewGoal;
+      html += '<div class="grank-goal">';
+      if (rg.needed > 0) {
+        html += '<div class="grank-goal-num">+' + rg.needed + ' reviews needed</div>';
+        html += '<div class="grank-goal-text">To match top-5 average (' + rg.top5Avg + ' reviews). Pace: ' + escHtml(rg.pace) + '</div>';
+      } else {
+        html += '<div class="grank-goal-num" style="color:#4caf50">\u2713 Ahead of the pack</div>';
+        html += '<div class="grank-goal-text">You have more reviews than the top-5 average.</div>';
+      }
+      html += '</div>';
+    }
+
+    /* ── Reviews with draft replies ── */
+    if (rd.reviews && rd.reviews.reviews && rd.reviews.reviews.length > 0) {
+      html += '<div style="margin-top:20px"><div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-bottom:12px">Latest Reviews</div>';
+      rd.reviews.reviews.forEach(function(rv) {
+        var stars = '';
+        for (var s = 0; s < 5; s++) stars += s < rv.rating ? '\u2605' : '\u2606';
+        html += '<div class="grank-review">';
+        html += '<div class="grank-review-header"><span class="grank-review-author">' + escHtml(rv.author) + '</span><span class="grank-review-stars">' + stars + '</span></div>';
+        if (rv.text) html += '<div class="grank-review-text">' + escHtml(rv.text) + '</div>';
+        if (rv.time) html += '<div style="font-size:10px;color:var(--grey2);margin-bottom:6px">' + escHtml(rv.time) + '</div>';
+        if (rv.draftReply) {
+          html += '<div class="grank-reply-draft"><strong style="color:var(--amber);font-size:9px;letter-spacing:.08em;text-transform:uppercase">Suggested reply:</strong><br>' + escHtml(rv.draftReply) + '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    /* ── QR Card button ── */
+    if (profile.ownPlaceId) {
+      html += '<div style="margin-top:16px;text-align:center">';
+      html += '<button class="grank-btn" onclick="openReviewQR()">Print Review QR Card</button>';
+      html += '</div>';
+    }
+
+    /* ── Competitors ── */
+    if (rd.competitors) {
+      var comp = rd.competitors;
+      html += '<div class="grank-comp">';
+      html += '<div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-bottom:12px">Competitors This Week</div>';
+      if (comp.newPlaces && comp.newPlaces.length > 0) {
+        comp.newPlaces.forEach(function(np) {
+          html += '<div class="grank-comp-item grank-comp-new">\u2728 New: ' + escHtml(np.name) + ' (' + np.rating + '\u2605, ' + np.reviews + ' reviews)</div>';
+        });
+      }
+      if (comp.ratingChanges && comp.ratingChanges.length > 0) {
+        comp.ratingChanges.forEach(function(rc) {
+          var arrow = rc.newRating > rc.oldRating ? '\u2191' : '\u2193';
+          html += '<div class="grank-comp-item grank-comp-change">' + arrow + ' ' + escHtml(rc.name) + ': ' + rc.oldRating + ' \u2192 ' + rc.newRating + '</div>';
+        });
+      }
+      if (comp.topComplaint && comp.topComplaint.yourAngle) {
+        html += '<div class="grank-angle"><strong>Your angle:</strong> ' + escHtml(comp.topComplaint.yourAngle) + '</div>';
+      }
+      if ((!comp.newPlaces || !comp.newPlaces.length) && (!comp.ratingChanges || !comp.ratingChanges.length) && !comp.topComplaint) {
+        html += '<div style="font-size:12px;color:var(--grey2)">No changes this week.</div>';
+      }
+      html += '</div>';
+    }
+
+    /* ── Check now button ── */
+    html += '<div style="margin-top:20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+    html += '<button class="grank-btn" id="grankCheckBtn" onclick="manualRankCheck()">Check now</button>';
+    if (rd.rank && rd.rank.checkedAt) {
+      html += '<span style="font-size:10px;color:var(--grey2)">Last checked: ' + new Date(rd.rank.checkedAt).toLocaleDateString() + '</span>';
+    }
+    html += '</div>';
+
+    content.innerHTML = html;
+
+  } catch (e) {
+    content.innerHTML = '<div style="font-size:12px;color:var(--grey2)">Could not load Google rank data.</div>';
+  }
+}
+
+async function manualRankCheck() {
+  var btn = document.getElementById('grankCheckBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking\u2026'; }
+  var token = localStorage.getItem('g7_session_token');
+  try {
+    var r = await fetch(G7_WORKER_URL + '/scout/google-rank/check', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    if (r.ok) {
+      await loadGoogleRank();
+    } else {
+      var d = await r.json().catch(function() { return {}; });
+      alert(d.error || 'Check failed');
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+    }
+  } catch (e) {
+    alert('Network error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+  }
+}
+
+function openReviewQR() {
+  window.open('review-qr.html', '_blank');
+}
+
 window.addEventListener('DOMContentLoaded', async function() {
   var token = localStorage.getItem('g7_session_token');
   if (!token) {
@@ -421,6 +673,9 @@ window.addEventListener('DOMContentLoaded', async function() {
 
   render();
   initCursor();
+
+  /* Load Google rank section (non-blocking) */
+  loadGoogleRank();
 
   /* If navigated via pipeline.html#add, focus the name field */
   if (location.hash === '#add') {
