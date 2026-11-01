@@ -473,7 +473,49 @@ async function renderLeadsSettings() {
     var p = d.profile;
     var html = '';
 
-    /* Groups (toggleable) */
+    /* ── Google Listing ── */
+    html += '<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(201,168,76,0.15)">';
+    html += '<div class="s-row-label" style="margin-bottom:10px">Find my business on Google</div>';
+    if (p.ownPlaceId) {
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+      html += '<span style="font-size:13px;color:var(--white)">' + escHtml(p.ownName || p.ownPlaceId) + '</span>';
+      html += '<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:rgba(201,168,76,0.15);color:var(--gold)">Connected</span>';
+      html += '</div>';
+      html += '<button class="s-btn" id="changeListingBtn" style="font-size:10px;padding:4px 10px">Change</button>';
+    } else {
+      html += '<div class="s-note">Connect your Google listing to see how customers find you.</div>';
+      html += '<button class="s-btn" id="changeListingBtn" style="margin-top:8px">Connect your Google listing</button>';
+    }
+    html += '<div id="listingSearchBox" style="display:none;margin-top:12px">';
+    html += '<input type="text" id="listingSearchInput" placeholder="Search for your business name\u2026" style="width:100%;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:6px;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '<div id="listingResults" style="margin-top:8px"></div>';
+    html += '</div>';
+    html += '<div class="s-saved" id="listingSaved">Listing saved</div>';
+    html += '</div>';
+
+    /* ── Key Searches ── */
+    if (p.ownPlaceId) {
+      html += '<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(201,168,76,0.15)">';
+      html += '<div class="s-row-label" style="margin-bottom:8px">Key searches</div>';
+      html += '<div class="s-note" style="margin-bottom:8px">Searches customers use to find businesses like yours:</div>';
+      var ks = p.keySearches || [];
+      html += '<div id="keySearchesList">';
+      ks.forEach(function(s, i) {
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
+        html += '<input type="text" class="ks-input" data-idx="' + i + '" value="' + escHtml(s) + '" style="flex:1;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
+        html += '<button class="ks-del" data-idx="' + i + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px" title="Remove">\u2715</button>';
+        html += '</div>';
+      });
+      html += '</div>';
+      if (ks.length < 5) {
+        html += '<button class="s-btn" id="addKeySearchBtn" style="font-size:10px;padding:4px 10px;margin-top:4px">+ Add search</button>';
+      }
+      html += '<button class="s-btn" id="saveKeySearchesBtn" style="margin-top:10px">Save key searches</button>';
+      html += '<div class="s-saved" id="keySearchesSaved">Saved</div>';
+      html += '</div>';
+    }
+
+    /* ── Groups (toggleable) ── */
     html += '<div class="s-note">Scout looks for these customer groups:</div>';
     (p.groups || []).forEach(function(g, i) {
       var on = g.enabled !== false;
@@ -497,6 +539,101 @@ async function renderLeadsSettings() {
     html += '<div class="s-saved" id="leadsSettingsSaved">Saved</div>';
 
     el.innerHTML = html;
+
+    /* ── Listing search handler ── */
+    var changeBtn = document.getElementById('changeListingBtn');
+    var searchBox = document.getElementById('listingSearchBox');
+    var searchInput = document.getElementById('listingSearchInput');
+    var resultsEl = document.getElementById('listingResults');
+    if (changeBtn && searchBox) {
+      changeBtn.onclick = function() {
+        searchBox.style.display = searchBox.style.display === 'none' ? 'block' : 'none';
+        if (searchBox.style.display === 'block' && searchInput) searchInput.focus();
+      };
+    }
+    if (searchInput && resultsEl) {
+      var _debounce = null;
+      searchInput.addEventListener('input', function() {
+        clearTimeout(_debounce);
+        var q = searchInput.value.trim();
+        if (q.length < 2) { resultsEl.innerHTML = ''; return; }
+        _debounce = setTimeout(async function() {
+          resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Searching\u2026</div>';
+          try {
+            var sr = await fetch(SCOUT_WORKER + '/scout/own-listing/search?q=' + encodeURIComponent(q), { headers: _auth });
+            if (!sr.ok) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Search failed</div>'; return; }
+            var sd = await sr.json();
+            if (!sd.results || sd.results.length === 0) { resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">No results found</div>'; return; }
+            var rh = '';
+            sd.results.forEach(function(place) {
+              rh += '<div class="listing-result" data-place="' + escHtml(JSON.stringify({ placeId: place.placeId, name: place.name, lat: place.lat, lng: place.lng, primaryType: place.primaryType || '' })) + '" ' +
+                'style="padding:10px 12px;margin-bottom:4px;background:var(--black2);border-radius:6px;cursor:pointer;transition:background .2s">' +
+                '<div style="font-size:13px;color:var(--white)">' + escHtml(place.name) + '</div>' +
+                '<div style="font-size:10px;color:var(--grey2);margin-top:2px">' +
+                (place.rating ? place.rating + '\u2605 (' + place.reviews + ' reviews) \u00b7 ' : '') +
+                escHtml(place.primaryType || '') + '</div>' +
+                '</div>';
+            });
+            resultsEl.innerHTML = rh;
+            resultsEl.querySelectorAll('.listing-result').forEach(function(el) {
+              el.onmouseenter = function() { el.style.background = 'var(--black3)'; };
+              el.onmouseleave = function() { el.style.background = 'var(--black2)'; };
+              el.onclick = async function() {
+                var place = JSON.parse(el.getAttribute('data-place'));
+                resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Saving\u2026</div>';
+                try {
+                  var sv = await fetch(SCOUT_WORKER + '/scout/own-listing', {
+                    method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+                    body: JSON.stringify(place)
+                  });
+                  if (sv.ok) { flashSaved('listingSaved'); renderLeadsSettings(); }
+                  else { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Could not save</div>'; }
+                } catch (e) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Error saving</div>'; }
+              };
+            });
+          } catch (e) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Search error</div>'; }
+        }, 400);
+      });
+    }
+
+    /* ── Key searches handlers ── */
+    el.querySelectorAll('.ks-del').forEach(function(btn) {
+      btn.onclick = function() { btn.parentElement.remove(); };
+    });
+    var addKsBtn = document.getElementById('addKeySearchBtn');
+    if (addKsBtn) {
+      addKsBtn.onclick = function() {
+        var list = document.getElementById('keySearchesList');
+        if (!list) return;
+        var idx = list.children.length;
+        if (idx >= 5) return;
+        var div = document.createElement('div');
+        div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+        div.innerHTML = '<input type="text" class="ks-input" data-idx="' + idx + '" placeholder="e.g. best cafe near koramangala" style="flex:1;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">' +
+          '<button class="ks-del" data-idx="' + idx + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px" title="Remove">\u2715</button>';
+        div.querySelector('.ks-del').onclick = function() { div.remove(); };
+        list.appendChild(div);
+        div.querySelector('input').focus();
+      };
+    }
+    var saveKsBtn = document.getElementById('saveKeySearchesBtn');
+    if (saveKsBtn) {
+      saveKsBtn.onclick = async function() {
+        var inputs = el.querySelectorAll('.ks-input');
+        var searches = [];
+        inputs.forEach(function(inp) { var v = inp.value.trim(); if (v) searches.push(v); });
+        saveKsBtn.disabled = true; saveKsBtn.textContent = 'Saving\u2026';
+        try {
+          var kr = await fetch(SCOUT_WORKER + '/scout/own-listing/key-searches', {
+            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+            body: JSON.stringify({ keySearches: searches })
+          });
+          if (kr.ok) { flashSaved('keySearchesSaved'); }
+          else { flashErr('keySearchesSaved', 'Could not save'); }
+        } catch (e) { flashErr('keySearchesSaved', 'Error'); }
+        saveKsBtn.disabled = false; saveKsBtn.textContent = 'Save key searches';
+      };
+    }
 
     /* Toggle handlers */
     el.querySelectorAll('.s-toggle[data-group]').forEach(function(btn) {

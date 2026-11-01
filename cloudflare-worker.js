@@ -2165,6 +2165,491 @@ async function placeDetails(env, placeId) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// "HOW PEOPLE FIND YOU ON GOOGLE" — rank, reviews, competitors
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/* Cost constants for rank-specific calls.
+   Text Search Advanced (rating/reviews in mask): $0.035/call
+   Place Details Enterprise (reviews field): $0.025/call */
+var RANK_TEXT_SEARCH_COST = 0.035;  /* Advanced tier — rating/userRatingCount in mask */
+var RANK_DETAILS_COST = 0.025;      /* Enterprise tier — reviews field */
+
+/* ── Lightweight Text Search for rank — Pro tier only ── */
+async function placesTextSearchRank(env, query, lat, lng, radiusM) {
+  if (!env.GOOGLE_PLACES_KEY) throw new Error('No GOOGLE_PLACES_KEY');
+  var body = { textQuery: query, maxResultCount: 20 };
+  if (lat && lng) {
+    body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: Math.min(radiusM || 5000, 50000) } };
+  }
+  var r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': env.GOOGLE_PLACES_KEY,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.rating,places.userRatingCount'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) {
+    var errText = await r.text().catch(function() { return ''; });
+    throw new Error('Places Rank API ' + r.status + ': ' + errText.slice(0, 200));
+  }
+  var data = await r.json();
+  return (data.places || []).map(function(p) {
+    return {
+      placeId: p.id || '',
+      name: (p.displayName && p.displayName.text) || '',
+      rating: p.rating || 0,
+      reviews: p.userRatingCount || 0
+    };
+  });
+}
+
+/* ── Place Details with reviews — Enterprise tier ── */
+async function placeDetailsWithReviews(env, placeId) {
+  if (!env.GOOGLE_PLACES_KEY) throw new Error('No GOOGLE_PLACES_KEY');
+  var r = await fetch('https://places.googleapis.com/v1/places/' + encodeURIComponent(placeId), {
+    method: 'GET',
+    headers: {
+      'X-Goog-Api-Key': env.GOOGLE_PLACES_KEY,
+      'X-Goog-FieldMask': 'id,displayName,rating,userRatingCount,reviews'
+    }
+  });
+  if (!r.ok) {
+    var errText = await r.text().catch(function() { return ''; });
+    throw new Error('Place Details Reviews ' + r.status + ': ' + errText.slice(0, 200));
+  }
+  var p = await r.json();
+  return {
+    placeId: p.id || '',
+    name: (p.displayName && p.displayName.text) || '',
+    rating: p.rating || 0,
+    reviews: p.userRatingCount || 0,
+    reviewList: (p.reviews || []).map(function(rv) {
+      return {
+        author: (rv.authorAttribution && rv.authorAttribution.displayName) || '',
+        rating: rv.rating || 0,
+        text: (rv.originalText && rv.originalText.text) || (rv.text && rv.text.text) || '',
+        time: rv.relativePublishTimeDescription || '',
+        publishTime: rv.publishTime || ''
+      };
+    })
+  };
+}
+
+/* ── Generate key searches from analysis via Haiku ── */
+async function generateKeySearches(env, analysisText, city, cost) {
+  var typeLine = '', nameLine = '';
+  var lines = String(analysisText || '').split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].indexOf('TYPE:') === 0) typeLine = lines[i].slice(5).trim();
+    if (lines[i].indexOf('NAME:') === 0) nameLine = lines[i].slice(5).trim();
+  }
+
+  var prompt = 'You are a local SEO expert.\n\n' +
+    'BUSINESS: ' + nameLine + '\nTYPE: ' + typeLine + '\nCITY: ' + (city || 'not specified') + '\n\n' +
+    'ANALYSIS:\n' + analysisText.slice(0, 3000) + '\n\n' +
+    'Generate 3-5 Google searches that a real consumer would type to find this type of business. ' +
+    'Examples: "north indian restaurant indiranagar", "best cafe near koramangala", "hair salon hsr layout".\n' +
+    'Include the business type and a specific area/neighbourhood.\n\n' +
+    'Output ONLY a JSON array of strings:\n["search 1","search 2","search 3"]';
+
+  var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 500,
+      thinking: { type: 'disabled' },
+      messages: [{ role: 'user', content: prompt }]
+    })
+  }, 'rank/keysearches');
+  if (!r.ok) throw new Error('Haiku key searches ' + r.status);
+  var data = await r.json();
+  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+
+  var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+  try {
+    var a1 = text.indexOf('['), a2 = text.lastIndexOf(']');
+    if (a1 !== -1 && a2 > a1) {
+      var arr = JSON.parse(text.slice(a1, a2 + 1));
+      return arr.slice(0, 5).map(function(s) { return String(s).slice(0, 120).toLowerCase(); });
+    }
+  } catch (e) {}
+  return [];
+}
+
+/* ── Run rank check for a firm: for each key search, find own position ── */
+async function runRankCheck(env, firmCode, profile, cost) {
+  var ownPlaceId = profile.ownPlaceId;
+  var ownLat = profile.ownLocation ? profile.ownLocation.lat : 0;
+  var ownLng = profile.ownLocation ? profile.ownLocation.lng : 0;
+  var keySearches = profile.keySearches || [];
+  if (!ownPlaceId || keySearches.length === 0) return null;
+
+  var radiusM = 5000;
+  var results = [];
+  var textSearchCalls = 0;
+
+  for (var i = 0; i < keySearches.length; i++) {
+    try {
+      var places = await placesTextSearchRank(env, keySearches[i], ownLat, ownLng, radiusM);
+      textSearchCalls++;
+
+      var rank = 0;
+      for (var j = 0; j < places.length; j++) {
+        if (places[j].placeId === ownPlaceId) { rank = j + 1; break; }
+      }
+
+      results.push({
+        query: keySearches[i],
+        rank: rank || null,          /* null = not in top 20 */
+        top3: places.slice(0, 3).map(function(p) { return p.name; }),
+        resultCount: places.length,
+        places: places                /* keep for rating comparison + competitor snapshot */
+      });
+    } catch (e) {
+      results.push({ query: keySearches[i], rank: null, top3: [], error: String(e.message || e).slice(0, 100) });
+    }
+  }
+
+  /* Rating vs nearby: own rating vs average of top 10 same-type (deduplicated) */
+  var ownRating = 0, ownReviews = 0;
+  var nearbySeen = new Set();
+  var nearbyPlaces = [];  /* { rating, reviews } */
+  results.forEach(function(r) {
+    if (!r.places) return;
+    r.places.forEach(function(p) {
+      if (p.placeId === ownPlaceId) {
+        ownRating = p.rating;
+        ownReviews = p.reviews;
+      } else if (!nearbySeen.has(p.placeId) && nearbyPlaces.length < 10) {
+        nearbySeen.add(p.placeId);
+        nearbyPlaces.push({ rating: p.rating, reviews: p.reviews });
+      }
+    });
+  });
+  var nearbyRatings = nearbyPlaces.map(function(p) { return p.rating; });
+  var nearbyReviews = nearbyPlaces.map(function(p) { return p.reviews; });
+  var avgRating = nearbyRatings.length > 0 ? nearbyRatings.reduce(function(a, b) { return a + b; }, 0) / nearbyRatings.length : 0;
+  var avgReviews = nearbyReviews.length > 0 ? Math.round(nearbyReviews.reduce(function(a, b) { return a + b; }, 0) / nearbyReviews.length) : 0;
+
+  /* Review goal: reviews needed to reach top-5 average (by review count, descending) */
+  var sortedReviews = nearbyReviews.slice().sort(function(a, b) { return b - a; });
+  var top5Reviews = sortedReviews.slice(0, 5);
+  var top5Avg = top5Reviews.length > 0 ? Math.round(top5Reviews.reduce(function(a, b) { return a + b; }, 0) / top5Reviews.length) : 0;
+  var reviewsNeeded = Math.max(0, top5Avg - ownReviews);
+  var weeksToGoal = reviewsNeeded > 0 ? Math.ceil(reviewsNeeded / 4) : 0;
+
+  /* Clean results for storage (drop full places list) */
+  var cleanResults = results.map(function(r) {
+    return { query: r.query, rank: r.rank, top3: r.top3, resultCount: r.resultCount };
+  });
+
+  var rankData = {
+    ranks: cleanResults,
+    ownRating: ownRating,
+    ownReviews: ownReviews,
+    nearbyAvgRating: Math.round(avgRating * 10) / 10,
+    nearbyAvgReviews: avgReviews,
+    reviewGoal: { needed: reviewsNeeded, top5Avg: top5Avg, pace: reviewsNeeded > 0 ? '~4 a week for ' + weeksToGoal + ' weeks' : 'You\'re ahead!' },
+    textSearchCalls: textSearchCalls,
+    checkedAt: new Date().toISOString()
+  };
+
+  /* Store in KV with week key */
+  var weekKey = getISOWeek();
+  await kvPut(env, 'scout:googlerank:' + firmCode + ':' + weekKey, JSON.stringify(rankData), { expirationTtl: 60 * 86400 });
+  await kvPut(env, 'scout:googlerank:latest:' + firmCode, JSON.stringify(rankData), { expirationTtl: 30 * 86400 });
+  await kvPut(env, 'scout:googlerank:lastcheck:' + firmCode, new Date().toISOString(), { expirationTtl: 2 * 86400 });
+
+  /* Record cost */
+  if (cost) cost.usd += textSearchCalls * RANK_TEXT_SEARCH_COST;
+
+  return { rankData: rankData, searchResults: results };
+}
+
+/* ── ISO week string: "2026-W44" ── */
+function getISOWeek() {
+  var d = new Date(Date.now() + 5.5 * 3600000);
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  var weekNo = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return d.getUTCFullYear() + '-W' + String(weekNo).padStart(2, '0');
+}
+
+/* ── Fetch reviews for own place + draft replies with Haiku ── */
+async function fetchOwnReviews(env, firmCode, profile, lang, cost) {
+  var ownPlaceId = profile.ownPlaceId;
+  if (!ownPlaceId) return null;
+
+  var details = await placeDetailsWithReviews(env, ownPlaceId);
+  if (cost) cost.usd += RANK_DETAILS_COST;
+
+  var reviewList = details.reviewList || [];
+  if (reviewList.length === 0) return { reviews: [], draftReplies: [], fetchedAt: new Date().toISOString() };
+
+  /* Draft replies via Haiku — one call for all reviews */
+  var reviewText = reviewList.map(function(rv, i) {
+    return (i + 1) + '. ' + (rv.rating || '?') + '★ "' + (rv.text || '(no text)').slice(0, 300) + '" — ' + rv.author;
+  }).join('\n');
+
+  var businessName = profile.ownName || '';
+  var prompt = 'You are the owner of ' + businessName + '. Draft a short, polite reply for each customer review below.\n' +
+    'Language: ' + (lang || 'English') + '. Keep each reply under 100 words. Thank the reviewer by name. ' +
+    'If the review is negative, acknowledge the concern and offer to make it right. ' +
+    'Do NOT mention whether the owner has already replied — you don\'t know that.\n\n' +
+    'REVIEWS:\n' + reviewText + '\n\n' +
+    'Output ONLY a JSON array:\n[{"idx":1,"reply":"..."},...]';
+
+  var draftReplies = [];
+  try {
+    var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        thinking: { type: 'disabled' },
+        messages: [{ role: 'user', content: prompt }]
+      })
+    }, 'rank/replies');
+    if (r.ok) {
+      var data = await r.json();
+      recordCost(cost, 'claude-haiku-4-5-20251001', data);
+      var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+      try {
+        var a1 = text.indexOf('['), a2 = text.lastIndexOf(']');
+        if (a1 !== -1 && a2 > a1) draftReplies = JSON.parse(text.slice(a1, a2 + 1));
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  /* Merge replies into reviews */
+  var replyMap = {};
+  (Array.isArray(draftReplies) ? draftReplies : []).forEach(function(dr) {
+    if (dr && typeof dr.idx === 'number') replyMap[dr.idx] = dr.reply;
+  });
+
+  var enrichedReviews = reviewList.map(function(rv, i) {
+    return {
+      author: rv.author,
+      rating: rv.rating,
+      text: rv.text,
+      time: rv.time,
+      publishTime: rv.publishTime,
+      draftReply: String(replyMap[i + 1] || '').slice(0, 500)
+    };
+  });
+
+  var reviewData = {
+    ownRating: details.rating,
+    ownReviews: details.reviews,
+    reviews: enrichedReviews,
+    fetchedAt: new Date().toISOString()
+  };
+
+  await kvPut(env, 'scout:googlereviews:' + firmCode, JSON.stringify(reviewData), { expirationTtl: 14 * 86400 });
+  return reviewData;
+}
+
+/* ── Competitor snapshot + diff ── */
+async function runCompetitorSnapshot(env, firmCode, profile, searchResults, cost) {
+  if (!env.DB || !searchResults || searchResults.length === 0) return null;
+
+  var ownPlaceId = profile.ownPlaceId || '';
+  var weekKey = getISOWeek();
+  var now = new Date().toISOString();
+
+  /* Collect unique places from search results (excluding own) */
+  var seen = new Set();
+  var competitors = [];
+  searchResults.forEach(function(sr) {
+    (sr.places || []).forEach(function(p) {
+      if (p.placeId !== ownPlaceId && !seen.has(p.placeId)) {
+        seen.add(p.placeId);
+        competitors.push(p);
+      }
+    });
+  });
+
+  /* Save snapshots to D1 */
+  for (var i = 0; i < competitors.length && i < 20; i++) {
+    var c = competitors[i];
+    try {
+      await env.DB.prepare(
+        "INSERT INTO place_snapshots (firm_code, place_id, name, rating, reviews, seen_at) VALUES (?, ?, ?, ?, ?, ?)"
+      ).bind(firmCode, c.placeId, c.name, c.rating, c.reviews, now).run();
+    } catch (e) {}
+  }
+
+  /* Load last week's snapshots for diff */
+  var lastWeekCutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+  var thisWeekCutoff = new Date(Date.now() - 7 * 86400000).toISOString();
+  var prevRows = [];
+  try {
+    var prev = await env.DB.prepare(
+      "SELECT place_id, name, rating, reviews FROM place_snapshots WHERE firm_code = ? AND seen_at > ? AND seen_at <= ? GROUP BY place_id"
+    ).bind(firmCode, lastWeekCutoff, thisWeekCutoff).all();
+    prevRows = (prev && prev.results) || [];
+  } catch (e) {}
+
+  var prevMap = {};
+  prevRows.forEach(function(r) { prevMap[r.place_id] = r; });
+
+  /* Diff */
+  var newPlaces = [];
+  var ratingChanges = [];
+  competitors.forEach(function(c) {
+    var prev = prevMap[c.placeId];
+    if (!prev) {
+      newPlaces.push({ name: c.name, rating: c.rating, reviews: c.reviews });
+    } else if (Math.abs(c.rating - prev.rating) >= 0.2) {
+      ratingChanges.push({ name: c.name, oldRating: prev.rating, newRating: c.rating, reviews: c.reviews });
+    }
+  });
+
+  /* Competitor reviews: fetch for top 3, find common complaint.
+     Check weekly cap — at most 3 competitor review fetches per firm per week. */
+  var compReviewCapKey = 'scout:compreviews:cap:' + firmCode + ':' + weekKey;
+  var compReviewsUsed = parseInt(await env.G7_KV.get(compReviewCapKey) || '0', 10);
+  var topComplaint = '';
+  var compReviewNames = [];
+  var detailsCalls = 0;
+
+  if (compReviewsUsed < 3) {
+    var topComps = competitors.slice(0, 3 - compReviewsUsed);
+    var allCompReviews = '';
+    for (var ci = 0; ci < topComps.length; ci++) {
+      try {
+        var compDetails = await placeDetailsWithReviews(env, topComps[ci].placeId);
+        detailsCalls++;
+        compReviewNames.push(topComps[ci].name);
+        (compDetails.reviewList || []).forEach(function(rv) {
+          if (rv.text) allCompReviews += topComps[ci].name + ': ' + rv.text.slice(0, 200) + '\n';
+        });
+      } catch (e) {}
+    }
+    await kvPut(env, compReviewCapKey, String(compReviewsUsed + topComps.length), { expirationTtl: 8 * 86400 });
+    if (cost) cost.usd += detailsCalls * RANK_DETAILS_COST;
+
+    /* Haiku: find common complaint → your angle */
+    if (allCompReviews.length > 20) {
+      try {
+        var cPrompt = 'These are recent customer reviews for competing businesses near ' + (profile.ownName || 'the owner\'s business') + ':\n\n' +
+          allCompReviews.slice(0, 4000) + '\n\n' +
+          'What is the single most common customer complaint across these competitors? ' +
+          'Then turn it into a one-line competitive angle for the owner, e.g. "Competitors get complaints about slow service — highlight your fast turnaround."\n\n' +
+          'Output ONLY JSON:\n{"complaint":"...","yourAngle":"..."}';
+
+        var cr = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 500,
+            thinking: { type: 'disabled' },
+            messages: [{ role: 'user', content: cPrompt }]
+          })
+        }, 'rank/complaint');
+        if (cr.ok) {
+          var cData = await cr.json();
+          recordCost(cost, 'claude-haiku-4-5-20251001', cData);
+          var cText = (cData.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+          try {
+            var j1 = cText.indexOf('{'), j2 = cText.lastIndexOf('}');
+            if (j1 !== -1 && j2 > j1) topComplaint = JSON.parse(cText.slice(j1, j2 + 1));
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  }
+
+  var compData = {
+    newPlaces: newPlaces.slice(0, 5),
+    ratingChanges: ratingChanges.slice(0, 5),
+    topComplaint: topComplaint || null,
+    competitorCount: competitors.length,
+    compReviewNames: compReviewNames,
+    detailsCalls: detailsCalls,
+    weekKey: weekKey,
+    snapshotAt: now
+  };
+
+  await kvPut(env, 'scout:competitors:' + firmCode + ':' + weekKey, JSON.stringify(compData), { expirationTtl: 60 * 86400 });
+  await kvPut(env, 'scout:competitors:latest:' + firmCode, JSON.stringify(compData), { expirationTtl: 30 * 86400 });
+  return compData;
+}
+
+/* ── Trend: compare this week vs last week ── */
+async function getRankTrend(env, firmCode) {
+  var thisWeek = getISOWeek();
+  /* Calculate last week */
+  var d = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000);
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  var weekNo = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  var lastWeek = d.getUTCFullYear() + '-W' + String(weekNo).padStart(2, '0');
+
+  var thisData = await env.G7_KV.get('scout:googlerank:' + firmCode + ':' + thisWeek, 'json');
+  var lastData = await env.G7_KV.get('scout:googlerank:' + firmCode + ':' + lastWeek, 'json');
+
+  if (!thisData) return null;
+
+  var trends = [];
+  (thisData.ranks || []).forEach(function(tr) {
+    var prev = null;
+    if (lastData && lastData.ranks) {
+      for (var i = 0; i < lastData.ranks.length; i++) {
+        if (lastData.ranks[i].query === tr.query) { prev = lastData.ranks[i]; break; }
+      }
+    }
+    var rankChange = null;
+    if (prev && prev.rank && tr.rank) rankChange = prev.rank - tr.rank; /* positive = improved */
+    trends.push({
+      query: tr.query,
+      rank: tr.rank,
+      prevRank: prev ? prev.rank : null,
+      change: rankChange
+    });
+  });
+
+  var reviewChange = null;
+  if (lastData && lastData.ownReviews && thisData.ownReviews) {
+    reviewChange = thisData.ownReviews - lastData.ownReviews;
+  }
+
+  return {
+    thisWeek: thisWeek,
+    lastWeek: lastWeek,
+    trends: trends,
+    ownRating: thisData.ownRating,
+    ownReviews: thisData.ownReviews,
+    prevRating: lastData ? lastData.ownRating : null,
+    prevReviews: lastData ? lastData.ownReviews : null,
+    reviewChange: reviewChange
+  };
+}
+
+/* ── Weekly proof line for rank section ── */
+function rankProofLine(trend) {
+  if (!trend || !trend.trends || trend.trends.length === 0) return '';
+  var parts = [];
+  trend.trends.forEach(function(t) {
+    if (t.rank && t.prevRank && t.change) {
+      var arrow = t.change > 0 ? '↑' : (t.change < 0 ? '↓' : '→');
+      parts.push('#' + t.prevRank + ' ' + arrow + ' #' + t.rank + ' for \'' + t.query + '\'');
+    }
+  });
+  if (trend.reviewChange && trend.reviewChange > 0) {
+    parts.push('reviews +' + trend.reviewChange);
+  }
+  return parts.join(', ');
+}
+
 /* ── Haversine distance in km ── */
 function haversineKm(lat1, lng1, lat2, lng2) {
   var toRad = Math.PI / 180;
@@ -5919,6 +6404,159 @@ export default {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // "HOW PEOPLE FIND YOU ON GOOGLE" — routes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── POST /scout/own-listing — save owner's Google place ──
+    if (request.method === 'POST' && path === '/scout/own-listing') {
+      var _olSess = await validateSession(request, env);
+      if (!_olSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _olBody;
+      try { _olBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      var _olProfile = await env.G7_KV.get('scout:leadprofile:' + _olSess.firmCode, 'json');
+      if (!_olProfile) _olProfile = {};
+
+      _olProfile.ownPlaceId = String(_olBody.placeId || '').slice(0, 200);
+      _olProfile.ownName = String(_olBody.name || '').slice(0, 200);
+      _olProfile.ownLocation = { lat: Number(_olBody.lat) || 0, lng: Number(_olBody.lng) || 0 };
+      _olProfile.ownPrimaryType = String(_olBody.primaryType || '').slice(0, 100);
+
+      /* Generate key searches if not already present */
+      if (!_olProfile.keySearches || _olProfile.keySearches.length === 0) {
+        var _olSaved = await env.G7_KV.get('market:ctx:' + _olSess.firmCode, 'json');
+        if (_olSaved && _olSaved.context) {
+          var _olCost = newCostAccum();
+          try {
+            _olProfile.keySearches = await generateKeySearches(env, _olSaved.context, _olSaved.city || '', _olCost);
+            var _olDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+            ctx.waitUntil(flushCost(env, _olDay, _olSess.firmCode, _olCost));
+          } catch (e) {}
+        }
+      }
+
+      await kvPut(env, 'scout:leadprofile:' + _olSess.firmCode, JSON.stringify(_olProfile), { expirationTtl: 30 * 86400 });
+      return jsonResponse({ ok: true, profile: _olProfile });
+    }
+
+    // ── GET /scout/own-listing/search — search Places for owner's business ──
+    if (request.method === 'GET' && path === '/scout/own-listing/search') {
+      var _olsSess = await validateSession(request, env);
+      if (!_olsSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.GOOGLE_PLACES_KEY) return jsonResponse({ error: 'No Google Places key configured' }, 501);
+
+      var _olsUrl = new URL(request.url);
+      var _olsQuery = _olsUrl.searchParams.get('q') || '';
+      if (_olsQuery.length < 2) return jsonResponse({ error: 'Query too short' }, 400);
+
+      /* Use the full Text Search Enterprise to get rating + type for display */
+      try {
+        var _olsResults = await placesTextSearch(env, _olsQuery, 0, 0, 50000, 10);
+        return jsonResponse({ results: _olsResults });
+      } catch (e) {
+        return jsonResponse({ error: String(e.message || e).slice(0, 200) }, 500);
+      }
+    }
+
+    // ── POST /scout/own-listing/key-searches — update key searches ──
+    if (request.method === 'POST' && path === '/scout/own-listing/key-searches') {
+      var _ksSess = await validateSession(request, env);
+      if (!_ksSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _ksBody;
+      try { _ksBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      var _ksProfile = await env.G7_KV.get('scout:leadprofile:' + _ksSess.firmCode, 'json');
+      if (!_ksProfile) return jsonResponse({ error: 'No lead profile' }, 404);
+
+      if (Array.isArray(_ksBody.keySearches)) {
+        _ksProfile.keySearches = _ksBody.keySearches.slice(0, 5).map(function(s) { return String(s).slice(0, 120).toLowerCase(); });
+      }
+
+      await kvPut(env, 'scout:leadprofile:' + _ksSess.firmCode, JSON.stringify(_ksProfile), { expirationTtl: 30 * 86400 });
+      return jsonResponse({ ok: true, keySearches: _ksProfile.keySearches });
+    }
+
+    // ── GET /scout/google-rank — latest rank data + trend ──
+    if (request.method === 'GET' && path === '/scout/google-rank') {
+      var _grSess = await validateSession(request, env);
+      if (!_grSess) return jsonResponse({ error: 'unauthorized' }, 401);
+
+      var _grLatest = await env.G7_KV.get('scout:googlerank:latest:' + _grSess.firmCode, 'json');
+      var _grTrend = await getRankTrend(env, _grSess.firmCode);
+      var _grCompetitors = await env.G7_KV.get('scout:competitors:latest:' + _grSess.firmCode, 'json');
+      var _grReviews = await env.G7_KV.get('scout:googlereviews:' + _grSess.firmCode, 'json');
+
+      return jsonResponse({
+        rank: _grLatest || null,
+        trend: _grTrend || null,
+        competitors: _grCompetitors || null,
+        reviews: _grReviews || null
+      });
+    }
+
+    // ── POST /scout/google-rank/check — manual rank check (once a day) ──
+    if (request.method === 'POST' && path === '/scout/google-rank/check') {
+      var _grcSess = await validateSession(request, env);
+      if (!_grcSess) return jsonResponse({ error: 'unauthorized' }, 401);
+
+      /* Rate limit: once per day */
+      var _grcLastCheck = await env.G7_KV.get('scout:googlerank:lastcheck:' + _grcSess.firmCode);
+      if (_grcLastCheck) {
+        var _grcAge = Date.now() - new Date(_grcLastCheck).getTime();
+        if (_grcAge < 20 * 3600000) {
+          return jsonResponse({ error: 'Already checked today. Next check available in ' + Math.ceil((20 * 3600000 - _grcAge) / 3600000) + 'h.', lastCheck: _grcLastCheck }, 429);
+        }
+      }
+
+      var _grcProfile = await env.G7_KV.get('scout:leadprofile:' + _grcSess.firmCode, 'json');
+      if (!_grcProfile || !_grcProfile.ownPlaceId) {
+        return jsonResponse({ error: 'Connect your Google listing in Settings first.' }, 400);
+      }
+      if (!_grcProfile.keySearches || _grcProfile.keySearches.length === 0) {
+        return jsonResponse({ error: 'No key searches configured.' }, 400);
+      }
+
+      var _grcCost = newCostAccum();
+      var _grcDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+
+      try {
+        var _grcResult = await runRankCheck(env, _grcSess.firmCode, _grcProfile, _grcCost);
+
+        /* Also fetch reviews */
+        var _grcLang = 'English';
+        try {
+          var _grcSt = await loadScoutState(env, _grcSess.firmCode);
+          if (_grcSt) { var _grcPr = _grcSt.pick('scout_pending_result'); if (_grcPr && _grcPr.language) _grcLang = _grcPr.language; }
+        } catch (e) {}
+        var _grcReviews = await fetchOwnReviews(env, _grcSess.firmCode, _grcProfile, _grcLang, _grcCost);
+
+        /* Competitor snapshot */
+        var _grcComp = await runCompetitorSnapshot(env, _grcSess.firmCode, _grcProfile, _grcResult.searchResults, _grcCost);
+
+        ctx.waitUntil(flushCost(env, _grcDay, _grcSess.firmCode, _grcCost));
+
+        return jsonResponse({
+          ok: true,
+          rank: _grcResult.rankData,
+          reviews: _grcReviews,
+          competitors: _grcComp,
+          trend: await getRankTrend(env, _grcSess.firmCode)
+        });
+      } catch (e) {
+        ctx.waitUntil(flushCost(env, _grcDay, _grcSess.firmCode, _grcCost));
+        return jsonResponse({ error: String(e.message || e).slice(0, 300) }, 500);
+      }
+    }
+
+    // ── GET /scout/google-reviews — latest reviews with draft replies ──
+    if (request.method === 'GET' && path === '/scout/google-reviews') {
+      var _grvSess = await validateSession(request, env);
+      if (!_grvSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _grvData = await env.G7_KV.get('scout:googlereviews:' + _grvSess.firmCode, 'json');
+      return jsonResponse({ reviews: _grvData || null });
+    }
+
     // ── POST /admin/generate-leads — admin trigger for a specific firm ──
     if (request.method === 'POST' && path === '/admin/generate-leads') {
       var _glBody;
@@ -6995,6 +7633,55 @@ export default {
       leadCursor = leadPage.list_complete ? undefined : leadPage.cursor;
     } while (leadCursor);
     report.leads = _leadReport;
+
+    /* ── "How people find you on Google" — weekly on Monday ──
+       Runs rank check, review fetch, competitor snapshot for each firm with ownPlaceId. */
+    var _isMonday = ist.getDay() === 1;
+    var _rankReport = [];
+    if (_isMonday) {
+      var _rankSentKey = 'scout:rankcron:' + day;
+      var _rankSent = await env.G7_KV.get(_rankSentKey);
+      if (!_rankSent) {
+        await kvPut(env, _rankSentKey, '1', { expirationTtl: 2 * 86400 });
+        var _rankCursor;
+        do {
+          var _rankPage = await env.G7_KV.list({ prefix: 'scout:leadprofile:', cursor: _rankCursor });
+          for (var _rk of _rankPage.keys) {
+            if (_rk.name.indexOf(':src:') !== -1) continue;
+            var _rFirm = _rk.name.slice('scout:leadprofile:'.length);
+            if (!_rFirm) continue;
+            var _rProfile = await env.G7_KV.get(_rk.name, 'json');
+            if (!_rProfile || !_rProfile.ownPlaceId || !_rProfile.keySearches || _rProfile.keySearches.length === 0) continue;
+
+            var _rCost = newCostAccum();
+            var _rt0 = Date.now();
+            try {
+              var _rResult = await runRankCheck(env, _rFirm, _rProfile, _rCost);
+
+              /* Fetch reviews */
+              var _rLang = 'English';
+              try {
+                var _rSt = await loadScoutState(env, _rFirm);
+                if (_rSt) { var _rPr = _rSt.pick('scout_pending_result'); if (_rPr && _rPr.language) _rLang = _rPr.language; }
+              } catch (e) {}
+              await fetchOwnReviews(env, _rFirm, _rProfile, _rLang, _rCost);
+
+              /* Competitor snapshot */
+              await runCompetitorSnapshot(env, _rFirm, _rProfile, _rResult.searchResults, _rCost);
+
+              await flushCost(env, day, _rFirm, _rCost);
+              _rankReport.push({ firm: _rFirm, status: 'ok', ms: Date.now() - _rt0 });
+            } catch (e) {
+              await flushCost(env, day, _rFirm, _rCost);
+              _rankReport.push({ firm: _rFirm, status: 'error', error: String(e.message || e).slice(0, 200), ms: Date.now() - _rt0 });
+              try { await recordError(env, { source: 'worker', route: 'cron/rank', firmCode: _rFirm, kind: 'rank_check', message: String(e.message || e) }); } catch(e2) {}
+            }
+          }
+          _rankCursor = _rankPage.list_complete ? undefined : _rankPage.cursor;
+        } while (_rankCursor);
+      }
+    }
+    report.rank = _rankReport;
 
     report.state = 'done';
     delete report.current;
