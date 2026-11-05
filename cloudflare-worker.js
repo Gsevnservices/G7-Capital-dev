@@ -2245,10 +2245,11 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
   /* Generate collab messages via Haiku */
   var businessName = profileJson.ownName || profileJson.businessName || 'our business';
   var businessType = profileJson.ownPrimaryType || '';
-  var msgPrompt = 'You are ' + businessName + ', a local ' + businessType + '. ' +
+  var msgPrompt = 'You are ' + businessName + ', a local ' + businessType + (city ? ' in ' + city : '') + '. ' +
     'Draft a short, friendly DM and a short email for each creator below, inviting them for a free collab ' +
     '(e.g. "free tasting for an honest review/reel" or "complimentary session for a story"). ' +
-    'Language: ' + (lang || 'English') + '. Keep each under 80 words. Be genuine, not salesy.\n\n' +
+    'Language: ' + (lang || 'English') + '. Keep each under 80 words. Be genuine, not salesy. ' +
+    'Never mention Scout, G7, or "getting customers".\n\n' +
     'CREATORS:\n' + newCreators.map(function(c, i) {
       return (i + 1) + '. ' + c.handle + ' (' + c.niche + ', ' + c.followers + ')';
     }).join('\n') + '\n\n' +
@@ -3297,19 +3298,29 @@ function classifyIndianPhone(phone) {
 }
 
 /* ── Generate messages with Haiku ── */
-async function generateLeadMessages(env, leads, profile, businessContext, lang, cost) {
+async function generateLeadMessages(env, leads, profile, businessContext, lang, cost, city) {
   if (leads.length === 0) return leads;
 
+  var ownerName = (profile && profile.ownName) || '';
+  var ownerType = (profile && profile.ownPrimaryType) || '';
+  var senderLine = (ownerName || 'a local business') + (ownerType ? ' (' + ownerType + ')' : '') + (city ? ' in ' + city : '');
+
   var leadDescs = leads.map(function(l, i) {
-    return (i + 1) + '. ' + l.name + ' (' + l._groupName + ') — ' + l.fitReason;
+    return (i + 1) + '. ' + l.name + ' (' + l._groupName + ') — offer: ' + (l._groupOffer || 'our services') + ' — fit: ' + l.fitReason;
   }).join('\n');
 
-  var prompt = 'You write short business outreach messages for a small business owner in India.\n\n' +
-    'BUSINESS: ' + (businessContext || '').slice(0, 1000) + '\n\n' +
+  var prompt = 'You write short WhatsApp messages.\n\n' +
+    'SENDER (you are writing as): ' + senderLine + '\n' +
+    'BUSINESS DETAILS: ' + (businessContext || '').slice(0, 1000) + '\n' +
     'LANGUAGE: ' + (lang || 'Hinglish') + '\n\n' +
-    'LEADS:\n' + leadDescs + '\n\n' +
-    'For each lead, write:\n' +
-    '1. first_message: a WhatsApp-style intro (2-3 sentences, friendly, specific to their business)\n' +
+    'RECIPIENTS:\n' + leadDescs + '\n\n' +
+    'RULES:\n' +
+    '- Write as the sender\'s business reaching out to each recipient.\n' +
+    '- Never mention Scout, G7, or "getting customers".\n' +
+    '- For pricing: use ONLY prices from BUSINESS DETAILS. If none exist, ask what they need instead of inventing a price.\n' +
+    '- Never invent or guess prices.\n\n' +
+    'For each recipient, write:\n' +
+    '1. first_message: a WhatsApp-style intro (2-3 sentences, friendly, specific to their business, mentioning the offer)\n' +
     '2. reminder1: follow-up after 2 days if no reply (1-2 sentences)\n' +
     '3. reminder2: final follow-up after 4 days (1-2 sentences)\n' +
     '4. visit_pitch: 30-second in-person pitch (2-3 sentences, for walk-in)\n\n' +
@@ -3746,7 +3757,7 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   });
 
   /* Generate messages */
-  picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost);
+  picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost, city);
 
   /* ── STEP 7: Remove promoted leads from pool ── */
   var promotedIds = picked.map(function(p) { return p.placeId; }).filter(Boolean);
@@ -6641,13 +6652,22 @@ export default {
       var _rdThread = Array.isArray(_rdData.thread) ? _rdData.thread : [];
 
       /* Build Haiku prompt */
-      var _rdPrompt = 'You write short WhatsApp follow-up messages for a small business owner in India.\n\n' +
-        'BUSINESS: ' + (_rdContext || _rdBizName).slice(0, 800) + '\n' +
-        'LANGUAGE: ' + _rdLang + '\n' +
-        'LEAD NAME: ' + _rdName + '\n' +
-        'LEAD GROUP: ' + _rdGroup + '\n' +
-        'WHAT WE OFFER THEM: ' + _rdOffer + '\n' +
-        'WHY THEY FIT: ' + _rdFit + '\n';
+      var _rdOwnerType = (_rdProfile && _rdProfile.ownPrimaryType) || '';
+      var _rdCity = (_rdSavedCtx && _rdSavedCtx.city) || '';
+      var _rdSenderLine = (_rdBizName || 'a local business') + (_rdOwnerType ? ' (' + _rdOwnerType + ')' : '') + (_rdCity ? ' in ' + _rdCity : '');
+
+      var _rdPrompt = 'You write short WhatsApp messages.\n\n' +
+        'SENDER (you are writing as): ' + _rdSenderLine + '\n' +
+        'RECIPIENT: ' + (_rdName || 'a lead') + (_rdGroup ? ' (' + _rdGroup + ')' : '') + '\n' +
+        'WHAT SENDER OFFERS RECIPIENT: ' + _rdOffer + '\n' +
+        'WHY THEY FIT: ' + _rdFit + '\n' +
+        'BUSINESS DETAILS: ' + (_rdContext || '').slice(0, 800) + '\n' +
+        'LANGUAGE: ' + _rdLang + '\n\n' +
+        'RULES:\n' +
+        '- Write as the sender\'s business reaching out to the recipient.\n' +
+        '- Never mention Scout, G7, or "getting customers".\n' +
+        '- For pricing: use ONLY prices from BUSINESS DETAILS above. If no price exists, ask what they need and offer to share a quote.\n' +
+        '- Never invent or guess prices.\n';
 
       if (_rdThread.length > 0) {
         _rdPrompt += '\nCONVERSATION SO FAR:\n';
@@ -6657,15 +6677,15 @@ export default {
       }
       if (_rdPasted) _rdPrompt += '\nTHEIR LATEST REPLY: ' + _rdPasted + '\n';
 
-      _rdPrompt += '\nSITUATION: The lead replied. Category: ' + _rdType.replace(/_/g, ' ') + '.\n';
+      _rdPrompt += '\nSITUATION: The recipient replied. Category: ' + _rdType.replace(/_/g, ' ') + '.\n';
 
       switch (_rdType) {
         case 'interested':
           _rdPrompt += 'They showed interest. Propose a specific next step — visit, call, quote, or trial. Warm and action-oriented.'; break;
         case 'asked_price':
-          _rdPrompt += 'They asked about pricing. Include a price or range if inferable from business context, plus offer a visit or call. If pricing unknown, ask what they need and offer a quote.'; break;
+          _rdPrompt += 'They asked about pricing. Share a price ONLY if one exists in BUSINESS DETAILS. Otherwise ask what they need and offer to share a quote. Never invent a number.'; break;
         case 'asked_details':
-          _rdPrompt += 'They want more details. Give a brief helpful answer from the business context, suggest a call or visit for the full picture.'; break;
+          _rdPrompt += 'They want more details. Give a brief helpful answer from BUSINESS DETAILS, suggest a call or visit for the full picture.'; break;
         case 'call_later':
           _rdPrompt += 'They said to call/message later. Confirm you will follow up. Very short — one or two sentences.'; break;
         case 'not_interested':
