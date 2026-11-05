@@ -6546,6 +6546,31 @@ export default {
               }
             });
           } catch (e) {}
+
+          /* Callback reminders — leads who said "call me later" and date is today or past */
+          try {
+            var _cbRows = await env.DB.prepare(
+              "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND source = 'places' AND stage = 'replied' " +
+              "AND json_extract(data, '$.callbackAt') IS NOT NULL AND json_extract(data, '$.callbackAt') <= ? " +
+              "AND deleted_at IS NULL LIMIT 10"
+            ).bind(_ltSess.firmCode, _ltDay).all();
+            (_cbRows.results || []).forEach(function(r) {
+              var d;
+              try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
+              if (d.callbackDismissed) return;
+              _ltReminders.push({
+                id: r.id, name: r.name, phone: r.phone,
+                reminderNum: 0,
+                isCallback: true,
+                callbackDate: d.callbackAt,
+                message: d.messages && d.messages.first ? d.messages.first : '',
+                channels: d.channels || [],
+                daysSince: 0,
+                group: d.group || '',
+                replyType: 'call_later'
+              });
+            });
+          } catch (e) {}
         }
         /* Merge creators into today's leads */
         var _ltCreators = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
@@ -6561,6 +6586,131 @@ export default {
 
       /* No leads yet today — return empty */
       return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null });
+    }
+
+    // ── POST /scout/leads/reply-draft — Haiku drafts a next-step message ──
+    if (request.method === 'POST' && path === '/scout/leads/reply-draft') {
+      var _rdSess = await validateSession(request, env);
+      if (!_rdSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _rdBody;
+      try { _rdBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _rdId = _rdBody.id;
+      var _rdType = _rdBody.replyType; /* interested, asked_price, asked_details, call_later, not_interested, other */
+      var _rdPasted = String(_rdBody.pastedReply || '').slice(0, 500);
+      if (!_rdId || !_rdType) return jsonResponse({ error: 'id and replyType required' }, 400);
+
+      /* Read lead from D1 */
+      var _rdRow = null;
+      if (env.DB) {
+        _rdRow = await env.DB.prepare(
+          "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND id = ?"
+        ).bind(_rdSess.firmCode, _rdId).first();
+      }
+      var _rdData = {};
+      var _rdName = '';
+      if (_rdRow) {
+        try { _rdData = JSON.parse(_rdRow.data || '{}'); } catch (e) {}
+        _rdName = _rdRow.name || '';
+      }
+
+      /* Read business context + language */
+      var _rdProfile = await env.G7_KV.get('scout:leadprofile:' + _rdSess.firmCode, 'json') || {};
+      var _rdBizName = (_rdProfile && _rdProfile.ownName) || '';
+      var _rdSavedCtx = await env.G7_KV.get('market:ctx:' + _rdSess.firmCode, 'json');
+      var _rdContext = (_rdSavedCtx && _rdSavedCtx.context) || '';
+
+      var _rdLang = 'Hinglish';
+      try {
+        var _rdUser = await env.G7_KV.get('auth:users:' + _rdSess.firmCode, 'json');
+        if (_rdUser && _rdUser.messageLanguage) _rdLang = _rdUser.messageLanguage;
+        else {
+          var _rdSt = await loadScoutState(env, _rdSess.firmCode);
+          if (_rdSt) {
+            var _rdPr = _rdSt.pick('scout_pending_result');
+            if (_rdPr && _rdPr.businessData && _rdPr.businessData.language) {
+              _rdLang = _rdPr.businessData.language;
+              if (/regional/i.test(_rdLang)) _rdLang = 'Hinglish';
+            }
+          }
+        }
+      } catch (e) {}
+
+      var _rdGroup = _rdData.group || '';
+      var _rdOffer = _rdData.offer || '';
+      var _rdFit = _rdData.fitReason || '';
+      var _rdThread = Array.isArray(_rdData.thread) ? _rdData.thread : [];
+
+      /* Build Haiku prompt */
+      var _rdPrompt = 'You write short WhatsApp follow-up messages for a small business owner in India.\n\n' +
+        'BUSINESS: ' + (_rdContext || _rdBizName).slice(0, 800) + '\n' +
+        'LANGUAGE: ' + _rdLang + '\n' +
+        'LEAD NAME: ' + _rdName + '\n' +
+        'LEAD GROUP: ' + _rdGroup + '\n' +
+        'WHAT WE OFFER THEM: ' + _rdOffer + '\n' +
+        'WHY THEY FIT: ' + _rdFit + '\n';
+
+      if (_rdThread.length > 0) {
+        _rdPrompt += '\nCONVERSATION SO FAR:\n';
+        _rdThread.slice(-5).forEach(function(t) {
+          _rdPrompt += '- ' + (t.dir === 'in' ? 'THEM: ' : 'US: ') + (t.text || '') + '\n';
+        });
+      }
+      if (_rdPasted) _rdPrompt += '\nTHEIR LATEST REPLY: ' + _rdPasted + '\n';
+
+      _rdPrompt += '\nSITUATION: The lead replied. Category: ' + _rdType.replace(/_/g, ' ') + '.\n';
+
+      switch (_rdType) {
+        case 'interested':
+          _rdPrompt += 'They showed interest. Propose a specific next step — visit, call, quote, or trial. Warm and action-oriented.'; break;
+        case 'asked_price':
+          _rdPrompt += 'They asked about pricing. Include a price or range if inferable from business context, plus offer a visit or call. If pricing unknown, ask what they need and offer a quote.'; break;
+        case 'asked_details':
+          _rdPrompt += 'They want more details. Give a brief helpful answer from the business context, suggest a call or visit for the full picture.'; break;
+        case 'call_later':
+          _rdPrompt += 'They said to call/message later. Confirm you will follow up. Very short — one or two sentences.'; break;
+        case 'not_interested':
+          _rdPrompt += 'Not interested. Graceful exit — thank them, leave the door open. One sentence.'; break;
+        default:
+          _rdPrompt += 'Write a friendly, helpful reply. Keep it conversational.'; break;
+      }
+      _rdPrompt += '\n\nOutput ONLY the message text (2-3 sentences max, WhatsApp style). No quotes, no explanation.';
+
+      var _rdCost = newCostAccum();
+      var _rdDraft = '';
+      try {
+        var _rdR = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 300, thinking: { type: 'disabled' },
+            messages: [{ role: 'user', content: _rdPrompt }]
+          })
+        }, 'leads/reply-draft');
+        if (_rdR.ok) {
+          var _rdRData = await _rdR.json();
+          recordCost(_rdCost, 'claude-haiku-4-5-20251001', _rdRData);
+          _rdDraft = (_rdRData.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('').trim();
+        }
+      } catch (e) {}
+
+      var _rdDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      ctx.waitUntil(flushCost(env, _rdDay, _rdSess.firmCode, _rdCost));
+
+      /* Fallback if Haiku failed */
+      if (!_rdDraft) {
+        var _rdFb = {
+          interested: { English: 'Great to hear! When would be a good time to discuss further?', Hinglish: 'Bahut accha! Kab baat kar sakte hain aage ke baare mein?' },
+          asked_price: { English: 'Sure! What specifically are you looking for so I can share the right price?', Hinglish: 'Bilkul! Aap exactly kya chahte hain bataiye, sahi price bhej dunga.' },
+          asked_details: { English: 'Happy to share more details. Shall I call you to explain?', Hinglish: 'Aur details bhej deta hoon. Call karke samjhaoon?' },
+          call_later: { English: 'No problem, I\'ll follow up then. Talk soon!', Hinglish: 'Koi baat nahi, tab message karunga. Phir baat karte hain!' },
+          not_interested: { English: 'No worries at all. If you ever need anything, feel free to reach out.', Hinglish: 'Koi baat nahi. Kabhi zaroorat ho toh bata dena.' },
+          other: { English: 'Thanks for getting back! Let me know how I can help.', Hinglish: 'Reply ke liye dhanyavaad! Bataiye main kaise madad kar sakta hoon.' }
+        };
+        var _rdFbSet = _rdFb[_rdType] || _rdFb.other;
+        _rdDraft = _rdFbSet[_rdLang] || _rdFbSet.Hinglish || _rdFbSet.English;
+      }
+
+      return jsonResponse({ ok: true, draft: String(_rdDraft).slice(0, 500) });
     }
 
     // ── POST /scout/leads/action — record an action on a lead ──
@@ -6600,6 +6750,47 @@ export default {
           _laNewStage = 'replied';
           _laData.repliedAt = new Date().toISOString();
           break;
+        case 'reply_logged': {
+          /* Rich reply: type + optional pasted reply + sent message + thread */
+          var _rlType = String(_laBody.replyType || 'other').slice(0, 30);
+          var _rlPasted = String(_laBody.pastedReply || '').slice(0, 500);
+          var _rlSent = String(_laBody.sentMessage || '').slice(0, 500);
+          var _rlNow = new Date().toISOString();
+
+          /* Stage rules */
+          if (_rlType === 'not_interested') {
+            _laNewStage = 'lost';
+            _laData.lostReason = 'not_interested';
+          } else {
+            _laNewStage = 'replied';
+          }
+          _laData.repliedAt = _rlNow;
+          _laData.replyType = _rlType;
+
+          /* Callback date for "call me later" */
+          if (_rlType === 'call_later' && _laBody.callbackDate) {
+            _laData.callbackAt = String(_laBody.callbackDate).slice(0, 10); /* YYYY-MM-DD */
+            delete _laData.callbackDismissed;
+          } else {
+            /* Clear any previous callback when a new reply type comes in */
+            if (_laData.callbackAt) {
+              _laData.callbackDismissed = true;
+            }
+          }
+
+          /* Stop pending reminders — stage change to 'replied' already removes from reminder query */
+          /* Thread logging (capped at 20) */
+          if (!Array.isArray(_laData.thread)) _laData.thread = [];
+          if (_rlPasted) {
+            _laData.thread.push({ dir: 'in', text: _rlPasted, at: _rlNow, type: _rlType });
+          }
+          if (_rlSent) {
+            _laData.thread.push({ dir: 'out', text: _rlSent, at: _rlNow, type: 'reply' });
+          }
+          while (_laData.thread.length > 20) _laData.thread.shift();
+          _laNote = _rlType;
+          break;
+        }
         case 'not_interested':
           _laNewStage = 'lost';
           _laData.lostReason = 'not_interested';
@@ -6644,12 +6835,12 @@ export default {
       }
 
       /* Update lead_stats */
-      if (_laData.group && (_laAction === 'thumbs_up' || _laAction === 'thumbs_down' || _laAction === 'contacted' || _laAction === 'replied' || _laNewStage === 'won')) {
+      if (_laData.group && (_laAction === 'thumbs_up' || _laAction === 'thumbs_down' || _laAction === 'contacted' || _laAction === 'replied' || _laAction === 'reply_logged' || _laNewStage === 'won')) {
         var _statCol = '';
         if (_laAction === 'thumbs_up') _statCol = 'thumbs_up';
         else if (_laAction === 'thumbs_down') _statCol = 'thumbs_down';
         else if (_laAction === 'contacted') _statCol = 'contacted';
-        else if (_laAction === 'replied') _statCol = 'replied';
+        else if (_laAction === 'replied' || _laAction === 'reply_logged') _statCol = 'replied';
         else if (_laNewStage === 'won') _statCol = 'won';
         if (_statCol) {
           try {
@@ -6684,9 +6875,21 @@ export default {
           "SUM(contacted) as contacted, SUM(replied) as replied, SUM(won) as won FROM lead_stats WHERE firm_code = ?"
         ).bind(_lsSess.firmCode).first();
 
+        /* Reply type breakdown by group (for weekly proof) */
+        var _lsReplyTypes = [];
+        try {
+          var _lsRt = await env.DB.prepare(
+            "SELECT json_extract(data, '$.group') as grp, json_extract(data, '$.replyType') as rt, COUNT(*) as cnt " +
+            "FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.replyType') IS NOT NULL " +
+            "AND deleted_at IS NULL GROUP BY grp, rt"
+          ).bind(_lsSess.firmCode).all();
+          _lsReplyTypes = (_lsRt && _lsRt.results) || [];
+        } catch (e) {}
+
         return jsonResponse({
           stats: _lsStats || {},
-          weekFunnel: (_lsFunnel && _lsFunnel.results) || []
+          weekFunnel: (_lsFunnel && _lsFunnel.results) || [],
+          replyTypes: _lsReplyTypes
         });
       } catch (e) {
         return jsonResponse({ stats: null, error: String(e.message || e).slice(0, 200) });

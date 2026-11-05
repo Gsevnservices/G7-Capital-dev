@@ -580,6 +580,15 @@ function pipelineSetStatus(personId, status, week, note) {
       store.people[i].updatedAt = now;
       if (status === 'joined') store.people[i].wonAt = now;
       if (note) store.people[i].note = note;
+      /* Clear callback reminder when status changes away from 'replied' */
+      if (store.people[i].callbackAt && status !== 'replied') {
+        delete store.people[i].callbackAt;
+        delete store.people[i].callbackDismissed;
+      }
+      /* Dismiss callback if moving forward from replied (e.g. trial_booked, joined) */
+      if (store.people[i].callbackAt && (status === 'trial_booked' || status === 'joined')) {
+        store.people[i].callbackDismissed = true;
+      }
       store.people[i].history.push({ week: week || 0, event: status, at: now });
       return pipelineSave(store, [personId]);
     }
@@ -747,6 +756,20 @@ function pipelineDue() {
   try { reviewSkip = localStorage.getItem(scoutKey('scout_review_skip')) === 'true'; } catch(e) {}
 
   store.people.forEach(function(p) {
+    /* Callback reminders — "call me later" with a date due today or past */
+    if (p.callbackAt && p.status === 'replied' && !p.callbackDismissed) {
+      var today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      if (p.callbackAt <= today) {
+        var dn = pipelineDisplayName(p);
+        var greet = pipelineGreeting(p, lang);
+        out.push({
+          person: p, urgency: 4, isCallback: true,
+          reason: dn.first + ' asked you to call back today',
+          msg: greet + ' \u2014 aapne kaha tha aaj follow up karunga. Kab baat kar sakte hain?'
+        });
+      }
+    }
+
     if (p.status === 'joined') {
       if (!reviewSkip && !p.reviewAskedAt && p.wonAt) {
         var dw = pipelineDaysSince(p.wonAt);
