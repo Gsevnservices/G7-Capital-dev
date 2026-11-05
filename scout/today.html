@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=49"></script>
-<script src="../assets/pipeline.js?v=27"></script>
+<script src="../assets/scout.js?v=50"></script>
+<script src="../assets/pipeline.js?v=28"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -106,6 +106,48 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .stats-bar{display:flex;gap:24px;margin-bottom:32px;flex-wrap:wrap}
 .stat-item{font-size:11px;color:var(--grey1);letter-spacing:.06em}
 .stat-item strong{color:var(--amber);font-weight:400}
+
+/* ── Reply modal ── */
+.reply-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1100;display:none;align-items:center;justify-content:center;padding:16px}
+.reply-overlay.open{display:flex}
+.reply-modal{background:var(--black2);border:1px solid var(--border);max-width:480px;width:100%;max-height:90vh;overflow-y:auto;padding:28px 24px}
+.reply-modal-title{font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:300;color:var(--white);margin-bottom:4px}
+.reply-modal-sub{font-size:11px;color:var(--grey1);margin-bottom:20px}
+.reply-types{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.reply-type-btn{font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:10px 14px;cursor:pointer;font-family:'Tenor Sans',sans-serif;transition:all .2s;background:transparent;border:1px solid var(--border2);color:var(--grey1);min-height:44px}
+.reply-type-btn:hover{border-color:var(--amber);color:var(--amber)}
+.reply-type-btn.selected{border-color:var(--amber);color:var(--amber);background:rgba(224,146,47,0.08)}
+.reply-paste{width:100%;background:var(--black3);border:1px solid var(--border2);color:var(--white2);padding:12px 14px;font-family:'Tenor Sans',sans-serif;font-size:13px;line-height:1.7;resize:vertical;min-height:60px;margin-bottom:16px;outline:none}
+.reply-paste:focus{border-color:var(--amber)}
+.reply-paste::placeholder{color:var(--grey2)}
+.reply-draft-box{background:var(--black3);border-left:3px solid var(--amber);padding:14px 16px;font-size:13px;color:var(--white2);line-height:1.8;margin-bottom:16px;white-space:pre-wrap;min-height:50px;cursor:text;outline:none}
+.reply-draft-box:focus{border-left-color:var(--amber-l)}
+.reply-draft-label{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-bottom:6px}
+.reply-loading{font-size:12px;color:var(--grey1);padding:16px 0;text-align:center}
+.reply-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.reply-send-btn{font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:10px 18px;cursor:pointer;font-family:'Tenor Sans',sans-serif;transition:all .2s;background:var(--amber);border:1px solid var(--amber);color:var(--black);font-weight:600;min-height:44px}
+.reply-send-btn:hover{background:var(--amber-l);border-color:var(--amber-l)}
+.reply-done-btn{font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:10px 18px;cursor:pointer;font-family:'Tenor Sans',sans-serif;transition:all .2s;background:transparent;border:1px solid var(--border2);color:var(--grey1);min-height:44px}
+.reply-done-btn:hover{border-color:var(--amber);color:var(--amber)}
+.reply-cancel-btn{font-size:10px;letter-spacing:.1em;text-transform:uppercase;background:transparent;border:none;color:var(--grey2);cursor:pointer;font-family:'Tenor Sans',sans-serif;padding:8px 0;margin-top:8px}
+.reply-cancel-btn:hover{color:var(--white)}
+.reply-date-row{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.reply-date-input{background:var(--black3);border:1px solid var(--border2);color:var(--white);padding:10px 12px;font-family:'Tenor Sans',sans-serif;font-size:13px}
+.reply-date-input:focus{border-color:var(--amber);outline:none}
+.reply-date-label{font-size:11px;color:var(--grey1)}
+
+/* ── Thread display ── */
+.lead-thread{margin-top:12px;padding:10px 0;border-top:1px solid var(--border2)}
+.thread-entry{font-size:11px;line-height:1.6;padding:4px 0;color:var(--grey1)}
+.thread-entry.incoming{color:var(--amber-l)}
+.thread-entry.outgoing{color:var(--white2)}
+.thread-dir{font-size:9px;letter-spacing:.08em;text-transform:uppercase;margin-right:6px;opacity:.7}
+@media(max-width:480px){
+  .reply-overlay{padding:8px}
+  .reply-modal{padding:20px 16px;max-height:95vh}
+  .reply-type-btn{padding:8px 10px;font-size:9px}
+  .reply-paste{min-height:50px;padding:10px 12px}
+}
 </style>
 </head>
 <body>
@@ -164,6 +206,50 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
       <div class="empty-title">Set up Customer Finder</div>
       <div class="empty-text" id="setupText">Run a business analysis first, then Scout will find customers for you.</div>
       <a href="onboard.html" class="ch-btn call" style="margin-top:20px;display:inline-flex">Run Analysis</a>
+    </div>
+  </div>
+</div>
+
+<!-- Reply modal overlay -->
+<div class="reply-overlay" id="replyOverlay" onclick="if(event.target===this)closeReplyModal()">
+  <div class="reply-modal">
+    <div class="reply-modal-title" id="replyModalTitle">They replied</div>
+    <div class="reply-modal-sub" id="replyModalSub">What did they say?</div>
+
+    <!-- Step 1: pick reply type -->
+    <div id="replyStep1">
+      <div class="reply-types">
+        <button class="reply-type-btn" onclick="pickReplyType('interested')">Interested</button>
+        <button class="reply-type-btn" onclick="pickReplyType('asked_price')">Asked price</button>
+        <button class="reply-type-btn" onclick="pickReplyType('asked_details')">Asked for details</button>
+        <button class="reply-type-btn" onclick="pickReplyType('call_later')">Call me later</button>
+        <button class="reply-type-btn" onclick="pickReplyType('not_interested')">Not interested</button>
+        <button class="reply-type-btn" onclick="pickReplyType('other')">Other</button>
+      </div>
+      <textarea class="reply-paste" id="replyPasteBox" placeholder="Paste their reply (optional)"></textarea>
+      <button class="reply-cancel-btn" onclick="closeReplyModal()">Cancel</button>
+    </div>
+
+    <!-- Step 1b: date picker for call_later -->
+    <div id="replyDateStep" style="display:none">
+      <div class="reply-date-row">
+        <span class="reply-date-label">Follow up on:</span>
+        <input type="date" class="reply-date-input" id="replyCallbackDate">
+      </div>
+    </div>
+
+    <!-- Step 2: draft loading + display -->
+    <div id="replyStep2" style="display:none">
+      <div class="reply-loading" id="replyLoading">Drafting message&hellip;</div>
+      <div id="replyDraftWrap" style="display:none">
+        <div class="reply-draft-label">Your next message</div>
+        <div class="reply-draft-box" id="replyDraftBox" contenteditable="true"></div>
+        <div class="reply-actions">
+          <button class="reply-send-btn" id="replySendBtn" onclick="replyModalSend()">Send on WhatsApp</button>
+          <button class="reply-done-btn" onclick="replyModalDone()">Done (already sent)</button>
+        </div>
+        <button class="reply-cancel-btn" onclick="closeReplyModal()">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -243,8 +329,8 @@ async function loadToday() {
     renderReminders(reminders);
   }
 
-  /* Load stats */
-  loadStats();
+  /* Load stats with reply rate */
+  loadStatsWithReplyRate();
 }
 
 function renderLeads(leads) {
@@ -279,8 +365,19 @@ function renderLeads(leads) {
           'onclick="markContacted(\'' + esc(l.id) + '\',\'email\')">Email</a>';
       }
       html += '</div>';
+      /* Thread display */
+      var _cThread = (l.thread || []);
+      if (_cThread.length > 0) {
+        html += '<div class="lead-thread">';
+        _cThread.slice(-4).forEach(function(t) {
+          var cls = t.dir === 'in' ? 'incoming' : 'outgoing';
+          var lbl = t.dir === 'in' ? '\u2190 them' : '\u2192 you';
+          html += '<div class="thread-entry ' + cls + '"><span class="thread-dir">' + lbl + '</span>' + esc(t.text) + '</div>';
+        });
+        html += '</div>';
+      }
       html += '<div class="lead-actions">';
-      html += '<button class="act-btn positive" onclick="leadAction(\'' + esc(l.id) + '\',\'replied\')">Replied</button>';
+      html += '<button class="act-btn positive" onclick="openReplyModal(\'' + esc(l.id) + '\',\'' + esc(l.name || l.handle || '') + '\',\'' + esc(l.phone || '') + '\')">Replied</button>';
       html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'not_interested\')">Not interested</button>';
       html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'skip\')">Skip</button>';
       html += '<button class="act-btn thumb" onclick="leadAction(\'' + esc(l.id) + '\',\'thumbs_up\')" title="Good fit">\uD83D\uDC4D</button>';
@@ -339,9 +436,21 @@ function renderLeads(leads) {
     }
     html += '</div>';
 
+    /* Thread display */
+    var _sThread = (l.thread || []);
+    if (_sThread.length > 0) {
+      html += '<div class="lead-thread">';
+      _sThread.slice(-4).forEach(function(t) {
+        var cls = t.dir === 'in' ? 'incoming' : 'outgoing';
+        var lbl = t.dir === 'in' ? '\u2190 them' : '\u2192 you';
+        html += '<div class="thread-entry ' + cls + '"><span class="thread-dir">' + lbl + '</span>' + esc(t.text) + '</div>';
+      });
+      html += '</div>';
+    }
+
     /* Action buttons */
     html += '<div class="lead-actions">';
-    html += '<button class="act-btn positive" onclick="leadAction(\'' + esc(l.id) + '\',\'replied\')">Replied</button>';
+    html += '<button class="act-btn positive" onclick="openReplyModal(\'' + esc(l.id) + '\',\'' + esc(l.name) + '\',\'' + esc(l.phone || '') + '\')">Replied</button>';
     html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'not_interested\')">Not interested</button>';
     html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'wrong_number\')">Wrong number</button>';
     html += '<button class="act-btn" onclick="leadAction(\'' + esc(l.id) + '\',\'skip\')">Skip</button>';
@@ -377,7 +486,7 @@ function renderReminders(reminders) {
     if (phone) {
       html += '<a href="tel:' + esc(phone) + '" class="ch-btn call" onclick="sendReminder(\'' + esc(r.id) + '\',' + r.reminderNum + ')">Call</a>';
     }
-    html += '<button class="act-btn positive" onclick="leadAction(\'' + esc(r.id) + '\',\'replied\')">They replied</button>';
+    html += '<button class="act-btn positive" onclick="openReplyModal(\'' + esc(r.id) + '\',\'' + esc(r.name) + '\',\'' + esc(r.phone || '') + '\')">They replied</button>';
     html += '<button class="act-btn negative" onclick="leadAction(\'' + esc(r.id) + '\',\'not_interested\')">No interest</button>';
     html += '</div>';
     html += '</div>';
@@ -385,23 +494,7 @@ function renderReminders(reminders) {
   document.getElementById('remindersList').innerHTML = html;
 }
 
-async function loadStats() {
-  try {
-    var r = await fetch(SCOUT_WORKER + '/scout/leads/stats', { headers: _auth });
-    if (!r.ok) return;
-    var d = await r.json();
-    var s = d.stats;
-    if (!s || !s.found) return;
-    var bar = document.getElementById('statsBar');
-    bar.innerHTML =
-      '<div class="stat-item">Found <strong>' + (s.found || 0) + '</strong></div>' +
-      '<div class="stat-item">Contacted <strong>' + (s.contacted || 0) + '</strong></div>' +
-      '<div class="stat-item">Replied <strong>' + (s.replied || 0) + '</strong></div>' +
-      '<div class="stat-item">Won <strong>' + (s.won || 0) + '</strong></div>' +
-      '<div class="stat-item">Fit \u2605 <strong>' + (s.tu > 0 ? Math.round(s.tu / (s.tu + s.td) * 100) : 0) + '%</strong></div>';
-    bar.style.display = '';
-  } catch (e) {}
-}
+/* loadStats replaced by loadStatsWithReplyRate above */
 
 function markContacted(id, channel) {
   /* Read potentially edited message */
@@ -439,6 +532,174 @@ async function leadAction(id, action) {
 }
 
 function esc(s) { return escHtml(String(s || '')); }
+
+/* ═══════════════════════════════════════════
+   REPLY MODAL — next-step messages
+═══════════════════════════════════════════ */
+var _replyLeadId = '';
+var _replyLeadName = '';
+var _replyLeadPhone = '';
+var _replyType = '';
+var _replyDraft = '';
+
+function openReplyModal(id, name, phone) {
+  _replyLeadId = id;
+  _replyLeadName = name || '';
+  _replyLeadPhone = phone || '';
+  _replyType = '';
+  _replyDraft = '';
+  document.getElementById('replyModalTitle').textContent = _replyLeadName ? _replyLeadName + ' replied' : 'They replied';
+  document.getElementById('replyModalSub').textContent = 'What did they say?';
+  document.getElementById('replyStep1').style.display = '';
+  document.getElementById('replyStep2').style.display = 'none';
+  document.getElementById('replyDateStep').style.display = 'none';
+  document.getElementById('replyPasteBox').value = '';
+  /* Deselect all type buttons */
+  var btns = document.querySelectorAll('.reply-type-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.remove('selected');
+  /* Set default callback date to tomorrow */
+  var tmrw = new Date(Date.now() + 86400000);
+  document.getElementById('replyCallbackDate').value = tmrw.toISOString().slice(0, 10);
+  document.getElementById('replyOverlay').classList.add('open');
+}
+
+function closeReplyModal() {
+  document.getElementById('replyOverlay').classList.remove('open');
+  _replyLeadId = '';
+}
+
+function pickReplyType(type) {
+  _replyType = type;
+  /* Highlight selected */
+  var btns = document.querySelectorAll('.reply-type-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.toggle('selected', btns[i].textContent.toLowerCase().replace(/ /g, '_') ===
+      type.replace('asked_price', 'asked price').replace('asked_details', 'asked for details').replace('call_later', 'call me later').replace('not_interested', 'not interested'));
+  }
+  /* Show date picker for call_later */
+  document.getElementById('replyDateStep').style.display = type === 'call_later' ? '' : 'none';
+
+  /* Fetch draft from Haiku */
+  document.getElementById('replyStep1').style.display = 'none';
+  document.getElementById('replyStep2').style.display = '';
+  document.getElementById('replyLoading').style.display = '';
+  document.getElementById('replyDraftWrap').style.display = 'none';
+
+  var pasted = document.getElementById('replyPasteBox').value.trim();
+
+  fetch(SCOUT_WORKER + '/scout/leads/reply-draft', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+    body: JSON.stringify({ id: _replyLeadId, replyType: type, pastedReply: pasted })
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    _replyDraft = d.draft || '';
+    document.getElementById('replyDraftBox').textContent = _replyDraft;
+    document.getElementById('replyLoading').style.display = 'none';
+    document.getElementById('replyDraftWrap').style.display = '';
+    /* Show date picker again in step 2 for call_later */
+    if (type === 'call_later') {
+      document.getElementById('replyDateStep').style.display = '';
+      document.getElementById('replyStep2').insertBefore(
+        document.getElementById('replyDateStep'),
+        document.getElementById('replyDraftWrap')
+      );
+    }
+    /* Hide WhatsApp send for not_interested (just log it) */
+    document.getElementById('replySendBtn').style.display = type === 'not_interested' ? 'none' : '';
+  }).catch(function() {
+    document.getElementById('replyLoading').textContent = 'Could not draft message. Try again.';
+  });
+}
+
+function replyModalSend() {
+  var draft = document.getElementById('replyDraftBox').textContent.trim();
+  if (!draft) return;
+  var phoneDig = (_replyLeadPhone || '').replace(/\D/g, '').slice(-10);
+  /* Open WhatsApp FIRST (popup blocker) */
+  if (phoneDig.length === 10) {
+    window.open('https://wa.me/91' + phoneDig + '?text=' + encodeURIComponent(draft), '_blank');
+  }
+  /* Log the reply */
+  _logReply(draft);
+}
+
+function replyModalDone() {
+  var draft = document.getElementById('replyDraftBox').textContent.trim();
+  _logReply(draft);
+}
+
+function _logReply(sentMsg) {
+  var pasted = document.getElementById('replyPasteBox') ? document.getElementById('replyPasteBox').value.trim() : '';
+  var callbackDate = '';
+  if (_replyType === 'call_later') {
+    callbackDate = document.getElementById('replyCallbackDate').value || '';
+  }
+  fetch(SCOUT_WORKER + '/scout/leads/action', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+    body: JSON.stringify({
+      id: _replyLeadId,
+      action: 'reply_logged',
+      replyType: _replyType,
+      pastedReply: pasted,
+      sentMessage: sentMsg,
+      callbackDate: callbackDate
+    })
+  }).catch(function() {});
+  /* Fade the card */
+  var card = document.getElementById('lead-' + _replyLeadId) || document.getElementById('reminder-' + _replyLeadId);
+  if (card) {
+    card.classList.add('done');
+    card.style.pointerEvents = 'none';
+  }
+  closeReplyModal();
+}
+
+/* Show stats including reply rate by group */
+async function loadStatsWithReplyRate() {
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/leads/stats', { headers: _auth });
+    if (!r.ok) return;
+    var d = await r.json();
+    var s = d.stats;
+    if (!s || !s.found) return;
+    var bar = document.getElementById('statsBar');
+    var replyRate = s.contacted > 0 ? Math.round((s.replied || 0) / s.contacted * 100) : 0;
+    bar.innerHTML =
+      '<div class="stat-item">Found <strong>' + (s.found || 0) + '</strong></div>' +
+      '<div class="stat-item">Contacted <strong>' + (s.contacted || 0) + '</strong></div>' +
+      '<div class="stat-item">Replied <strong>' + (s.replied || 0) + '</strong></div>' +
+      '<div class="stat-item">Won <strong>' + (s.won || 0) + '</strong></div>' +
+      '<div class="stat-item">Reply rate <strong>' + replyRate + '%</strong></div>' +
+      '<div class="stat-item">Fit \u2605 <strong>' + (s.tu > 0 ? Math.round(s.tu / (s.tu + s.td) * 100) : 0) + '%</strong></div>';
+    bar.style.display = '';
+
+    /* Reply type breakdown by group */
+    if (d.replyTypes && d.replyTypes.length > 0) {
+      var byGroup = {};
+      d.replyTypes.forEach(function(rt) {
+        var g = rt.grp || 'Unknown';
+        if (!byGroup[g]) byGroup[g] = {};
+        byGroup[g][rt.rt] = rt.cnt;
+      });
+      var rtHtml = '<div style="margin-top:4px">';
+      Object.keys(byGroup).forEach(function(g) {
+        var parts = [];
+        var types = byGroup[g];
+        if (types.interested) parts.push('interested ' + types.interested);
+        if (types.asked_price) parts.push('asked price ' + types.asked_price);
+        if (types.asked_details) parts.push('details ' + types.asked_details);
+        if (types.call_later) parts.push('call later ' + types.call_later);
+        if (types.not_interested) parts.push('not interested ' + types.not_interested);
+        if (parts.length > 0) {
+          rtHtml += '<div class="stat-item" style="font-size:10px;margin-top:4px">' + escHtml(g) + ': <strong>' + parts.join('</strong> · <strong>') + '</strong></div>';
+        }
+      });
+      rtHtml += '</div>';
+      bar.innerHTML += rtHtml;
+    }
+  } catch (e) {}
+}
 
 function handleLogout() {
   scoutClearLocalState();
