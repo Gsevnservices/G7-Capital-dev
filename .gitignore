@@ -4,3 +4,6 @@
 .gstack/
 .env.local
 .wrangler/
+.codex/
+AGENTS.md
+node_modules/
