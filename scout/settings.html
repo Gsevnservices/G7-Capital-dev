@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=49"></script>
-<script src="../assets/pipeline.js?v=27"></script>
+<script src="../assets/scout.js?v=51"></script>
+<script src="../assets/pipeline.js?v=29"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -79,12 +79,9 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
   <div class="nav-right">
     <a href="today.html" class="nav-link">Today</a>
+    <a href="pipeline.html" class="nav-link">Customers</a>
     <a href="index.html" class="nav-link">Dashboard</a>
     <a href="news.html" class="nav-link">News</a>
-    <a href="onboard.html" class="nav-link">New Analysis</a>
-    <a href="history.html" class="nav-link">History</a>
-    <a href="checkin.html" class="nav-link">Check-In</a>
-    <a href="pipeline.html" class="nav-link">Customers</a>
     <a href="settings.html" class="nav-link active">Settings</a>
     <span class="nav-firm-indicator" id="navFirmName"></span>
     <button class="nav-logout" onclick="handleLogout()">Sign Out</button>
@@ -166,6 +163,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
   </div>
 
+  <!-- COST CHECK (admin only — hidden until admin password entered) -->
+  <div class="settings-section" id="s-cost" style="display:none">
+    <div class="settings-section-label">API Cost — Today</div>
+    <div id="costTable"></div>
+  </div>
+
 </div>
 
 <script>
@@ -190,6 +193,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   renderNews();
   renderLeadsSettings();
   renderAccount();
+  renderCostCheck();
 
   /* Scroll to hash section */
   if (location.hash) {
@@ -239,7 +243,7 @@ async function renderPlan() {
     html += '</div>';
 
     /* Usage rows */
-    var labels = { ask: 'Ask Scout', analysis: 'Business analysis', checkin: 'Weekly check-in', places: 'Customer Finder' };
+    var labels = { ask: 'Ask Scout', analysis: 'Business analysis', checkin: 'Weekly check-in', leads: 'New leads today', groupsearch: 'Extra group search' };
     var feats = d.features || {};
     for (var k in labels) {
       if (!feats[k]) continue;
@@ -525,9 +529,24 @@ async function renderLeadsSettings() {
       html += '</div>';
     });
 
-    /* Areas */
+    /* Areas — editable */
     html += '<div style="margin-top:16px"><div class="s-row-label" style="margin-bottom:8px">Search areas</div>';
-    html += '<div class="s-hint" style="margin-bottom:8px">' + (p.areas || []).map(function(a) { return escHtml(a); }).join(', ') + '</div>';
+    html += '<div id="areasEditable" style="margin-bottom:8px">';
+    (p.areas || []).forEach(function(a) {
+      html += '<span class="area-tag" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;margin:0 6px 6px 0;background:var(--black2);border:1px solid rgba(250,250,248,0.08);font-size:12px;color:var(--white2)">';
+      html += escHtml(a);
+      html += '<button class="area-remove" data-area="' + escHtml(a) + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px;line-height:1;padding:0 2px" title="Remove">\u00d7</button>';
+      html += '</span>';
+    });
+    html += '</div>';
+    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
+    html += '<div style="flex:1;position:relative">';
+    html += '<input type="text" id="addAreaInput" placeholder="Add area (e.g. Koramangala)" style="width:100%;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:0;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
+    html += '<div id="areaSuggestions" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--black2);border:1px solid rgba(201,168,76,0.15);z-index:20;max-height:160px;overflow-y:auto"></div>';
+    html += '</div>';
+    html += '<button class="s-btn" id="addAreaBtn" style="white-space:nowrap">Add</button>';
+    html += '</div>';
+    html += '<div id="areaValidMsg" style="font-size:10px;color:var(--grey2);margin-top:4px;min-height:16px"></div>';
     html += '</div>';
 
     /* Confirm / status */
@@ -709,6 +728,78 @@ async function renderLeadsSettings() {
       };
     });
 
+    /* Area remove handlers */
+    el.querySelectorAll('.area-remove').forEach(function(btn) {
+      btn.onclick = async function() {
+        var areaName = btn.getAttribute('data-area');
+        var currentAreas = (p.areas || []).filter(function(a) { return a !== areaName; });
+        if (currentAreas.length < 1) { var _vm = document.getElementById('areaValidMsg'); if (_vm) _vm.textContent = 'Need at least 1 area'; return; }
+        btn.textContent = '\u2026';
+        try {
+          var ar = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+            body: JSON.stringify({ action: 'confirm', areas: currentAreas })
+          });
+          if (ar.ok) { renderLeadsSettings(); }
+          else { flashErr('areaValidMsg', 'Could not remove area'); btn.textContent = '\u00d7'; }
+        } catch (e) { btn.textContent = '\u00d7'; }
+      };
+    });
+
+    /* Area add handler */
+    var addAreaBtn = document.getElementById('addAreaBtn');
+    var addAreaInput = document.getElementById('addAreaInput');
+    var areaSuggEl = document.getElementById('areaSuggestions');
+    var areaValidMsg = document.getElementById('areaValidMsg');
+    if (addAreaBtn && addAreaInput) {
+      var _addArea = async function() {
+        var name = addAreaInput.value.trim();
+        if (!name) return;
+        if ((p.areas || []).length >= 8) { if (areaValidMsg) areaValidMsg.textContent = 'Maximum 8 areas'; return; }
+        if ((p.areas || []).some(function(a) { return a.toLowerCase() === name.toLowerCase(); })) {
+          if (areaValidMsg) areaValidMsg.textContent = 'Already added'; return;
+        }
+        addAreaBtn.disabled = true; addAreaBtn.textContent = 'Checking\u2026';
+        if (areaValidMsg) areaValidMsg.textContent = '';
+        try {
+          var vr = await fetch(SCOUT_WORKER + '/scout/leads/validate-area', {
+            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+            body: JSON.stringify({ area: name })
+          });
+          var vd = await vr.json();
+          if (!vd.valid) {
+            if (areaValidMsg) areaValidMsg.textContent = vd.reason === 'too_far' ? 'Too far from your business (' + vd.distKm + 'km away, max ' + vd.maxKm + 'km)' : 'Could not find that area';
+            addAreaBtn.disabled = false; addAreaBtn.textContent = 'Add'; return;
+          }
+          /* Valid — save */
+          var newAreas = (p.areas || []).concat([name]);
+          var sr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+            body: JSON.stringify({ action: 'confirm', areas: newAreas })
+          });
+          if (sr.ok) {
+            /* Show suggestions if any */
+            if (vd.suggestions && vd.suggestions.length > 0 && areaSuggEl) {
+              var sh = '<div style="padding:8px 12px;font-size:10px;color:var(--grey2);border-bottom:1px solid rgba(250,250,248,0.06)">Nearby areas you could add:</div>';
+              vd.suggestions.forEach(function(s) {
+                sh += '<div class="area-sugg" style="padding:8px 12px;font-size:12px;color:var(--white2);cursor:pointer;transition:background .2s" onmouseover="this.style.background=\'var(--black3)\'" onmouseout="this.style.background=\'transparent\'">' + escHtml(s) + '</div>';
+              });
+              areaSuggEl.innerHTML = sh;
+              areaSuggEl.style.display = 'block';
+              areaSuggEl.querySelectorAll('.area-sugg').forEach(function(sel) {
+                sel.onclick = function() { addAreaInput.value = sel.textContent; areaSuggEl.style.display = 'none'; _addArea(); };
+              });
+              setTimeout(function() { areaSuggEl.style.display = 'none'; }, 8000);
+            }
+            renderLeadsSettings();
+          } else { if (areaValidMsg) areaValidMsg.textContent = 'Could not save'; }
+        } catch (e) { if (areaValidMsg) areaValidMsg.textContent = 'Error validating area'; }
+        addAreaBtn.disabled = false; addAreaBtn.textContent = 'Add';
+      };
+      addAreaBtn.onclick = _addArea;
+      addAreaInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') _addArea(); });
+    }
+
     /* Confirm handler */
     var confirmBtn = document.getElementById('confirmProfileBtn');
     if (confirmBtn) confirmBtn.onclick = async function() {
@@ -883,6 +974,63 @@ function initCursor() {
   document.addEventListener('mouseup',   function(){ c.style.transform='translate(-50%,-50%) scale(1)';r.style.transform='translate(-50%,-50%) scale(1)'; });
 }
 initCursor();
+
+/* ═══════════════════════════════════════
+   COST CHECK — admin-only cost table
+═══════════════════════════════════════ */
+async function renderCostCheck() {
+  /* Only show if URL has ?admin or admin password is in localStorage */
+  var isAdmin = window.location.search.indexOf('admin') !== -1 || localStorage.getItem('g7_admin_pw');
+  if (!isAdmin) return;
+  var sec = document.getElementById('s-cost');
+  var el = document.getElementById('costTable');
+  if (!sec || !el) return;
+  sec.style.display = '';
+
+  var pw = localStorage.getItem('g7_admin_pw') || '';
+  if (!pw) {
+    el.innerHTML = '<div style="margin-bottom:8px"><input class="s-input" type="password" id="adminPwInput" placeholder="Admin password" style="margin-bottom:8px">' +
+      '<button class="s-btn" id="adminPwBtn">Check cost</button></div>';
+    document.getElementById('adminPwBtn').onclick = function() {
+      pw = (document.getElementById('adminPwInput').value || '').trim();
+      if (pw) { localStorage.setItem('g7_admin_pw', pw); fetchCost(pw); }
+    };
+    return;
+  }
+  fetchCost(pw);
+
+  async function fetchCost(adminPw) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Loading\u2026</div>';
+    try {
+      var r = await fetch(SCOUT_WORKER + '/admin/cost-today', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminPassword: adminPw })
+      });
+      if (!r.ok) { el.innerHTML = '<div style="font-size:11px;color:#c44">Invalid password</div>'; localStorage.removeItem('g7_admin_pw'); return; }
+      var d = await r.json();
+      var html = '<div style="margin-bottom:12px;font-size:11px;color:var(--grey2)">' + d.day + '</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      html += '<tr style="border-bottom:1px solid rgba(250,250,248,0.08)"><th style="text-align:left;padding:6px 0;color:var(--grey2);font-size:9px;letter-spacing:.12em;text-transform:uppercase">Firm</th><th style="text-align:right;padding:6px 0;color:var(--grey2);font-size:9px;letter-spacing:.12em;text-transform:uppercase">USD</th></tr>';
+      var firms = d.firms || {};
+      var keys = Object.keys(firms).sort(function(a, b) { return firms[b] - firms[a]; });
+      keys.forEach(function(k) {
+        html += '<tr style="border-bottom:1px solid rgba(250,250,248,0.04)"><td style="padding:6px 0;color:var(--white)">' + escHtml(k) + '</td><td style="text-align:right;padding:6px 0;color:var(--white)">$' + firms[k].toFixed(4) + '</td></tr>';
+      });
+      html += '<tr style="border-top:1px solid rgba(201,168,76,0.2)"><td style="padding:8px 0;color:var(--gold);font-weight:600">Total</td><td style="text-align:right;padding:8px 0;color:var(--gold);font-weight:600">$' + (d.total || 0).toFixed(4) + '</td></tr>';
+      html += '</table>';
+      /* Reference pricing */
+      html += '<div style="margin-top:16px;font-size:10px;color:var(--grey2);line-height:1.8">';
+      html += '<div style="font-size:8px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:6px">API pricing reference</div>';
+      html += 'Places Text Search: $0.035/call<br>';
+      html += 'Place Details: $0.020/call<br>';
+      html += 'Haiku input: $1.00/M tokens<br>';
+      html += 'Haiku output: $5.00/M tokens<br>';
+      html += 'Web search: $0.01/request';
+      html += '</div>';
+      el.innerHTML = html;
+    } catch (e) { el.innerHTML = '<div style="font-size:11px;color:#c44">Error loading costs</div>'; }
+  }
+}
 
 </script>
 </body>

@@ -1944,145 +1944,131 @@ async function runMorningForFirm(env, firmCode, day) {
 }
 
 /* ═══════════════════════════════════════════
-   LEAD FINDER — real businesses from the open web, not a maps API.
-   One API call: web search finds candidate pages, web fetch reads them.
-   Integrity gate: a phone number is kept only if its digits appear in
-   text Scout actually read — a fetched page or a cited search passage.
-   A business with no verifiable phone is kept with phone empty, never
-   with a guessed one.
+   LEAD FINDER — REMOVED. Now uses Google Places exclusively via
+   runLeadsForFirm / runGroupSearch. The old Claude web-search
+   finder (findBusinesses) has been deleted.
 ═══════════════════════════════════════════ */
+
+/* [DELETED] findBusinesses — use runGroupSearch() for on-demand
+   single-group searches via Google Places. */
 async function findBusinesses(env, query, cap, cost) {
-  const want = Math.max(1, Math.min(cap || 10, 15));
-  const system =
-    'You find real businesses in India for a small-business owner to contact. ' +
-    'Search the web, then fetch the most useful pages to read full listings.\n\n' +
-    'BEST SOURCES, in order: the businesses\' own websites (contact pages), ' +
-    'official registries and association member lists, then directories such as ' +
-    'IndiaMART, Sulekha, TradeIndia and JustDial.\n\n' +
-    'RULES:\n' +
-    '- Only businesses that actually appear on pages you read. Never invent one.\n' +
-    '- phone must be copied exactly as printed on the page. If no number is printed, ' +
-    'leave phone empty. Never guess, complete or reformat a number from memory.\n' +
-    '- Prefer mobile numbers. Skip numbers labelled as toll-free.\n' +
-    '- Every business must match the request\'s trade and city.\n' +
-    '- Return up to ' + want + ' businesses. Fewer real ones beat more doubtful ones.\n\n' +
-    'First, for each business, write one short sentence stating its name, ' +
-    'area and phone number exactly as the source shows it, citing that ' +
-    'source. Then, on a new line, output this JSON and nothing after it:\n' +
-    '{"businesses":[{"name":"","address":"area and city","phone":"exactly as printed",' +
-    '"website":"","sourceUrl":"the page you read it on"}]}';
+  throw new Error('findBusinesses removed — use runGroupSearch');
+}
 
-  const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-5-5',
-      max_tokens: 6000,
-      thinking: { type: 'disabled' },
-      system: system,
-      tools: [
-        { type: 'web_search_20250305', name: 'web_search', max_uses: 2,
-          user_location: { type: 'approximate', country: 'IN', timezone: 'Asia/Kolkata' } },
-        { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 2, max_content_tokens: 3000 }
-      ],
-      messages: [{ role: 'user', content: 'Find: ' + query }]
-    })
-  }, 'places');
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error('finder ' + r.status + ': ' + t.slice(0, 400));
-  }
-  const data = await r.json();
-  recordCost(cost, 'claude-haiku-5-5', data);
+/* ── On-demand group search — runs Places pipeline for one group, adds to Today ── */
+async function runGroupSearch(env, firmCode, groupName, cost) {
+  var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  if (!profileJson) throw new Error('no_profile');
+  var group = null;
+  (profileJson.groups || []).forEach(function(g) { if (g.name === groupName && g.enabled) group = g; });
+  if (!group) throw new Error('group_not_found');
 
-  /* Everything Scout actually read: fetched page text and cited passages. */
-  let corpus = '';
-  const readUrls = new Set();
-  (data.content || []).forEach(function(b) {
-    if (b.type === 'web_fetch_tool_result' && b.content && b.content.type === 'web_fetch_result') {
-      if (b.content.url) readUrls.add(b.content.url);
-      const src = b.content.content && b.content.content.source;
-      if (src && typeof src.data === 'string' && src.type !== 'base64') corpus += ' ' + src.data;
-    }
-    if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
-      b.content.forEach(function(x){ if (x && x.url) readUrls.add(x.url); });
-    }
-    if (b.type === 'text' && Array.isArray(b.citations)) {
-      b.citations.forEach(function(c){ if (c && c.cited_text) corpus += ' ' + c.cited_text; });
-    }
-  });
-  const corpusDigits = corpus.replace(/\D/g, '');
+  var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  if (!saved || !saved.context) throw new Error('no_context');
+  var city = saved.city || '';
+  var context = saved.context;
 
-  /* The answer is split across several text blocks wherever the model
-     cites a source. Join them all, then take the outermost JSON object. */
-  const text = (data.content || []).filter(function(b){ return b.type === 'text'; })
-    .map(function(b){ return b.text; }).join('');
-  let parsed = { businesses: [] };
+  /* Language */
+  var lang = 'Hinglish';
   try {
-    const a = text.indexOf('{"businesses"'), z = text.lastIndexOf('}');
-    if (a !== -1 && z > a) parsed = JSON.parse(text.slice(a, z + 1));
+    var _gsUser = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+    if (_gsUser && _gsUser.messageLanguage) lang = _gsUser.messageLanguage;
   } catch (e) {}
 
-  /* Last 10 digits must appear in what was read. Indian numbers are written
-     with +91, 0, spaces and dashes in every combination; the last ten
-     digits are the stable part. */
-  function verifiedPhone(p) {
-    const d = String(p || '').replace(/\D/g, '');
-    if (d.length < 8) return '';
-    const tail = d.slice(-10);
-    return corpusDigits.indexOf(tail) !== -1 ? String(p).trim() : '';
+  /* Run 1 Places search for this group */
+  var queries = group.queries || [];
+  if (queries.length === 0) throw new Error('no_queries');
+  var q = queries[Math.floor(Math.random() * queries.length)];
+  if (city && q.toLowerCase().indexOf(city.toLowerCase()) === -1) q += ' ' + city;
+
+  /* Pick an area for the location bias */
+  var areas = profileJson.areas || [];
+  var areaCoords = profileJson.areaCoords || {};
+  var biasLat = 0, biasLng = 0, biasRadius = (profileJson.radiusKm || 3) * 1000;
+  if (areas.length > 0) {
+    var areaName = areas[Math.floor(Math.random() * areas.length)];
+    var coord = areaCoords[areaName];
+    if (coord) { biasLat = coord.lat; biasLng = coord.lng; }
   }
 
-  const seen = new Set();
-  const out = [];
-  (Array.isArray(parsed.businesses) ? parsed.businesses : []).forEach(function(b) {
-    if (!b || !b.name) return;
-    if (b.sourceUrl && !readUrls.has(b.sourceUrl)) return;
-    const key = String(b.name).toLowerCase().replace(/\s+/g, ' ').trim();
-    if (seen.has(key)) return;
-    seen.add(key);
-    const website = /^https?:\/\//i.test(b.website || '') ? b.website : '';
-    out.push({
-      name: String(b.name).slice(0, 120),
-      address: String(b.address || '').slice(0, 200),
-      phone: verifiedPhone(b.phone),
-      website: website
+  var raw = [];
+  try {
+    raw = await placesTextSearch(env, q, biasLat, biasLng, biasRadius, 10);
+  } catch (e) {}
+  if (raw.length === 0) return { leads: [], count: 0 };
+
+  /* Filter and score */
+  var ownCategory = profileJson.ownPrimaryType || '';
+  var filtered = await filterPlacesCandidates(env, firmCode, raw, profileJson, ownCategory);
+
+  /* Score with Haiku */
+  var scored = await scoreLeadFit(env, filtered, group, context, cost);
+  scored.sort(function(a, b) { return b.fitScore - a.fitScore; });
+  var top = scored.filter(function(s) { return s.fitScore >= 4; }).slice(0, 5);
+  if (top.length === 0) top = scored.slice(0, 3);
+
+  /* Get details (phone, etc.) */
+  for (var i = 0; i < top.length; i++) {
+    if (top[i].placeId) {
+      try {
+        var det = await placeDetails(env, top[i].placeId);
+        if (det) {
+          top[i].phone = det.phone || '';
+          top[i].website = det.website || '';
+          top[i].address = det.address || top[i].address || '';
+        }
+      } catch (e) {}
+    }
+    top[i]._groupName = group.name;
+    top[i]._groupOffer = group.offer || '';
+    top[i]._groupChannel = group.channel || 'message';
+  }
+
+  /* Generate messages */
+  top = await generateLeadMessages(env, top, profileJson, context, lang, cost, city);
+
+  /* Save to D1 + add to today's KV cache */
+  var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  var todayKey = 'scout:leads:' + firmCode + ':' + day;
+  var existing = [];
+  try {
+    var cached = await env.G7_KV.get(todayKey, 'json');
+    if (cached && Array.isArray(cached.leads)) existing = cached.leads;
+    else if (Array.isArray(cached)) existing = cached;
+  } catch (e) {}
+
+  var newLeads = [];
+  for (var j = 0; j < top.length; j++) {
+    var lead = top[j];
+    var id = 'gs_' + Date.now().toString(36) + '_' + j;
+    var custData = {
+      group: group.name, offer: group.offer || '', fitReason: lead.fitReason || '',
+      fitScore: lead.fitScore || 0, address: lead.address || '', website: lead.website || '',
+      placeId: lead.placeId || '', channel: lead._groupChannel, lead_day: day,
+      messages: lead.messages || {}
+    };
+    if (env.DB) {
+      try {
+        await env.DB.prepare(
+          "INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, data, place_id, created_at, updated_at, synced_at) " +
+          "VALUES (?, ?, ?, ?, ?, 'found', 'places', ?, ?, datetime('now'), datetime('now'), datetime('now')) " +
+          "ON CONFLICT (firm_code, id) DO NOTHING"
+        ).bind(firmCode, id, lead.name || '', lead.phone || '', group.name, JSON.stringify(custData), lead.placeId || '').run();
+      } catch (e) {}
+    }
+    newLeads.push({
+      id: id, name: lead.name || '', phone: lead.phone || '', group: group.name,
+      fitReason: lead.fitReason || '', fitScore: lead.fitScore || 0,
+      address: lead.address || '', website: lead.website || '',
+      channels: lead.channels || ['whatsapp'], messages: lead.messages || {}
     });
-  });
+  }
 
-  /* Verified phones first — those are the leads he can actually message. */
-  out.sort(function(a, b){ return (b.phone ? 1 : 0) - (a.phone ? 1 : 0); });
+  /* Merge into today's KV cache */
+  var merged = existing.concat(newLeads);
+  await kvPut(env, todayKey, JSON.stringify({ leads: merged, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
 
-  /* One log line per search — visible in Cloudflare Workers Logs. Tells us
-     where leads are lost: not found, phone not proposed, or phone not
-     verifiable. Also logs token usage and tool call counts for cost tracking. */
-  try {
-    const proposed = Array.isArray(parsed.businesses) ? parsed.businesses : [];
-    var _u = data.usage || {};
-    var _wsr = (_u.server_tool_use && _u.server_tool_use.web_search_requests) || 0;
-    var _wfr = (data.content || []).filter(function(b){ return b.type === 'web_fetch_tool_result'; }).length;
-    console.log(JSON.stringify({
-      finder: query,
-      input_tokens: _u.input_tokens || 0,
-      output_tokens: _u.output_tokens || 0,
-      web_searches: _wsr,
-      web_fetches: _wfr,
-      proposed: proposed.length,
-      proposedWithPhone: proposed.filter(function(b){ return b && b.phone; }).length,
-      kept: out.length,
-      keptWithPhone: out.filter(function(b){ return b.phone; }).length,
-      fetchedPages: (data.content || []).filter(function(b){ return b.type === 'web_fetch_tool_result' && b.content && b.content.type === 'web_fetch_result'; }).length,
-      fetchErrors: (data.content || []).filter(function(b){ return b.type === 'web_fetch_tool_result' && b.content && b.content.type === 'web_fetch_tool_error'; }).length,
-      citations: (data.content || []).reduce(function(n, b){ return n + (Array.isArray(b.citations) ? b.citations.length : 0); }, 0),
-      corpusChars: corpus.length
-    }));
-  } catch (e) {}
-
-  return out.slice(0, want);
+  return { leads: newLeads, count: newLeads.length };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2183,10 +2169,7 @@ async function findLocalCreators(env, firmCode, profile, city, lang, cost) {
 async function runCreatorsForFirm(env, firmCode, day, cost) {
   var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
   if (!profileJson) return { status: 'no_profile' };
-  if (!profileJson.confirmedAt) {
-    var createdMs = new Date(profileJson.createdAt || 0).getTime();
-    if (Date.now() - createdMs < 24 * 3600000) return { status: 'awaiting_confirmation' };
-  }
+  /* Confirm gate removed — creators start as soon as a profile exists. */
 
   /* Every-other-day check */
   var creatorLastKey = 'scout:creators:last:' + firmCode;
@@ -3047,24 +3030,70 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   profile.areas = (Array.isArray(profile.areas) ? profile.areas : []).slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
   profile.radiusKm = typeof profile.radiusKm === 'number' ? Math.min(profile.radiusKm, 15) : 3;
   profile.exclude = (Array.isArray(profile.exclude) ? profile.exclude : []).slice(0, 20).map(function(e) { return String(e).slice(0, 60).toLowerCase(); });
-  profile.confirmedAt = null;
-  profile.createdAt = new Date().toISOString();
+  /* Preserve confirmedAt from existing profile if re-generating */
+  var _existingProf = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  profile.confirmedAt = (_existingProf && _existingProf.confirmedAt) || new Date().toISOString();
+  profile.createdAt = (_existingProf && _existingProf.createdAt) || new Date().toISOString();
 
-  /* Geocode each area once and store coordinates in the profile.
-     Uses one Text Search per area — only happens at profile creation time,
-     not on every daily run. */
+  /* Geocode and validate each area — must be a real locality within radiusKm × 2.
+     Uses one Text Search per area — only at profile creation time. */
   profile.areaCoords = {};
+  var validAreas = [];
+  var bizLat = 0, bizLng = 0;
+  /* Get business location from existing profile or try geocoding the city */
+  if (_existingProf && _existingProf.ownLocation) {
+    bizLat = _existingProf.ownLocation.lat || 0;
+    bizLng = _existingProf.ownLocation.lng || 0;
+  } else if (city) {
+    try {
+      var _cityGeo = await placesTextSearch(env, city, 0, 0, 50000, 1);
+      if (_cityGeo.length > 0) { bizLat = _cityGeo[0].lat; bizLng = _cityGeo[0].lng; }
+    } catch (e) {}
+  }
+  var maxDistKm = (profile.radiusKm || 3) * 2;
+
   if (env.GOOGLE_PLACES_KEY && profile.areas.length > 0) {
     for (var ai = 0; ai < profile.areas.length; ai++) {
       var areaName = profile.areas[ai];
       try {
         var geoR = await placesTextSearch(env, areaName + (city ? ', ' + city : ''), 0, 0, 50000, 1);
         if (geoR.length > 0) {
-          profile.areaCoords[areaName] = { lat: geoR[0].lat, lng: geoR[0].lng };
+          var aLat = geoR[0].lat, aLng = geoR[0].lng;
+          /* Check distance from business */
+          if (bizLat && bizLng) {
+            var dKm = haversineKm(bizLat, bizLng, aLat, aLng);
+            if (dKm > maxDistKm) {
+              console.log(JSON.stringify({ areaDropped: areaName, reason: 'too_far', distKm: Math.round(dKm), maxKm: maxDistKm, firm: firmCode }));
+              continue;
+            }
+          }
+          profile.areaCoords[areaName] = { lat: aLat, lng: aLng };
+          validAreas.push(areaName);
+        } else {
+          console.log(JSON.stringify({ areaDropped: areaName, reason: 'not_found', firm: firmCode }));
         }
-      } catch (e) { /* geocode failed — will retry at runtime */ }
+      } catch (e) { /* geocode failed — drop */ }
     }
+  } else {
+    validAreas = profile.areas; /* No Places key — keep all */
   }
+
+  /* Ensure 3-6 valid areas; if too few, add nearest real localities */
+  if (validAreas.length < 3 && bizLat && bizLng && env.GOOGLE_PLACES_KEY) {
+    try {
+      var _nearR = await placesTextSearch(env, 'neighbourhood ' + (city || ''), bizLat, bizLng, maxDistKm * 1000, 10);
+      var existingNames = new Set(validAreas.map(function(a) { return a.toLowerCase(); }));
+      for (var ni = 0; ni < _nearR.length && validAreas.length < 3; ni++) {
+        var nName = _nearR[ni].name || '';
+        if (nName && !existingNames.has(nName.toLowerCase())) {
+          validAreas.push(nName);
+          profile.areaCoords[nName] = { lat: _nearR[ni].lat, lng: _nearR[ni].lng };
+          existingNames.add(nName.toLowerCase());
+        }
+      }
+    } catch (e) {}
+  }
+  profile.areas = validAreas.slice(0, 6);
 
   return profile;
 }
@@ -3443,11 +3472,7 @@ async function purgeExpiredPool(env, firmCode) {
 async function runLeadsForFirm(env, firmCode, day, cost) {
   var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
   if (!profileJson) return { status: 'no_profile' };
-  if (!profileJson.confirmedAt) {
-    /* Auto-start 24h after creation */
-    var createdMs = new Date(profileJson.createdAt || 0).getTime();
-    if (Date.now() - createdMs < 24 * 3600000) return { status: 'awaiting_confirmation' };
-  }
+  /* Confirm gate removed — leads start as soon as a profile exists. */
 
   /* Check if leads already generated today */
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
@@ -6034,6 +6059,14 @@ export default {
                 await kvPut(env, 'scout:leadprofile:' + session.firmCode, JSON.stringify(_lpProf), { expirationTtl: 30 * 86400 });
                 await kvPut(env, _lpSrcKey, _lpNewHash, { expirationTtl: 30 * 86400 });
                 await flushCost(env, day, session.firmCode, _lpC);
+                /* Auto-start: run lead generation immediately after profile created */
+                try {
+                  var _lpRunC = newCostAccum();
+                  await runLeadsForFirm(env, session.firmCode, day, _lpRunC);
+                  await flushCost(env, day, session.firmCode, _lpRunC);
+                } catch (e2) {
+                  try { await recordError(env, { source: 'worker', route: 'leads/auto-run', firmCode: session.firmCode, kind: 'auto_run', message: String(e2.message || e2) }); } catch(e3) {}
+                }
               }
             } catch (e) {
               try { await recordError(env, { source: 'worker', route: 'leads/auto-profile', firmCode: session.firmCode, kind: 'auto_gen', message: String(e.message || e) }); } catch(e2) {}
@@ -6519,6 +6552,47 @@ export default {
       }
     }
 
+    // ── POST /scout/leads/validate-area — check if an area is real and close ──
+    if (request.method === 'POST' && path === '/scout/leads/validate-area') {
+      var _vaSess = await validateSession(request, env);
+      if (!_vaSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _vaBody;
+      try { _vaBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _vaArea = String(_vaBody.area || '').trim();
+      if (!_vaArea) return jsonResponse({ error: 'area is required' }, 400);
+
+      var _vaProfile = await env.G7_KV.get('scout:leadprofile:' + _vaSess.firmCode, 'json');
+      var _vaSaved = await env.G7_KV.get('market:ctx:' + _vaSess.firmCode, 'json');
+      var _vaCity = (_vaSaved && _vaSaved.city) || '';
+      var _vaLat = 0, _vaLng = 0;
+      if (_vaProfile && _vaProfile.ownLocation) {
+        _vaLat = _vaProfile.ownLocation.lat || 0;
+        _vaLng = _vaProfile.ownLocation.lng || 0;
+      }
+      var _vaMaxKm = ((_vaProfile && _vaProfile.radiusKm) || 3) * 2;
+
+      try {
+        var _vaGeo = await placesTextSearch(env, _vaArea + (_vaCity ? ', ' + _vaCity : ''), 0, 0, 50000, 1);
+        if (_vaGeo.length === 0) return jsonResponse({ valid: false, reason: 'not_found' });
+        var _vaCoord = { lat: _vaGeo[0].lat, lng: _vaGeo[0].lng };
+        if (_vaLat && _vaLng) {
+          var _vaDist = haversineKm(_vaLat, _vaLng, _vaCoord.lat, _vaCoord.lng);
+          if (_vaDist > _vaMaxKm) return jsonResponse({ valid: false, reason: 'too_far', distKm: Math.round(_vaDist), maxKm: _vaMaxKm });
+        }
+        /* Get 3 nearby suggestions */
+        var _vaSugg = [];
+        try {
+          var _vaR = await placesTextSearch(env, 'neighbourhood ' + (_vaCity || ''), _vaCoord.lat, _vaCoord.lng, _vaMaxKm * 1000, 5);
+          var _vaExisting = new Set((_vaProfile && _vaProfile.areas || []).map(function(a) { return a.toLowerCase(); }));
+          _vaExisting.add(_vaArea.toLowerCase());
+          _vaR.forEach(function(r) { if (r.name && !_vaExisting.has(r.name.toLowerCase()) && _vaSugg.length < 3) _vaSugg.push(r.name); });
+        } catch (e) {}
+        return jsonResponse({ valid: true, coord: _vaCoord, suggestions: _vaSugg });
+      } catch (e) {
+        return jsonResponse({ valid: false, reason: 'error' });
+      }
+    }
+
     // ── GET /scout/leads/today — today's leads for this firm ──
     if (request.method === 'GET' && path === '/scout/leads/today') {
       var _ltSess = await validateSession(request, env);
@@ -6595,8 +6669,36 @@ export default {
         return jsonResponse({ day: _ltDay, leads: _ltCreatorsOnly, reminders: [], shortfall: null, generatedAt: null });
       }
 
-      /* No leads yet today — return empty */
-      return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null });
+      /* No leads yet today — check if profile exists and trigger generation once */
+      var _ltProfile = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
+      if (_ltProfile) {
+        /* Profile exists but no leads — trigger generation in background */
+        var _ltGenKey = 'scout:leads:generating:' + _ltSess.firmCode + ':' + _ltDay;
+        var _ltGenerating = await env.G7_KV.get(_ltGenKey);
+        if (!_ltGenerating) {
+          await kvPut(env, _ltGenKey, '1', { expirationTtl: 600 }); /* 10 min lock */
+          ctx.waitUntil((async function() {
+            try {
+              var _ltBC = await budgetCheck(env, _ltDay, _ltSess.firmCode);
+              if (_ltBC.ok) {
+                var _ltCost = newCostAccum();
+                await runLeadsForFirm(env, _ltSess.firmCode, _ltDay, _ltCost);
+                await flushCost(env, _ltDay, _ltSess.firmCode, _ltCost);
+              }
+            } catch (e) {
+              try { await recordError(env, { source: 'worker', route: 'leads/on-demand', firmCode: _ltSess.firmCode, kind: 'on_demand', message: String(e.message || e) }); } catch(e2) {}
+            }
+          })());
+          return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, generating: true,
+            profileSummary: { groups: (_ltProfile.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3), areas: (_ltProfile.areas || []).slice(0,3) }
+          });
+        }
+        /* Already generating — tell frontend to poll */
+        return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, generating: true,
+          profileSummary: { groups: (_ltProfile.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3), areas: (_ltProfile.areas || []).slice(0,3) }
+        });
+      }
+      return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, noProfile: true });
     }
 
     // ── POST /scout/leads/reply-draft — Haiku drafts a next-step message ──
@@ -7301,104 +7403,56 @@ export default {
     //   { cacheHit, results: [{name,address,phone,website}],
     //     quota: { used, limit } }
     // =========================================================================
-    if (request.method === 'GET' && path === '/places/search') {
+    // =========================================================================
+    // POST /scout/leads/group-search — on-demand group search via Places engine
+    // Replaces the old GET /places/search (Claude web-search) route.
+    // Body: { group: "group name" }
+    // Limit: 1 extra group search per firm per day.
+    // =========================================================================
+    if (request.method === 'POST' && path === '/scout/leads/group-search') {
+      var _gsSess = await validateSession(request, env);
+      if (!_gsSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _gsBody;
+      try { _gsBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _gsGroup = String(_gsBody.group || '').trim();
+      if (!_gsGroup) return jsonResponse({ error: 'group is required' }, 400);
 
-      // 1. Auth
-      const session = await validateSession(request, env);
-      if (!session) {
-        return jsonResponse({ error: 'Unauthorized' }, 401);
+      /* Limit: 1 group search per firm per day */
+      var _gsDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _gsCountKey = 'scout:limit:' + _gsSess.firmCode + ':groupsearch:' + _gsDay;
+      var _gsCount = parseInt(await env.G7_KV.get(_gsCountKey) || '0', 10);
+      if (_gsCount >= 1) {
+        var _gsUser = await env.G7_KV.get('auth:users:' + _gsSess.firmCode, 'json') || {};
+        return limitResponse('groupsearch', _gsUser.plan || 'free', _gsCount, 1, 'day',
+          'Next group search available tomorrow.');
       }
 
-      // 2. Validate query param
-      const rawQ = url.searchParams.get('q') || '';
-      const q = rawQ.trim();
-      if (!q) {
-        return jsonResponse({ error: 'q parameter is required' }, 400);
-      }
-      if (q.length > 200) {
-        return jsonResponse({ error: 'q must be 200 characters or fewer' }, 400);
+      /* Budget check */
+      var _gsBC = await budgetCheck(env, _gsDay, _gsSess.firmCode);
+      if (!_gsBC.ok) {
+        ctx.waitUntil(sendBudgetEmail(env, _gsDay, _gsSess.firmCode, _gsBC.firmSpent, _gsBC.cap));
+        return jsonResponse({ error: 'Daily budget reached. Try again tomorrow.' }, 402);
       }
 
-      // 3. Read plan from user record
-      const userRecord = await env.G7_KV.get('auth:users:' + session.firmCode, 'json');
-      const plan = userRecord && userRecord.plan ? userRecord.plan : 'free';
-      const todayKey = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10); // IST day
-
-      // Determine daily limit and result cap based on plan
-      const isPaid    = plan === 'paid';
-      const cap       = isPaid ? 50 : 2;
-      const hardLimit = isPaid ? 5 : 2;
-
-      // Daily counter key
-      const placesCounterKey = 'scout:limit:' + session.firmCode + ':places:' + todayKey;
-
-      // 4. Read current count
-      const cntRaw = await env.G7_KV.get(placesCounterKey);
-      const placesCount = cntRaw ? parseInt(cntRaw, 10) : 0;
-
-      // 5. Cache lookup — normalise query to lowercase for stable cache key
-      const normalised = q.toLowerCase();
-      const encoder = new TextEncoder();
-      const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(normalised));
-      const hashHex = Array.from(new Uint8Array(hashBuf))
-        .map(b => b.toString(16).padStart(2, '0')).join('');
-      const cacheKey = 'places:cache:' + hashHex;
-
-      const forceRefresh = url.searchParams.get('refresh') === '1';
-      if (!forceRefresh) {
-        const cached = await env.G7_KV.get(cacheKey, 'json');
-        if (cached) {
-          // Cache hit — handle both old format (plain array) and new format ({_cachedAt, results})
-          var _list = Array.isArray(cached) ? cached : (cached.results || []);
-          var _resp = {
-            cacheHit: true,
-            results:  _list.slice(0, cap),
-            quota:    { used: placesCount, limit: hardLimit, period: 'day' }
-          };
-          if (cached._cachedAt) _resp.cachedAt = cached._cachedAt;
-          return jsonResponse(_resp);
-        }
-      }
-
-      // Cache miss — enforce daily rate limit
-      if (placesCount >= hardLimit) {
-        return limitResponse('places', plan, placesCount, hardLimit, 'day',
-          "You\u2019ve used today\u2019s customer searches \u2014 back tomorrow.");
-      }
-
-      /* Firm money backstop (places already has its own daily limit gate above). */
-      var _istPlaces = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-      var _bcP = await budgetCheck(env, _istPlaces, session.firmCode);
-      if (!_bcP.ok) {
-        ctx.waitUntil(sendBudgetEmail(env, _istPlaces, session.firmCode, _bcP.firmSpent, _bcP.cap));
-        return limitResponse('places', plan, placesCount, hardLimit, 'day',
-          "You\u2019ve reached today\u2019s limit \u2014 back tomorrow.", 'budget');
-      }
-
-      // 6. Call Claude web search to find businesses
-      var cost = newCostAccum();
-      let places;
+      var _gsCost = newCostAccum();
       try {
-        places = await findBusinesses(env, q, cap, cost);
+        var _gsResult = await runGroupSearch(env, _gsSess.firmCode, _gsGroup, _gsCost);
+        await kvPut(env, _gsCountKey, String(_gsCount + 1), { expirationTtl: 86400 });
+        ctx.waitUntil(flushCost(env, _gsDay, _gsSess.firmCode, _gsCost));
+        return jsonResponse({ ok: true, leads: _gsResult.leads, count: _gsResult.count });
       } catch (e) {
-        ctx.waitUntil(flushCost(env, _istPlaces, session.firmCode, cost));
-        await recordError(env, { source: 'worker', route: 'places', firmCode: session.firmCode, kind: 'search_failed', message: String(e && e.message || e) });
-        return jsonResponse({ error: 'Business search failed' }, 502);
+        ctx.waitUntil(flushCost(env, _gsDay, _gsSess.firmCode, _gsCost));
+        var _gsMsg = String(e.message || e);
+        if (_gsMsg === 'no_profile') return jsonResponse({ error: 'Run a business analysis first.' }, 400);
+        if (_gsMsg === 'group_not_found') return jsonResponse({ error: 'Group not found or disabled.' }, 404);
+        await recordError(env, { source: 'worker', route: 'leads/group-search', firmCode: _gsSess.firmCode, kind: 'search_failed', message: _gsMsg.slice(0, 200) });
+        return jsonResponse({ error: 'Search failed. Please try again.' }, 502);
       }
+    }
 
-      // 7. Store in cache — 14-day TTL with timestamp
-      var _cacheObj = { _cachedAt: new Date().toISOString().slice(0, 10), results: places };
-      kvPut(env, cacheKey, JSON.stringify(_cacheObj), { expirationTtl: 14 * 86400 });
-      ctx.waitUntil(flushCost(env, _istPlaces, session.firmCode, cost));
-
-      // 8. Increment daily counter (24h TTL so it auto-resets)
-      await kvPut(env, placesCounterKey, String(placesCount + 1), { expirationTtl: 86400 });
-
-      return jsonResponse({
-        cacheHit: false,
-        results:  places.slice(0, cap),
-        quota:    { used: placesCount + 1, limit: hardLimit, period: 'day' }
-      });
+    /* GET /places/search — REMOVED. Returns 410 Gone so old frontends know to update. */
+    if (request.method === 'GET' && path === '/places/search') {
+      return jsonResponse({ error: 'This endpoint has been replaced by POST /scout/leads/group-search.' }, 410);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -7472,19 +7526,32 @@ export default {
       var _ciUsed = _plan === 'paid' ? parseInt(await env.G7_KV.get(_ciKey) || '0', 10) : 0;
       var _ciLim = _plan === 'paid' ? 8 : 0;
 
-      /* Places — daily */
-      var _plKey = 'scout:limit:' + session.firmCode + ':places:' + _istDay;
-      var _plUsed = parseInt(await env.G7_KV.get(_plKey) || '0', 10);
-      var _plLim = _plan === 'paid' ? 5 : 2;
+      /* Leads today — count from D1 customers found today */
+      var _leadsToday = 0;
+      if (env.DB) {
+        try {
+          var _ldRow = await env.DB.prepare(
+            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND created_at >= date(?, '-0 days') AND deleted_at IS NULL"
+          ).bind(session.firmCode, _istDay).first();
+          _leadsToday = _ldRow ? _ldRow.cnt : 0;
+        } catch (e) {}
+      }
+      var _leadsLim = 5;
+
+      /* Group search — daily */
+      var _gsKey = 'scout:limit:' + session.firmCode + ':groupsearch:' + _istDay;
+      var _gsUsed = parseInt(await env.G7_KV.get(_gsKey) || '0', 10);
+      var _gsLim = 1;
 
       return jsonResponse({
         plan: _plan,
         planSince: user.planSince || user.createdAt || null,
         features: {
-          ask:      { used: _askUsed, limit: _askLim,  paidLimit: 10, period: 'day',      resetsAt: _istMidnight() },
-          analysis: { used: _anUsed,  limit: _anLim,   paidLimit: 3,  period: _plan === 'paid' ? 'month' : 'lifetime', resetsAt: _plan === 'paid' ? _istMonthStart() : null },
-          checkin:  { used: _ciUsed,  limit: _ciLim,   paidLimit: 8,  period: 'month',    resetsAt: _istMonthStart() },
-          places:   { used: _plUsed,  limit: _plLim,   paidLimit: 5,  period: 'day',      resetsAt: _istMidnight() }
+          ask:         { used: _askUsed,    limit: _askLim,   paidLimit: 10, period: 'day',      resetsAt: _istMidnight() },
+          analysis:    { used: _anUsed,     limit: _anLim,    paidLimit: 3,  period: _plan === 'paid' ? 'month' : 'lifetime', resetsAt: _plan === 'paid' ? _istMonthStart() : null },
+          checkin:     { used: _ciUsed,     limit: _ciLim,    paidLimit: 8,  period: 'month',    resetsAt: _istMonthStart() },
+          leads:       { used: _leadsToday, limit: _leadsLim, paidLimit: 5,  period: 'day',      resetsAt: _istMidnight() },
+          groupsearch: { used: _gsUsed,     limit: _gsLim,    paidLimit: 1,  period: 'day',      resetsAt: _istMidnight() }
         }
       });
     }

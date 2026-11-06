@@ -9,8 +9,8 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=49"></script>
-<script src="../assets/pipeline.js?v=27"></script>
+<script src="../assets/scout.js?v=51"></script>
+<script src="../assets/pipeline.js?v=29"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -648,12 +648,9 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
   <div class="nav-right">
     <a href="today.html" class="nav-link">Today</a>
+    <a href="pipeline.html" class="nav-link">Customers</a>
     <a href="index.html" class="nav-link active">Dashboard</a>
     <a href="news.html" class="nav-link">News</a>
-    <a href="onboard.html" class="nav-link">New Analysis</a>
-    <a href="history.html" class="nav-link">History</a>
-    <a href="checkin.html" class="nav-link">Check-In</a>
-    <a href="pipeline.html" class="nav-link">Customers</a>
     <a href="settings.html" class="nav-link">Settings</a>
     <span class="nav-firm-indicator" id="navFirmName"></span>
     <a id="navPlanChip" href="settings.html#plan" style="display:none;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#8A8880;text-decoration:none;margin-right:8px;padding:3px 10px;border:1px solid rgba(255,255,255,0.08);border-radius:2px">Free plan <span style="color:#E0922F">&middot; Upgrade</span></a>
@@ -693,11 +690,23 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 <div class="state" id="stateDashboard">
   <div class="dashboard-wrap">
 
-    <!-- GREETING -->
-    <div class="greeting">
-      <div class="greeting-hello" id="greetingHello">Good morning.</div>
-      <div class="greeting-week" id="greetingWeek">Week 1 of 12</div>
+    <!-- GREETING + MORE MENU -->
+    <div class="greeting" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div>
+        <div class="greeting-hello" id="greetingHello">Good morning.</div>
+        <div class="greeting-week" id="greetingWeek">Week 1 of 12</div>
+      </div>
+      <div style="position:relative">
+        <button id="moreMenuBtn" onclick="document.getElementById('moreMenuDrop').classList.toggle('open')" style="font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);background:none;border:1px solid var(--border2);padding:8px 16px;cursor:pointer;font-family:'Tenor Sans',sans-serif;transition:all .2s">More ▾</button>
+        <div id="moreMenuDrop" style="display:none;position:absolute;right:0;top:calc(100% + 6px);background:var(--black2);border:1px solid var(--border);min-width:180px;z-index:50">
+          <a href="onboard.html" style="display:block;padding:12px 18px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey1);text-decoration:none;border-bottom:1px solid var(--border2);transition:color .2s" onmouseover="this.style.color='var(--amber)'" onmouseout="this.style.color='var(--grey1)'">New Analysis</a>
+          <a href="history.html" style="display:block;padding:12px 18px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey1);text-decoration:none;border-bottom:1px solid var(--border2);transition:color .2s" onmouseover="this.style.color='var(--amber)'" onmouseout="this.style.color='var(--grey1)'">History</a>
+          <a href="checkin.html" style="display:block;padding:12px 18px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .2s" onmouseover="this.style.color='var(--amber)'" onmouseout="this.style.color='var(--grey1)'">Check-In</a>
+        </div>
+      </div>
     </div>
+    <style>#moreMenuDrop.open{display:block}</style>
+    <script>document.addEventListener('click',function(e){var m=document.getElementById('moreMenuDrop');if(m&&m.classList.contains('open')&&!e.target.closest('#moreMenuBtn')&&!e.target.closest('#moreMenuDrop'))m.classList.remove('open')});</script>
 
     <div class="cc-wrap" id="ccWrap">
 
@@ -765,12 +774,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
           <div id="ccMove"><div style="font-size:12px;color:var(--grey2);line-height:1.5">Scout is preparing today's move&hellip;</div></div>
         </div>
         <!-- Leads summary card -->
-        <div class="cc-panel" id="ccLeadsPanel" style="display:none">
+        <div class="cc-panel" id="ccLeadsPanel">
           <div class="cc-label-row">
             <div class="cc-label">Customer Finder</div>
             <span class="cc-note" id="ccLeadsNote"></span>
           </div>
-          <div id="ccLeads"></div>
+          <div id="ccLeads"><div style="font-size:12px;color:var(--grey2);line-height:1.5">Loading&hellip;</div></div>
         </div>
         <div class="cc-panel hot">
           <div class="cc-label-row">
@@ -846,22 +855,50 @@ window.addEventListener('DOMContentLoaded', async function() {
   scoutMarketLoad(); /* preload for voice/briefing — not rendered into #ccMarket */
   scoutNewsLoad().then(scoutNewsRender);
 
-  /* Leads summary card — non-blocking */
+  /* Leads summary card — non-blocking, always shows a state */
   (async function() {
+    var panel = document.getElementById('ccLeadsPanel');
+    var note = document.getElementById('ccLeadsNote');
+    var body = document.getElementById('ccLeads');
+    if (!panel) return;
     try {
       var _leadsR = await fetch(SCOUT_WORKER + '/scout/leads/today', {
         headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
       });
-      if (!_leadsR.ok) return;
+      if (!_leadsR.ok) {
+        body.innerHTML = '<div style="font-size:12px;color:var(--grey2);line-height:1.6">Could not load leads.</div>';
+        return;
+      }
       var _leadsD = await _leadsR.json();
+
+      /* State: no profile yet */
+      if (_leadsD.noProfile) {
+        note.textContent = '';
+        body.innerHTML = '<div style="font-size:12px;color:var(--grey2);line-height:1.6">Run your first analysis and Scout will find customers for you.</div>' +
+          '<a href="onboard.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Start analysis \u2192</a>';
+        return;
+      }
+
+      /* State: generating in background */
+      if (_leadsD.generating) {
+        note.textContent = '';
+        body.innerHTML = '<div style="font-size:12px;color:var(--grey1);line-height:1.6">Finding your first leads\u2026 this takes about a minute.</div>' +
+          '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">View progress \u2192</a>';
+        return;
+      }
+
       var _ll = _leadsD.leads || [];
       var _lr = _leadsD.reminders || [];
-      if (_ll.length === 0 && _lr.length === 0) return;
-      var panel = document.getElementById('ccLeadsPanel');
-      var note = document.getElementById('ccLeadsNote');
-      var body = document.getElementById('ccLeads');
-      if (!panel) return;
-      panel.style.display = '';
+
+      /* State: no leads today */
+      if (_ll.length === 0 && _lr.length === 0) {
+        note.textContent = '';
+        body.innerHTML = '<div style="font-size:12px;color:var(--grey2);line-height:1.6">No new leads today. Check back tomorrow or search for a specific group.</div>' +
+          '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Go to Today \u2192</a>';
+        return;
+      }
+
+      /* State: normal — leads exist */
       note.textContent = _ll.length + ' new' + (_lr.length > 0 ? ' \u00b7 ' + _lr.length + ' follow-up' : '');
       var h = '';
       _ll.slice(0, 3).forEach(function(l) {
@@ -876,7 +913,9 @@ window.addEventListener('DOMContentLoaded', async function() {
       if (_ll.length > 3) h += '<div style="font-size:11px;color:var(--grey2);margin-top:4px">+' + (_ll.length - 3) + ' more</div>';
       h += '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">View all leads \u2192</a>';
       body.innerHTML = h;
-    } catch (e) {}
+    } catch (e) {
+      body.innerHTML = '<div style="font-size:12px;color:var(--grey2);line-height:1.6">Could not load leads.</div>';
+    }
   })();
 
   /* Plan chip — non-blocking */
