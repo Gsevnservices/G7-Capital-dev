@@ -1943,18 +1943,6 @@ async function runMorningForFirm(env, firmCode, day) {
   return { status: 'actions:' + a + ' news:' + n + ' move:' + (move ? 'ok' : 'none'), cost: Object.assign({}, cost), costUsd: costUsd };
 }
 
-/* ═══════════════════════════════════════════
-   LEAD FINDER — REMOVED. Now uses Google Places exclusively via
-   runLeadsForFirm / runGroupSearch. The old Claude web-search
-   finder (findBusinesses) has been deleted.
-═══════════════════════════════════════════ */
-
-/* [DELETED] findBusinesses — use runGroupSearch() for on-demand
-   single-group searches via Google Places. */
-async function findBusinesses(env, query, cap, cost) {
-  throw new Error('findBusinesses removed — use runGroupSearch');
-}
-
 /* ── On-demand group search — runs Places pipeline for one group, adds to Today ── */
 async function runGroupSearch(env, firmCode, groupName, cost) {
   var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
@@ -2992,7 +2980,7 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-5-5',
       max_tokens: 2000,
       thinking: { type: 'disabled' },
       messages: [{ role: 'user', content: prompt }]
@@ -3000,7 +2988,7 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   }, 'leads/profile');
   if (!r.ok) throw new Error('Haiku profile ' + r.status);
   var data = await r.json();
-  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+  recordCost(cost, 'claude-haiku-5-5', data);
 
   var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
   var profile;
@@ -3221,7 +3209,7 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-5-5',
       max_tokens: 2000,
       thinking: { type: 'disabled' },
       messages: [{ role: 'user', content: prompt }]
@@ -3229,7 +3217,7 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
   }, 'leads/fit');
   if (!r.ok) throw new Error('Haiku fit ' + r.status);
   var data = await r.json();
-  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+  recordCost(cost, 'claude-haiku-5-5', data);
 
   var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
   var scores = [];
@@ -3364,7 +3352,7 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-5-5',
       max_tokens: 3000,
       thinking: { type: 'disabled' },
       messages: [{ role: 'user', content: prompt }]
@@ -3372,7 +3360,7 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
   }, 'leads/messages');
   if (!r.ok) throw new Error('Haiku messages ' + r.status);
   var data = await r.json();
-  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+  recordCost(cost, 'claude-haiku-5-5', data);
 
   var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
   var msgs = [];
@@ -3478,6 +3466,16 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
   var existing = await env.G7_KV.get(todayKey);
   if (existing) return { status: 'already_generated' };
+
+  /* True daily cap: count Places-sourced leads created today in D1 */
+  if (env.DB) {
+    try {
+      var _capRow = await env.DB.prepare(
+        "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND created_at >= date(?, '-0 days') AND deleted_at IS NULL"
+      ).bind(firmCode, day).first();
+      if (_capRow && _capRow.cnt >= 5) return { status: 'daily_cap', found: _capRow.cnt };
+    } catch (e) {}
+  }
 
   /* Budget check */
   var bc = await budgetCheck(env, day, firmCode);
