@@ -765,7 +765,9 @@ function pipelineDue() {
         out.push({
           person: p, urgency: 4, isCallback: true,
           reason: dn.first + ' asked you to call back today',
-          msg: greet + ' \u2014 aapne kaha tha aaj follow up karunga. Kab baat kar sakte hain?'
+          msg: lang === 'English'
+            ? greet + ' \u2014 you had asked us to follow up today. When would be a good time to talk?'
+            : greet + ' \u2014 aapne kaha tha aaj follow up karenge. Kab baat kar sakte hain?'
         });
       }
     }
@@ -794,16 +796,24 @@ function pipelineDue() {
 
     if (p.status === 'contacted' && d >= 14) {
       item = { reason: 'No response in ' + d + ' days', urgency: 3,
-               msg: greet + ' \u2014 last try from my side. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.' };
+               msg: lang === 'English'
+                 ? greet + ' \u2014 this is our last follow-up. If you ever need anything, we are here.'
+                 : greet + ' \u2014 hum last time follow up kar rahe hain. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.' };
     } else if (p.status === 'contacted' && d >= 7) {
       item = { reason: 'No reply for ' + d + ' days \u2014 final follow-up', urgency: 2,
-               msg: greet + ' \u2014 ek baar aur pooch raha hoon. Aapke liye koi din suit karta hai baat karne ke liye?' };
+               msg: lang === 'English'
+                 ? greet + ' \u2014 just following up one more time. Is there a day that works for a quick chat?'
+                 : greet + ' \u2014 hum ek baar aur pooch rahe hain. Aapke liye koi din suit karta hai baat karne ke liye?' };
     } else if (p.status === 'contacted' && d >= 3) {
       item = { reason: 'No reply for ' + d + ' days', urgency: 1,
-               msg: greet + ' \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?' };
+               msg: lang === 'English'
+                 ? greet + ' \u2014 following up on our last message. Would any day this week work for a quick chat?'
+                 : greet + ' \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?' };
     } else if (p.status === 'replied' && d >= 5) {
       item = { reason: 'Replied ' + d + ' days ago but has not booked', urgency: 3,
-               msg: greet + ' \u2014 aapne interest dikhaya tha. Is week ek slot rakh doon? Bas din bata dijiye.' };
+               msg: lang === 'English'
+                 ? greet + ' \u2014 you had shown interest. Shall we block a slot this week? Just let us know the day.'
+                 : greet + ' \u2014 aapne interest dikhaya tha. Is week ek slot rakh dein? Bas din bata dijiye.' };
     } else if (p.status === 'trial_booked' && bucket === 'trade') {
       if (d >= 15) {
         item = { reason: 'Quote sent ' + d + ' days ago', urgency: 2,
@@ -817,14 +827,16 @@ function pipelineDue() {
       }
     } else if (p.status === 'trial_booked' && d >= 1) {
       item = { reason: stageLabel('trial_booked') + ' was ' + d + ' day(s) ago \u2014 did they show?', urgency: 3,
-               msg: greet + ' \u2014 kaisa raha? Koi baat ho toh bata dena.' };
+               msg: lang === 'English'
+                 ? greet + ' \u2014 how did it go? Let us know if there is anything we can help with.'
+                 : greet + ' \u2014 kaisa raha? Koi baat ho toh bata dena.' };
     } else if (p.status === 'gone_quiet' && d >= 14) {
       item = { reason: 'Quiet for ' + d + ' days', urgency: 1,
-               msg: greet + ' \u2014 kaafi time ho gaya. Jab ready ho, bata dena.' };
-    } else if (p.status === 'found' && d >= 1) {
-      item = { reason: 'Found ' + d + ' day(s) ago \u2014 never messaged', urgency: 2,
-               msg: greet + ' \u2014 ' + (bizName ? 'main ' + bizName + ' se hoon. ' : '') + 'Aapke liye ek baat thi, 2 min baat kar sakte hain?' };
+               msg: lang === 'English'
+                 ? greet + ' \u2014 it has been a while. Whenever you are ready, we are here.'
+                 : greet + ' \u2014 kaafi time ho gaya. Jab ready ho, bata dena.' };
     }
+    /* stage=found (never contacted) is excluded from Chase — shown in "Not contacted yet" section instead */
 
     if (item) {
       item.person = p;
@@ -836,11 +848,17 @@ function pipelineDue() {
 }
 
 function pipelineAll() {
-  var order = { found: -1, replied: 0, trial_booked: 1, contacted: 2, gone_quiet: 3, joined: 4, not_interested: 5 };
+  var order = { replied: 0, trial_booked: 1, contacted: 2, gone_quiet: 3, joined: 4, not_interested: 5 };
   var store = pipelineLoad();
-  return store.people.slice().sort(function(a, b) {
+  /* Exclude stage=found — those go in the "Not contacted yet" section */
+  return store.people.filter(function(p) { return p.status !== 'found'; }).sort(function(a, b) {
     return (order[a.status] || 9) - (order[b.status] || 9);
   });
+}
+
+function pipelineNotContacted() {
+  var store = pipelineLoad();
+  return store.people.filter(function(p) { return p.status === 'found'; });
 }
 
 function waPhone(raw) {

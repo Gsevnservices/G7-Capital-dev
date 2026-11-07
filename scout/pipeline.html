@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=53"></script>
-<script src="../assets/pipeline.js?v=31"></script>
+<script src="../assets/scout.js?v=54"></script>
+<script src="../assets/pipeline.js?v=32"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 /* ─── RESET & VARIABLES ─── */
@@ -89,6 +89,18 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .ev-days{font-size:10px;color:var(--grey2);letter-spacing:.05em;white-space:nowrap}
 .ev-actions{display:flex;gap:6px;padding:10px 14px;flex-wrap:wrap}
 @media(max-width:700px){.everyone-row{flex-wrap:wrap}.ev-cell{min-width:50%;border-bottom:1px solid var(--border2)}.ev-actions{padding:10px 14px;border-right:none;flex:100%}}
+
+/* ─── NOT CONTACTED SECTION ─── */
+.nc-section{margin-bottom:20px;border:1px solid var(--border2)}
+.nc-toggle{display:block;width:100%;text-align:left;background:var(--black2);border:none;color:var(--grey1);font-family:'Tenor Sans',sans-serif;font-size:11px;letter-spacing:.08em;padding:14px 18px;cursor:pointer;transition:color .2s}
+.nc-toggle:hover{color:var(--white)}
+.nc-list{display:none;padding:0 18px 14px}
+.nc-section.open .nc-list{display:block}
+.nc-section.open .nc-toggle{color:var(--amber-l);border-bottom:1px solid var(--border2)}
+.nc-row{display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid var(--border2)}
+.nc-row:last-child{border-bottom:none}
+.nc-name{font-family:'Cormorant Garamond',serif;font-size:15px;font-weight:300;color:var(--white2)}
+.nc-icp{font-size:10px;color:var(--grey2);letter-spacing:.05em}
 
 /* ─── ADD PERSON FORM ─── */
 .add-form{background:var(--black2);border:1px solid var(--border2);padding:20px 24px;margin-top:16px;display:none}
@@ -414,18 +426,38 @@ function renderChase() {
 
 function renderEveryone() {
   var people = pipelineAll();
+  var notContacted = pipelineNotContacted();
   var el = document.getElementById('everyoneSection');
-  if (!people.length) {
+  if (!people.length && !notContacted.length) {
     el.innerHTML = '<div class="empty-msg">No customers yet. Leads you contact from <a href="today.html" style="color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.3)">Today</a> appear here, or add someone manually above.</div>';
     return;
   }
 
   var html = '';
+
+  /* "Not contacted yet" collapsed section */
+  if (notContacted.length > 0) {
+    html += '<div class="nc-section">';
+    html += '<button class="nc-toggle" onclick="this.parentElement.classList.toggle(\'open\')">';
+    html += 'Not contacted yet (' + notContacted.length + ') \u2192 <a href="today.html" style="color:var(--amber);text-decoration:none" onclick="event.stopPropagation()">Open Today</a>';
+    html += '</button>';
+    html += '<div class="nc-list">';
+    notContacted.forEach(function(p) {
+      html += '<div class="nc-row">';
+      html += '<span class="nc-name">' + escHtml(p.name) + '</span>';
+      if (p.icp) html += '<span class="nc-icp">' + escHtml(p.icp) + '</span>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  if (!people.length) { el.innerHTML = html; return; }
+
   people.forEach(function(p) {
     var days = pipelineDaysSince(p.lastStatusAt || p.lastContactedAt);
     var dayN = days === 1 ? '1 day ago' : days + ' days ago';
     var lbl = stageLabel(p.status);
-    var daysLabel = days === 999 ? 'No contact yet'
+    var daysLabel = days >= 999 ? ''
                   : days === 0   ? lbl + ' today'
                   :                lbl + ' ' + dayN;
     html += '<div class="everyone-row">';

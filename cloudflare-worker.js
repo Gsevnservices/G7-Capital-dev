@@ -2174,10 +2174,16 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
   if (!isCreatorEligible(profileJson, saved.context)) return { status: 'not_b2c' };
 
   var city = saved.city || '';
+  /* Message language — prefer explicit setting, fall back to onboarding. */
   var lang = 'Hinglish';
   try {
-    var st = await loadScoutState(env, firmCode);
-    if (st) { var pr = st.pick('scout_pending_result'); if (pr && pr.language) lang = pr.language; }
+    var _crUser = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+    if (_crUser && _crUser.messageLanguage) { lang = _crUser.messageLanguage; }
+    else {
+      var st = await loadScoutState(env, firmCode);
+      if (st) { var pr = st.pick('scout_pending_result'); if (pr && pr.businessData && pr.businessData.language) lang = pr.businessData.language; }
+    }
+    if (/regional/i.test(lang)) lang = 'Hinglish';
   } catch (e) {}
 
   /* Budget check */
@@ -2221,6 +2227,7 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
     'Draft a short, friendly DM and a short email for each creator below, inviting them for a free collab ' +
     '(e.g. "free tasting for an honest review/reel" or "complimentary session for a story"). ' +
     'Language: ' + (lang || 'English') + '. Keep each under 80 words. Be genuine, not salesy. ' +
+    'VOICE: Use "We at ' + businessName + '…" or "This is ' + businessName + '…". In Hindi/Hinglish use "hum" form. No gender slash. ' +
     'Never mention Scout, G7, or "getting customers".\n\n' +
     'CREATORS:\n' + newCreators.map(function(c, i) {
       return (i + 1) + '. ' + c.handle + ' (' + c.niche + ', ' + c.followers + ')';
@@ -3088,6 +3095,12 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   return profile;
 }
 
+/* ── Humanize a Google Places primaryType for display ── */
+function humanizePrimaryType(raw) {
+  if (!raw) return '';
+  return raw.replace(/_/g, ' ').replace(/\b\w/, function(c) { return c.toUpperCase(); });
+}
+
 /* ── Hard filters for Places candidates ── */
 /* Generic Google Places types that are too broad to reject on —
    these pass through to the Haiku fit check which decides using name, website and reviews. */
@@ -3241,10 +3254,12 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
     '\nCANDIDATES:\n' + candidateList + '\n\n' +
     'Score each candidate 1-10 for fit against their assigned group.\n' +
     'A good fit (6+) means this business would realistically buy from, partner with, or refer customers to the owner. ' +
-    'State concretely WHY (e.g. "gym with 76 reviews = large member base for post-workout coffee").\n' +
+    'State concretely WHY (e.g. "Gym with 76 reviews — large member base for post-workout coffee").\n' +
     'A poor fit (<6) means the business type has no natural overlap — score it low even if ratings are high.\n' +
-    'Start each reason with the primaryType. Cite ONLY facts from the data (name, rating, review count, type).\n\n' +
-    'Reject (score 0) candidates whose primaryType clearly does not match the group\'s purpose.\n\n' +
+    'Each reason MUST be one complete sentence, at most 160 characters. ' +
+    'Use plain English type names (e.g. "Coworking space" not "coworking_space", "Yoga studio" not "yoga_studio"). ' +
+    'Cite facts from the data (name, rating, review count).\n\n' +
+    'Reject (score 0) candidates whose type clearly does not match the group\'s purpose.\n\n' +
     'Output ONLY JSON array:\n[{"idx":1,"score":8,"reason":"..."},...]';
 
   var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
@@ -3283,7 +3298,7 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
     if (!s || s.score < 6) continue; // threshold: only leads scoring 6+ pass
     var entry = Object.assign({}, batch[i]);
     entry.fitScore = s.score || 0;
-    entry.fitReason = String(s.reason || '').slice(0, 200);
+    entry.fitReason = String(s.reason || '').slice(0, 160);
     result.push(entry);
   }
   result.sort(function(a, b) { return b.fitScore - a.fitScore; });
@@ -3378,7 +3393,8 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
     'LANGUAGE: ' + (lang || 'Hinglish') + '\n\n' +
     'RECIPIENTS:\n' + leadDescs + '\n\n' +
     'RULES:\n' +
-    '- Write as the sender\'s business reaching out to each recipient.\n' +
+    '- VOICE: Write as the sender\'s business. Use "We at ' + (ownerName || 'our business') + '…" or "This is ' + (ownerName || 'our business') + '…". ' +
+    'In Hindi or Hinglish use the "hum" form (हम). Never use "bol raha/rahi", no gender slash (he/she, uska/uski).\n' +
     '- Never mention Scout, G7, or "getting customers".\n' +
     '- For pricing: use ONLY prices from BUSINESS DETAILS. If none exist, ask what they need instead of inventing a price.\n' +
     '- Never invent or guess prices.\n\n' +
@@ -3533,14 +3549,16 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var context = saved.context;
   var city = saved.city || '';
 
-  /* Get language preference */
+  /* Message language — prefer explicit setting, fall back to onboarding. */
   var lang = 'Hinglish';
   try {
-    var st = await loadScoutState(env, firmCode);
-    if (st) {
-      var pr = st.pick('scout_pending_result');
-      if (pr && pr.language) lang = pr.language;
+    var _rlUser = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+    if (_rlUser && _rlUser.messageLanguage) { lang = _rlUser.messageLanguage; }
+    else {
+      var st = await loadScoutState(env, firmCode);
+      if (st) { var pr = st.pick('scout_pending_result'); if (pr && pr.businessData && pr.businessData.language) lang = pr.businessData.language; }
     }
+    if (/regional/i.test(lang)) lang = 'Hinglish';
   } catch (e) {}
 
   /* Get own business category for exclusion */
@@ -6684,6 +6702,7 @@ export default {
               _ltCarryCount++;
               if (_ltCarryCount > 10) return; // max 10 carry-over leads
             }
+            var _ltPT = (d.facts && d.facts.primaryType) || d.primaryType || '';
             _ltFoundLeads.push({
               id: r.id, name: r.name, phone: r.phone, stage: r.stage,
               group: d.group || r.kind || '', fitReason: d.fit_reason || '',
@@ -6691,6 +6710,9 @@ export default {
               website: d.website || '', channels: d.channels || [],
               messages: d.messages || {}, mapsUrl: d.mapsUrl || '',
               area: d.area || '', enrichment: d.enrichment || {},
+              primaryType: humanizePrimaryType(_ltPT),
+              rating: (d.facts && d.facts.rating) || 0,
+              reviews: (d.facts && d.facts.reviews) || 0,
               leadDay: leadDay
             });
           });
@@ -6900,7 +6922,8 @@ export default {
         'BUSINESS DETAILS: ' + (_rdContext || '').slice(0, 800) + '\n' +
         'LANGUAGE: ' + _rdLang + '\n\n' +
         'RULES:\n' +
-        '- Write as the sender\'s business reaching out to the recipient.\n' +
+        '- VOICE: Write as the sender\'s business. Use "We at ' + (_rdBizName || 'our business') + '…" or "This is ' + (_rdBizName || 'our business') + '…". ' +
+        'In Hindi/Hinglish use "hum" form. No gender slash (he/she, uska/uski). No "bol raha/rahi".\n' +
         '- Never mention Scout, G7, or "getting customers".\n' +
         '- For pricing: use ONLY prices from BUSINESS DETAILS above. If no price exists, ask what they need and offer to share a quote.\n' +
         '- Never invent or guess prices.\n';
@@ -7828,9 +7851,62 @@ export default {
       const key = 'auth:users:' + session.firmCode;
       const user = await env.G7_KV.get(key, 'json');
       if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
+      var _mlOldLang = user.messageLanguage || '';
       user.messageLanguage = lang;
-      await kvPut(env,key, JSON.stringify(user));
-      return jsonResponse({ language: user.messageLanguage });
+      await kvPut(env, key, JSON.stringify(user));
+
+      /* Regenerate messages for uncontacted leads when language actually changed */
+      if (lang !== _mlOldLang && env.DB) {
+        ctx.waitUntil((async function() {
+          try {
+            var _mlRows = await env.DB.prepare(
+              "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL LIMIT 20"
+            ).bind(session.firmCode).all();
+            if (!_mlRows.results || _mlRows.results.length === 0) return;
+
+            var _mlProfile = await env.G7_KV.get('scout:leadprofile:' + session.firmCode, 'json');
+            var _mlSavedCtx = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
+            var _mlContext = (_mlSavedCtx && _mlSavedCtx.context) || '';
+            var _mlCity = (_mlSavedCtx && _mlSavedCtx.city) || '';
+            var _mlCost = newCostAccum();
+
+            /* Build pseudo-lead objects for generateLeadMessages */
+            var _mlLeads = _mlRows.results.map(function(r) {
+              var d; try { d = JSON.parse(r.data || '{}'); } catch(e) { d = {}; }
+              return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: d.fit_reason || '', _rowId: r.id, _data: d };
+            });
+
+            var _mlWithMsgs = await generateLeadMessages(env, _mlLeads, _mlProfile, _mlContext, lang, _mlCost, _mlCity);
+
+            /* Write updated messages back to D1 */
+            for (var mi = 0; mi < _mlWithMsgs.length; mi++) {
+              var _mlL = _mlWithMsgs[mi];
+              if (_mlL.messages && _mlL._data) {
+                _mlL._data.messages = _mlL.messages;
+                await env.DB.prepare(
+                  "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
+                ).bind(JSON.stringify(_mlL._data), session.firmCode, _mlL._rowId).run();
+              }
+            }
+
+            /* Update KV cache too */
+            var _mlDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+            var _mlCached = await env.G7_KV.get('scout:leads:' + session.firmCode + ':' + _mlDay, 'json');
+            if (_mlCached && Array.isArray(_mlCached.leads)) {
+              var _mlMsgMap = {};
+              _mlWithMsgs.forEach(function(l) { if (l._rowId && l.messages) _mlMsgMap[l._rowId] = l.messages; });
+              _mlCached.leads.forEach(function(cl) { if (_mlMsgMap[cl.id]) cl.messages = _mlMsgMap[cl.id]; });
+              await kvPut(env, 'scout:leads:' + session.firmCode + ':' + _mlDay, JSON.stringify(_mlCached), { expirationTtl: 2 * 86400 });
+            }
+
+            await flushCost(env, _mlDay, session.firmCode, _mlCost);
+          } catch (e) {
+            console.log('message-lang regen error: ' + (e.message || e));
+          }
+        })());
+      }
+
+      return jsonResponse({ language: user.messageLanguage, regenerating: lang !== _mlOldLang });
     }
 
     // ─────────────────────────────────────────────────────────────
