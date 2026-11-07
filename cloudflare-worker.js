@@ -1987,7 +1987,8 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
 
   /* Filter and score */
   var ownCategory = profileJson.ownPrimaryType || '';
-  var filtered = await filterPlacesCandidates(env, firmCode, raw, profileJson, ownCategory);
+  var _fRes = await filterPlacesCandidates(env, firmCode, raw, profileJson, ownCategory);
+  var filtered = _fRes.candidates;
 
   /* Score with Haiku */
   var scored = await scoreLeadFit(env, filtered, group, context, cost);
@@ -3087,6 +3088,16 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
 }
 
 /* ── Hard filters for Places candidates ── */
+/* Generic Google Places types that are too broad to reject on —
+   these pass through to the Haiku fit check which decides using name, website and reviews. */
+var GENERIC_PLACE_TYPES = new Set([
+  'point_of_interest', 'establishment', 'store', 'service',
+  'local_business', 'business', 'health', 'food', 'finance',
+  'general_contractor', 'professional_services', 'shopping_mall',
+  'sublocality', 'locality', 'premise', 'street_address',
+  'room', 'floor', 'geocode', 'route'
+]);
+
 async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCategory) {
   /* Load existing place_ids and phones for this firm (including deleted) */
   var existingPlaces = new Set();
@@ -3123,6 +3134,7 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
   });
 
   var out = [];
+  var droppedByType = 0;
   for (var i = 0; i < candidates.length; i++) {
     var c = candidates[i];
 
@@ -3138,15 +3150,24 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
       if (phoneTail.length >= 10 && existingPhones.has(phoneTail)) continue;
     }
 
-    /* Excluded by primaryType or types (Google Places category match) */
+    /* Softer type filter: only reject when primaryType is specific and clearly
+       matches the firm's own category or an explicit exclude list entry.
+       Generic types (point_of_interest, establishment, store, service, etc.)
+       always pass through — the Haiku fit check decides using name, website and reviews. */
+    var specificTypes = (c.types || []).filter(function(t) {
+      return !GENERIC_PLACE_TYPES.has(t.toLowerCase());
+    });
+    var cPrimary = (c.primaryType || '').toLowerCase();
+    var isGenericPrimary = !cPrimary || GENERIC_PLACE_TYPES.has(cPrimary);
+
     var excluded = false;
-    if (c.primaryType && excludeSet.has(c.primaryType.toLowerCase())) { excluded = true; }
+    if (!isGenericPrimary && excludeSet.has(cPrimary)) { excluded = true; }
     if (!excluded) {
-      for (var j = 0; j < c.types.length; j++) {
-        if (excludeSet.has(c.types[j].toLowerCase())) { excluded = true; break; }
+      for (var j = 0; j < specificTypes.length; j++) {
+        if (excludeSet.has(specificTypes[j].toLowerCase())) { excluded = true; break; }
       }
     }
-    if (excluded) continue;
+    if (excluded) { droppedByType++; continue; }
 
     /* Known chain */
     var nameLower = c.name.toLowerCase();
@@ -3160,10 +3181,9 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
     var nameKey = nameLower.replace(/[^a-z0-9]/g, '');
     if (nameCounts[nameKey] >= 3) continue;
 
-    /* Group type match: at least one of the candidate's types must appear
-       in the assigned group's placesTypes list. If the group has no
-       placesTypes defined, allow everything (backwards compat). */
-    if (c._groupName) {
+    /* Group type match — softer: only reject when the candidate has a specific
+       primaryType that clearly doesn't belong. If all types are generic, pass through. */
+    if (c._groupName && !isGenericPrimary) {
       var matchedGroup = null;
       for (var gi = 0; gi < profile.groups.length; gi++) {
         if (profile.groups[gi].name === c._groupName) { matchedGroup = profile.groups[gi]; break; }
@@ -3171,20 +3191,20 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
       if (matchedGroup && matchedGroup.placesTypes && matchedGroup.placesTypes.length > 0) {
         var gTypes = new Set(matchedGroup.placesTypes.map(function(t) { return t.toLowerCase(); }));
         var typeMatch = false;
-        if (c.primaryType && gTypes.has(c.primaryType.toLowerCase())) typeMatch = true;
+        if (gTypes.has(cPrimary)) typeMatch = true;
         if (!typeMatch) {
-          for (var ti = 0; ti < c.types.length; ti++) {
-            if (gTypes.has(c.types[ti].toLowerCase())) { typeMatch = true; break; }
+          for (var ti = 0; ti < specificTypes.length; ti++) {
+            if (gTypes.has(specificTypes[ti].toLowerCase())) { typeMatch = true; break; }
           }
         }
-        if (!typeMatch) continue;
+        if (!typeMatch) { droppedByType++; continue; }
       }
     }
 
     out.push(c);
   }
 
-  return out;
+  return { candidates: out, droppedByType: droppedByType };
 }
 
 /* ── Haiku fit scoring: score candidates and write a fact-based reason ── */
@@ -3566,6 +3586,8 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var textSearchCalls = 0;
   var detailsCalls = 0;
   var shortfallReasons = [];
+  var droppedByType = 0;
+  var droppedByFit = 0;
 
   /* ── STEP 2: Search Places only when pool < 10 fresh candidates ── */
   if (pool.length < 10) {
@@ -3644,7 +3666,9 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
         });
 
         /* Hard filter new search results */
-        var filtered = await filterPlacesCandidates(env, firmCode, results, profileJson, ownCategory);
+        var _fRes1 = await filterPlacesCandidates(env, firmCode, results, profileJson, ownCategory);
+        var filtered = _fRes1.candidates;
+        droppedByType += _fRes1.droppedByType;
 
         /* Store filtered candidates in pool */
         await writePool(env, firmCode, filtered);
@@ -3688,7 +3712,9 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
               r._query = query2;
               r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
             });
-            var filtered2 = await filterPlacesCandidates(env, firmCode, results2, profileJson, ownCategory);
+            var _fRes2 = await filterPlacesCandidates(env, firmCode, results2, profileJson, ownCategory);
+            var filtered2 = _fRes2.candidates;
+            droppedByType += _fRes2.droppedByType;
             await writePool(env, firmCode, filtered2);
             pool = pool.concat(filtered2);
             shortfallReasons.push('2nd_search');
@@ -3728,13 +3754,15 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
 
   if (pool.length === 0) {
     shortfallReasons.push('no_candidates_after_pool_and_search');
-    console.log(JSON.stringify({ leads: firmCode, day: day, shortfall: shortfallReasons }));
-    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls }), { expirationTtl: 2 * 86400 });
-    return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls };
+    console.log(JSON.stringify({ leads: firmCode, day: day, shortfall: shortfallReasons, droppedByType: droppedByType }));
+    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
+    return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType };
   }
 
   /* ── STEP 3: Fit scoring on pool candidates ── */
+  var _poolBeforeFit = pool.length;
   var scored = await scoreLeadFit(env, pool, profileJson, pool[0]._groupName, context, cost);
+  droppedByFit = _poolBeforeFit - scored.length;
 
   /* ── STEP 4: Pick top 5, balanced across groups ── */
   var picked = [];
@@ -3750,8 +3778,8 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
 
   if (picked.length === 0) {
     shortfallReasons.push('no_scored_candidates');
-    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls }), { expirationTtl: 2 * 86400 });
-    return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls };
+    await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, droppedByFit: droppedByFit, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
+    return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, droppedByFit: droppedByFit };
   }
 
   /* ── STEP 5: Fetch Place Details for final picked leads (phone, website, address) ── */
@@ -3880,6 +3908,8 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
     textSearchCalls: textSearchCalls,
     detailsCalls: detailsCalls,
     poolSize: pool.length - picked.length,
+    droppedByType: droppedByType,
+    droppedByFit: droppedByFit,
     generatedAt: new Date().toISOString()
   };
   await kvPut(env, todayKey, JSON.stringify(leadsResult), { expirationTtl: 2 * 86400 });
@@ -3887,10 +3917,12 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   console.log(JSON.stringify({
     leads: firmCode, day: day, found: savedLeads.length,
     textSearchCalls: textSearchCalls, detailsCalls: detailsCalls,
-    poolSize: pool.length - picked.length, shortfall: shortfallReasons
+    poolSize: pool.length - picked.length,
+    droppedByType: droppedByType, droppedByFit: droppedByFit,
+    shortfall: shortfallReasons
   }));
 
-  return { status: 'ok', found: savedLeads.length, textSearchCalls: textSearchCalls, detailsCalls: detailsCalls, poolSize: pool.length - picked.length, shortfall: shortfallReasons };
+  return { status: 'ok', found: savedLeads.length, textSearchCalls: textSearchCalls, detailsCalls: detailsCalls, poolSize: pool.length - picked.length, droppedByType: droppedByType, droppedByFit: droppedByFit, shortfall: shortfallReasons };
 }
 
 /* ── Places cost entries for COST_TABLE ──
@@ -6729,51 +6761,62 @@ export default {
         } catch (e) {}
       }
 
-      /* ── If we have leads or reminders, return them ── */
-      if (_ltFoundLeads.length > 0 || _ltReminders.length > 0) {
-        var _ltProfile2 = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
-        return jsonResponse({
-          day: _ltDay, leads: _ltFoundLeads, reminders: _ltReminders,
-          shortfall: _ltShortfall, generatedAt: _ltGeneratedAt,
-          todayCount: _ltTodayCount,
-          profileSummary: _ltProfile2 ? {
-            groups: (_ltProfile2.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3),
-            areas: (_ltProfile2.areas || []).slice(0,3)
-          } : null
-        });
-      }
-
-      /* ── No leads at all — check if today's generation happened ── */
-      if (_ltCached) {
-        /* Generation ran but found nothing */
-        return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: _ltShortfall, generatedAt: _ltGeneratedAt });
-      }
-
-      /* ── No leads and no cache — trigger generation if profile exists ── */
+      /* ── Trigger today's generation if it hasn't run yet ── */
       var _ltProfile = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
-      if (_ltProfile) {
-        var _ltGenKey = 'scout:leads:generating:' + _ltSess.firmCode + ':' + _ltDay;
-        var _ltGenerating = await env.G7_KV.get(_ltGenKey);
-        if (!_ltGenerating) {
-          await kvPut(env, _ltGenKey, '1', { expirationTtl: 600 });
-          ctx.waitUntil((async function() {
-            try {
-              var _ltBC = await budgetCheck(env, _ltDay, _ltSess.firmCode);
-              if (_ltBC.ok) {
-                var _ltCost = newCostAccum();
-                await runLeadsForFirm(env, _ltSess.firmCode, _ltDay, _ltCost);
-                await flushCost(env, _ltDay, _ltSess.firmCode, _ltCost);
-              }
-            } catch (e) {
-              try { await recordError(env, { source: 'worker', route: 'leads/on-demand', firmCode: _ltSess.firmCode, kind: 'on_demand', message: String(e.message || e) }); } catch(e2) {}
-            }
-          })());
-        }
-        return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, generating: true,
-          profileSummary: { groups: (_ltProfile.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3), areas: (_ltProfile.areas || []).slice(0,3) }
-        });
+      var _ltGenerating = false;
+      if (!_ltProfile) {
+        /* No profile at all */
+        return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, noProfile: true });
       }
-      return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, noProfile: true });
+      if (!_ltCached && _ltTodayCount === 0) {
+        /* Today hasn't run — start background generation (even with carry-over) */
+        var _ltGenKey = 'scout:leads:generating:' + _ltSess.firmCode + ':' + _ltDay;
+        var _ltGenLock = await env.G7_KV.get(_ltGenKey);
+        if (!_ltGenLock) {
+          /* Check daily cap before starting */
+          var _ltCapOk = true;
+          if (env.DB) {
+            try {
+              var _ltCapRow = await env.DB.prepare(
+                "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
+              ).bind(_ltSess.firmCode, _ltDay).first();
+              if (_ltCapRow && _ltCapRow.cnt >= 5) _ltCapOk = false;
+            } catch (e) {}
+          }
+          if (_ltCapOk) {
+            await kvPut(env, _ltGenKey, '1', { expirationTtl: 600 });
+            _ltGenerating = true;
+            ctx.waitUntil((async function() {
+              try {
+                var _ltBC = await budgetCheck(env, _ltDay, _ltSess.firmCode);
+                if (_ltBC.ok) {
+                  var _ltCost = newCostAccum();
+                  await runLeadsForFirm(env, _ltSess.firmCode, _ltDay, _ltCost);
+                  await flushCost(env, _ltDay, _ltSess.firmCode, _ltCost);
+                }
+              } catch (e) {
+                try { await recordError(env, { source: 'worker', route: 'leads/on-demand', firmCode: _ltSess.firmCode, kind: 'on_demand', message: String(e.message || e) }); } catch(e2) {}
+              }
+            })());
+          }
+        } else {
+          _ltGenerating = true; // lock exists = generation already in progress
+        }
+      }
+
+      /* Build profile summary for response */
+      var _ltProfSummary = {
+        groups: (_ltProfile.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3),
+        areas: (_ltProfile.areas || []).slice(0,3)
+      };
+
+      return jsonResponse({
+        day: _ltDay, leads: _ltFoundLeads, reminders: _ltReminders,
+        shortfall: _ltShortfall, generatedAt: _ltGeneratedAt,
+        todayCount: _ltTodayCount,
+        generating: _ltGenerating || false,
+        profileSummary: _ltProfSummary
+      });
     }
 
     // ── POST /scout/leads/reply-draft — Haiku drafts a next-step message ──
