@@ -1993,8 +1993,7 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
   /* Score with Haiku */
   var scored = await scoreLeadFit(env, filtered, group, context, cost);
   scored.sort(function(a, b) { return b.fitScore - a.fitScore; });
-  var top = scored.filter(function(s) { return s.fitScore >= 4; }).slice(0, 5);
-  if (top.length === 0) top = scored.slice(0, 3);
+  var top = scored.slice(0, 5); // scoreLeadFit already drops below 6
 
   /* Get details (phone, etc.) */
   for (var i = 0; i < top.length; i++) {
@@ -2029,7 +2028,8 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
   var newLeads = [];
   for (var j = 0; j < top.length; j++) {
     var lead = top[j];
-    var id = 'gs_' + Date.now().toString(36) + '_' + j;
+    /* Stable ID: gs_{placeId} so one place = one lead per firm */
+    var id = lead.placeId ? 'gs_' + lead.placeId : 'gs_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
     var custData = {
       group: group.name, offer: group.offer || '', fitReason: lead.fitReason || '',
       fitScore: lead.fitScore || 0, address: lead.address || '', website: lead.website || '',
@@ -2256,7 +2256,8 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
     for (var i = 0; i < newCreators.length; i++) {
       var c = newCreators[i];
       var msg = messages[i] || {};
-      var id = 'cr_' + Date.now().toString(36) + '_' + i;
+      /* Stable ID: cr_{handle_hash} so one creator = one lead per firm */
+      var id = c.handle ? 'cr_' + c.handle.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 30) : 'cr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
       var cData = {
         handle: c.handle,
         profileUrl: c.profileUrl,
@@ -2303,7 +2304,7 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
   var todayCreators = newCreators.map(function(c, i) {
     var msg = messages[i] || {};
     return {
-      id: 'cr_' + Date.now().toString(36) + '_' + i,
+      id: c.handle ? 'cr_' + c.handle.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 30) : 'cr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
       name: c.handle,
       group: 'creators',
       handle: c.handle,
@@ -3238,10 +3239,12 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
     'THE BUSINESS: ' + (businessContext || '').slice(0, 1500) + '\n\n' +
     'TARGET GROUPS:' + groupsContext +
     '\nCANDIDATES:\n' + candidateList + '\n\n' +
-    'Score each candidate 1-10 for fit against their assigned group. Write a one-line reason that starts with the business\'s primaryType ' +
-    '(e.g. "gym", "yoga_studio", "coworking_space") and cites ONLY facts from the data above ' +
-    '(name, location, rating, review count, type). Never mention anything not in the data.\n\n' +
-    'Reject (score 0) candidates whose primaryType or types clearly do not match their target group.\n\n' +
+    'Score each candidate 1-10 for fit against their assigned group.\n' +
+    'A good fit (6+) means this business would realistically buy from, partner with, or refer customers to the owner. ' +
+    'State concretely WHY (e.g. "gym with 76 reviews = large member base for post-workout coffee").\n' +
+    'A poor fit (<6) means the business type has no natural overlap — score it low even if ratings are high.\n' +
+    'Start each reason with the primaryType. Cite ONLY facts from the data (name, rating, review count, type).\n\n' +
+    'Reject (score 0) candidates whose primaryType clearly does not match the group\'s purpose.\n\n' +
     'Output ONLY JSON array:\n[{"idx":1,"score":8,"reason":"..."},...]';
 
   var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
@@ -3277,7 +3280,7 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
   var result = [];
   for (var i = 0; i < batch.length; i++) {
     var s = scoreMap[i + 1];
-    if (!s || s.score <= 0) continue;
+    if (!s || s.score < 6) continue; // threshold: only leads scoring 6+ pass
     var entry = Object.assign({}, batch[i]);
     entry.fitScore = s.score || 0;
     entry.fitReason = String(s.reason || '').slice(0, 200);
@@ -3843,7 +3846,8 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   if (env.DB) {
     for (var si = 0; si < picked.length; si++) {
       var lead = picked[si];
-      var custId = 'lead_' + day.replace(/-/g, '') + '_' + si;
+      /* Stable ID: lead_{placeId} so one place = one lead per firm, never overwrites a different lead */
+      var custId = lead.placeId ? 'lead_' + lead.placeId : 'lead_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
       var custData = {
         place_id: lead.placeId,
         lead_day: day,
@@ -3864,7 +3868,7 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
         await env.DB.prepare(
           "INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, data, place_id, created_at, updated_at, synced_at) " +
           "VALUES (?, ?, ?, ?, ?, 'found', 'places', ?, ?, datetime('now'), datetime('now'), datetime('now')) " +
-          "ON CONFLICT (firm_code, id) DO UPDATE SET data = excluded.data, updated_at = datetime('now'), synced_at = datetime('now')"
+          "ON CONFLICT (firm_code, id) DO NOTHING"
         ).bind(
           firmCode, custId, lead.name, lead.phone || '', lead._groupName,
           JSON.stringify(custData), lead.placeId || null
@@ -6703,6 +6707,18 @@ export default {
       /* ── Check KV cache for generation status ── */
       var _ltCached = await env.G7_KV.get('scout:leads:' + _ltSess.firmCode + ':' + _ltDay, 'json');
       var _ltGeneratedAt = _ltCached ? _ltCached.generatedAt : null;
+
+      /* Bug 3 fix: if KV says generation succeeded but D1 has no today leads,
+         merge KV leads into the response (D1 writes may have failed). */
+      if (_ltCached && _ltTodayCount === 0 && Array.isArray(_ltCached.leads) && _ltCached.leads.length > 0) {
+        var _ltD1Ids = new Set(_ltFoundLeads.map(function(l) { return l.id; }));
+        _ltCached.leads.forEach(function(kvl) {
+          if (_ltD1Ids.has(kvl.id)) return;
+          kvl.leadDay = _ltDay;
+          _ltFoundLeads.push(kvl);
+          _ltTodayCount++;
+        });
+      }
       var _ltShortfall = _ltCached ? _ltCached.shortfall : null;
 
       /* ── Reminders: contacted leads due for follow-up ── */
