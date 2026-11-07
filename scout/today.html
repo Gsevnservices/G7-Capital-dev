@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=52"></script>
-<script src="../assets/pipeline.js?v=30"></script>
+<script src="../assets/scout.js?v=53"></script>
+<script src="../assets/pipeline.js?v=31"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -175,6 +175,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
   <div id="statsBar" class="stats-bar" style="display:none"></div>
 
+  <!-- Generating banner: shown while today's leads are being found (with carry-over visible below) -->
+  <div id="generatingBanner" style="display:none;background:rgba(224,146,47,0.08);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:24px;text-align:center">
+    <div style="font-size:13px;color:var(--amber);letter-spacing:.04em" id="genBannerText">Finding today's 5 leads\u2026</div>
+    <div style="font-size:11px;color:var(--grey1);margin-top:4px">About a minute <span id="genBannerDots" style="color:var(--amber)">\u25CF</span></div>
+  </div>
+
   <!-- Carry-over leads from previous days -->
   <div id="carryoverSection" style="display:none">
     <div class="section-label" id="carryoverLabel">From yesterday</div>
@@ -301,38 +307,14 @@ async function loadToday() {
     return;
   }
 
-  /* ── State 2: generating — leads not ready yet, poll until they appear ── */
+  /* ── State 2: generating with NO leads — full-screen waiting state ── */
   if (_todayData.generating && leads.length === 0) {
     document.getElementById('pageSub').textContent = '';
     document.getElementById('emptyState').style.display = '';
     document.getElementById('emptyTitle').textContent = 'Finding your first leads\u2026';
     document.getElementById('emptyText').innerHTML =
       'This takes about a minute. <span id="genDots" style="color:var(--amber)">&#x25CF;</span>';
-    /* Animate the dots while polling */
-    var _dotFrames = ['\u25CF', '\u25CF\u25CF', '\u25CF\u25CF\u25CF'];
-    var _dotIdx = 0;
-    var _dotTimer = setInterval(function() {
-      _dotIdx = (_dotIdx + 1) % _dotFrames.length;
-      var el = document.getElementById('genDots');
-      if (el) el.textContent = _dotFrames[_dotIdx];
-    }, 500);
-    /* Poll every 8 seconds */
-    var _pollTimer = setInterval(async function() {
-      try {
-        var pr = await fetch(SCOUT_WORKER + '/scout/leads/today', { headers: _auth });
-        if (!pr.ok) return;
-        var pd = await pr.json();
-        if (pd.leads && pd.leads.length > 0) {
-          clearInterval(_pollTimer);
-          clearInterval(_dotTimer);
-          _todayData = pd;
-          document.getElementById('emptyState').style.display = 'none';
-          document.getElementById('emptyTitle').textContent = 'No leads yet';
-          document.getElementById('emptyText').textContent = 'Scout is looking for customers for you. New leads appear here every morning.';
-          finishRenderLeads(_todayData);
-        }
-      } catch (e) {}
-    }, 8000);
+    startGeneratingPoll();
     return;
   }
 
@@ -345,6 +327,37 @@ async function loadToday() {
 
   /* ── Normal path: profile active, leads (possibly) present ── */
   finishRenderLeads(_todayData);
+}
+
+/* ── Poll for today's generation to finish (shared by empty-state and banner) ── */
+var _pollActive = false;
+function startGeneratingPoll() {
+  if (_pollActive) return; // prevent duplicate timers
+  _pollActive = true;
+  var _dotFrames = ['\u25CF', '\u25CF\u25CF', '\u25CF\u25CF\u25CF'];
+  var _dotIdx = 0;
+  var _dotTimer = setInterval(function() {
+    _dotIdx = (_dotIdx + 1) % _dotFrames.length;
+    var el = document.getElementById('genDots') || document.getElementById('genBannerDots');
+    if (el) el.textContent = _dotFrames[_dotIdx];
+  }, 500);
+  var _pollTimer = setInterval(async function() {
+    try {
+      var pr = await fetch(SCOUT_WORKER + '/scout/leads/today', { headers: _auth });
+      if (!pr.ok) return;
+      var pd = await pr.json();
+      /* Stop polling once today's generation has produced leads or finished */
+      if ((pd.todayCount && pd.todayCount > 0) || (pd.generatedAt && !pd.generating)) {
+        clearInterval(_pollTimer);
+        clearInterval(_dotTimer);
+        _pollActive = false;
+        _todayData = pd;
+        document.getElementById('emptyState').style.display = 'none';
+        document.getElementById('generatingBanner').style.display = 'none';
+        finishRenderLeads(_todayData);
+      }
+    } catch (e) {}
+  }, 8000);
 }
 
 /* ── finishRenderLeads: called once we have a confirmed profile and real data ── */
@@ -396,6 +409,12 @@ function finishRenderLeads(data) {
     document.getElementById('pageSub').innerHTML =
       escHtml('Scout is looking for: ' + st.join(' ')) +
       ' \u00b7 <a href="settings.html" style="color:var(--amber);text-decoration:none">Edit</a>';
+  }
+
+  /* ── "Finding today's 5…" banner when generating with carry-over ── */
+  if (data.generating && todayLeads.length === 0) {
+    document.getElementById('generatingBanner').style.display = '';
+    startGeneratingPoll();
   }
 
   /* ── Render carry-over leads (older days, shown first) ── */
