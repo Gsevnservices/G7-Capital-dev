@@ -3467,11 +3467,12 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var existing = await env.G7_KV.get(todayKey);
   if (existing) return { status: 'already_generated' };
 
-  /* True daily cap: count Places-sourced leads created today in D1 */
+  /* True daily cap: count Places-sourced leads for this IST day in D1.
+     Uses lead_day (IST) stored in data JSON, not created_at (UTC). */
   if (env.DB) {
     try {
       var _capRow = await env.DB.prepare(
-        "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND created_at >= date(?, '-0 days') AND deleted_at IS NULL"
+        "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
       ).bind(firmCode, day).first();
       if (_capRow && _capRow.cnt >= 5) return { status: 'daily_cap', found: _capRow.cnt };
     } catch (e) {}
@@ -6591,90 +6592,137 @@ export default {
       }
     }
 
-    // ── GET /scout/leads/today — today's leads for this firm ──
+    // ── GET /scout/leads/today — all actionable leads for this firm ──
+    // Returns: all uncontacted (stage=found) leads from any day (carry-over),
+    // today's new leads, reminders due, and callbacks.
     if (request.method === 'GET' && path === '/scout/leads/today') {
       var _ltSess = await validateSession(request, env);
       if (!_ltSess) return jsonResponse({ error: 'unauthorized' }, 401);
       var _ltDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
 
-      /* Check KV cache first */
-      var _ltCached = await env.G7_KV.get('scout:leads:' + _ltSess.firmCode + ':' + _ltDay, 'json');
-      if (_ltCached) {
-        /* Also load reminders due */
-        var _ltReminders = [];
-        if (env.DB) {
-          try {
-            var _ltRemRows = await env.DB.prepare(
-              "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND source = 'places' AND stage = 'contacted' " +
-              "AND deleted_at IS NULL ORDER BY updated_at ASC LIMIT 20"
-            ).bind(_ltSess.firmCode).all();
-            var _now = Date.now();
-            (_ltRemRows.results || []).forEach(function(r) {
-              var d;
-              try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
-              if (!d.contactedAt) return;
-              var contactedMs = new Date(d.contactedAt).getTime();
-              var daysSince = (_now - contactedMs) / 86400000;
-              var reminderNum = 0;
-              if (daysSince >= 4 && !d.reminder2Sent) reminderNum = 2;
-              else if (daysSince >= 2 && !d.reminder1Sent) reminderNum = 1;
-              if (reminderNum > 0) {
-                _ltReminders.push({
-                  id: r.id, name: r.name, phone: r.phone,
-                  reminderNum: reminderNum,
-                  message: reminderNum === 1 ? (d.messages && d.messages.reminder1) : (d.messages && d.messages.reminder2),
-                  channels: d.channels || [],
-                  daysSince: Math.floor(daysSince)
-                });
-              }
+      /* ── Build the full lead list from D1 (authoritative) ── */
+      var _ltFoundLeads = [];
+      var _ltTodayCount = 0;
+      if (env.DB) {
+        try {
+          /* All uncontacted leads from any day — carry-over + today */
+          var _ltRows = await env.DB.prepare(
+            "SELECT id, name, phone, stage, data FROM customers WHERE firm_code = ? AND source = 'places' " +
+            "AND stage = 'found' AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 30"
+          ).bind(_ltSess.firmCode).all();
+          (_ltRows.results || []).forEach(function(r) {
+            var d;
+            try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
+            var leadDay = d.lead_day || _ltDay;
+            if (leadDay === _ltDay) _ltTodayCount++;
+            _ltFoundLeads.push({
+              id: r.id, name: r.name, phone: r.phone, stage: r.stage,
+              group: d.group || r.kind || '', fitReason: d.fit_reason || '',
+              fitScore: d.fit_score || 0, address: d.address || '',
+              website: d.website || '', channels: d.channels || [],
+              messages: d.messages || {}, mapsUrl: d.mapsUrl || '',
+              area: d.area || '', enrichment: d.enrichment || {},
+              leadDay: leadDay
             });
-          } catch (e) {}
+          });
+        } catch (e) {}
+      }
 
-          /* Callback reminders — leads who said "call me later" and date is today or past */
-          try {
-            var _cbRows = await env.DB.prepare(
-              "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND source = 'places' AND stage = 'replied' " +
-              "AND json_extract(data, '$.callbackAt') IS NOT NULL AND json_extract(data, '$.callbackAt') <= ? " +
-              "AND deleted_at IS NULL LIMIT 10"
-            ).bind(_ltSess.firmCode, _ltDay).all();
-            (_cbRows.results || []).forEach(function(r) {
-              var d;
-              try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
-              if (d.callbackDismissed) return;
+      /* ── Merge today's creators ── */
+      var _ltCreators = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
+      if (_ltCreators && _ltCreators.length > 0) {
+        _ltCreators.forEach(function(c) { c.leadDay = _ltDay; });
+        _ltFoundLeads = _ltFoundLeads.concat(_ltCreators);
+      }
+
+      /* ── Check KV cache for generation status ── */
+      var _ltCached = await env.G7_KV.get('scout:leads:' + _ltSess.firmCode + ':' + _ltDay, 'json');
+      var _ltGeneratedAt = _ltCached ? _ltCached.generatedAt : null;
+      var _ltShortfall = _ltCached ? _ltCached.shortfall : null;
+
+      /* ── Reminders: contacted leads due for follow-up ── */
+      var _ltReminders = [];
+      if (env.DB) {
+        try {
+          var _ltRemRows = await env.DB.prepare(
+            "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND source = 'places' AND stage = 'contacted' " +
+            "AND deleted_at IS NULL ORDER BY updated_at ASC LIMIT 20"
+          ).bind(_ltSess.firmCode).all();
+          var _now = Date.now();
+          (_ltRemRows.results || []).forEach(function(r) {
+            var d;
+            try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
+            if (!d.contactedAt) return;
+            var contactedMs = new Date(d.contactedAt).getTime();
+            var daysSince = (_now - contactedMs) / 86400000;
+            var reminderNum = 0;
+            if (daysSince >= 4 && !d.reminder2Sent) reminderNum = 2;
+            else if (daysSince >= 2 && !d.reminder1Sent) reminderNum = 1;
+            if (reminderNum > 0) {
               _ltReminders.push({
                 id: r.id, name: r.name, phone: r.phone,
-                reminderNum: 0,
-                isCallback: true,
-                callbackDate: d.callbackAt,
-                message: d.messages && d.messages.first ? d.messages.first : '',
+                reminderNum: reminderNum,
+                message: reminderNum === 1 ? (d.messages && d.messages.reminder1) : (d.messages && d.messages.reminder2),
                 channels: d.channels || [],
-                daysSince: 0,
-                group: d.group || '',
-                replyType: 'call_later'
+                daysSince: Math.floor(daysSince)
               });
+            }
+          });
+        } catch (e) {}
+
+        /* Callback reminders — leads who said "call me later" and date is today or past */
+        try {
+          var _cbRows = await env.DB.prepare(
+            "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND source = 'places' AND stage = 'replied' " +
+            "AND json_extract(data, '$.callbackAt') IS NOT NULL AND json_extract(data, '$.callbackAt') <= ? " +
+            "AND deleted_at IS NULL LIMIT 10"
+          ).bind(_ltSess.firmCode, _ltDay).all();
+          (_cbRows.results || []).forEach(function(r) {
+            var d;
+            try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
+            if (d.callbackDismissed) return;
+            _ltReminders.push({
+              id: r.id, name: r.name, phone: r.phone,
+              reminderNum: 0,
+              isCallback: true,
+              callbackDate: d.callbackAt,
+              message: d.messages && d.messages.first ? d.messages.first : '',
+              channels: d.channels || [],
+              daysSince: 0,
+              group: d.group || '',
+              replyType: 'call_later'
             });
-          } catch (e) {}
-        }
-        /* Merge creators into today's leads */
-        var _ltCreators = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
-        var _ltAllLeads = (_ltCached.leads || []).concat(_ltCreators || []);
-        return jsonResponse({ day: _ltDay, leads: _ltAllLeads, reminders: _ltReminders, shortfall: _ltCached.shortfall, generatedAt: _ltCached.generatedAt });
+          });
+        } catch (e) {}
       }
 
-      /* Check if there are creators even without leads */
-      var _ltCreatorsOnly = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
-      if (_ltCreatorsOnly && _ltCreatorsOnly.length > 0) {
-        return jsonResponse({ day: _ltDay, leads: _ltCreatorsOnly, reminders: [], shortfall: null, generatedAt: null });
+      /* ── If we have leads or reminders, return them ── */
+      if (_ltFoundLeads.length > 0 || _ltReminders.length > 0) {
+        var _ltProfile2 = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
+        return jsonResponse({
+          day: _ltDay, leads: _ltFoundLeads, reminders: _ltReminders,
+          shortfall: _ltShortfall, generatedAt: _ltGeneratedAt,
+          todayCount: _ltTodayCount,
+          profileSummary: _ltProfile2 ? {
+            groups: (_ltProfile2.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3),
+            areas: (_ltProfile2.areas || []).slice(0,3)
+          } : null
+        });
       }
 
-      /* No leads yet today — check if profile exists and trigger generation once */
+      /* ── No leads at all — check if today's generation happened ── */
+      if (_ltCached) {
+        /* Generation ran but found nothing */
+        return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: _ltShortfall, generatedAt: _ltGeneratedAt });
+      }
+
+      /* ── No leads and no cache — trigger generation if profile exists ── */
       var _ltProfile = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
       if (_ltProfile) {
-        /* Profile exists but no leads — trigger generation in background */
         var _ltGenKey = 'scout:leads:generating:' + _ltSess.firmCode + ':' + _ltDay;
         var _ltGenerating = await env.G7_KV.get(_ltGenKey);
         if (!_ltGenerating) {
-          await kvPut(env, _ltGenKey, '1', { expirationTtl: 600 }); /* 10 min lock */
+          await kvPut(env, _ltGenKey, '1', { expirationTtl: 600 });
           ctx.waitUntil((async function() {
             try {
               var _ltBC = await budgetCheck(env, _ltDay, _ltSess.firmCode);
@@ -6687,11 +6735,7 @@ export default {
               try { await recordError(env, { source: 'worker', route: 'leads/on-demand', firmCode: _ltSess.firmCode, kind: 'on_demand', message: String(e.message || e) }); } catch(e2) {}
             }
           })());
-          return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, generating: true,
-            profileSummary: { groups: (_ltProfile.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3), areas: (_ltProfile.areas || []).slice(0,3) }
-          });
         }
-        /* Already generating — tell frontend to poll */
         return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, generating: true,
           profileSummary: { groups: (_ltProfile.groups || []).filter(function(g){return g.enabled;}).map(function(g){return g.name;}).slice(0,3), areas: (_ltProfile.areas || []).slice(0,3) }
         });
@@ -7524,12 +7568,12 @@ export default {
       var _ciUsed = _plan === 'paid' ? parseInt(await env.G7_KV.get(_ciKey) || '0', 10) : 0;
       var _ciLim = _plan === 'paid' ? 8 : 0;
 
-      /* Leads today — count from D1 customers found today */
+      /* Leads today — count from D1 customers by IST lead_day */
       var _leadsToday = 0;
       if (env.DB) {
         try {
           var _ldRow = await env.DB.prepare(
-            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND created_at >= date(?, '-0 days') AND deleted_at IS NULL"
+            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
           ).bind(session.firmCode, _istDay).first();
           _leadsToday = _ldRow ? _ldRow.cnt : 0;
         } catch (e) {}
