@@ -3160,6 +3160,27 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
     var nameKey = nameLower.replace(/[^a-z0-9]/g, '');
     if (nameCounts[nameKey] >= 3) continue;
 
+    /* Group type match: at least one of the candidate's types must appear
+       in the assigned group's placesTypes list. If the group has no
+       placesTypes defined, allow everything (backwards compat). */
+    if (c._groupName) {
+      var matchedGroup = null;
+      for (var gi = 0; gi < profile.groups.length; gi++) {
+        if (profile.groups[gi].name === c._groupName) { matchedGroup = profile.groups[gi]; break; }
+      }
+      if (matchedGroup && matchedGroup.placesTypes && matchedGroup.placesTypes.length > 0) {
+        var gTypes = new Set(matchedGroup.placesTypes.map(function(t) { return t.toLowerCase(); }));
+        var typeMatch = false;
+        if (c.primaryType && gTypes.has(c.primaryType.toLowerCase())) typeMatch = true;
+        if (!typeMatch) {
+          for (var ti = 0; ti < c.types.length; ti++) {
+            if (gTypes.has(c.types[ti].toLowerCase())) { typeMatch = true; break; }
+          }
+        }
+        if (!typeMatch) continue;
+      }
+    }
+
     out.push(c);
   }
 
@@ -3173,7 +3194,8 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
 
   var candidateList = batch.map(function(c, i) {
     return (i + 1) + '. ' + c.name + ' | ' + (c.address || 'no address') + ' | rating:' + c.rating +
-      ' reviews:' + c.reviews + ' | types:' + (c.types || []).slice(0, 5).join(',') +
+      ' reviews:' + c.reviews + ' | primaryType:' + (c.primaryType || 'unknown') +
+      ' | types:' + (c.types || []).slice(0, 5).join(',') +
       (c._groupName ? ' | group:' + c._groupName : '');
   }).join('\n');
 
@@ -3196,9 +3218,10 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
     'THE BUSINESS: ' + (businessContext || '').slice(0, 1500) + '\n\n' +
     'TARGET GROUPS:' + groupsContext +
     '\nCANDIDATES:\n' + candidateList + '\n\n' +
-    'Score each candidate 1-10 for fit against their assigned group. Write a one-line reason citing ONLY facts from the data above ' +
+    'Score each candidate 1-10 for fit against their assigned group. Write a one-line reason that starts with the business\'s primaryType ' +
+    '(e.g. "gym", "yoga_studio", "coworking_space") and cites ONLY facts from the data above ' +
     '(name, location, rating, review count, type). Never mention anything not in the data.\n\n' +
-    'Reject (score 0) candidates that clearly do not match their target group.\n\n' +
+    'Reject (score 0) candidates whose primaryType or types clearly do not match their target group.\n\n' +
     'Output ONLY JSON array:\n[{"idx":1,"score":8,"reason":"..."},...]';
 
   var r = await anthropicFetch(ANTHROPIC_ENDPOINT, {
@@ -3797,9 +3820,10 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
         place_id: lead.placeId,
         lead_day: day,
         group: lead._groupName,
+        primaryType: lead.primaryType || '',
         fit_reason: lead.fitReason,
         fit_score: lead.fitScore,
-        facts: { rating: lead.rating, reviews: lead.reviews, types: (lead.types || []).slice(0, 5), distance: lead._distance },
+        facts: { rating: lead.rating, reviews: lead.reviews, types: (lead.types || []).slice(0, 5), primaryType: lead.primaryType || '', distance: lead._distance },
         channels: lead.channels,
         messages: lead.messages,
         enrichment: lead.enrichment || {},
@@ -6603,18 +6627,27 @@ export default {
       /* ── Build the full lead list from D1 (authoritative) ── */
       var _ltFoundLeads = [];
       var _ltTodayCount = 0;
+      var _lt7ago = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
       if (env.DB) {
         try {
-          /* All uncontacted leads from any day — carry-over + today */
+          /* Uncontacted leads from last 7 days — today + carry-over (newest first) */
           var _ltRows = await env.DB.prepare(
             "SELECT id, name, phone, stage, data FROM customers WHERE firm_code = ? AND source = 'places' " +
-            "AND stage = 'found' AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 30"
-          ).bind(_ltSess.firmCode).all();
+            "AND stage = 'found' AND deleted_at IS NULL " +
+            "AND (json_extract(data, '$.lead_day') >= ? OR json_extract(data, '$.lead_day') IS NULL) " +
+            "ORDER BY created_at DESC LIMIT 40"
+          ).bind(_ltSess.firmCode, _lt7ago).all();
+          var _ltCarryCount = 0;
           (_ltRows.results || []).forEach(function(r) {
             var d;
             try { d = JSON.parse(r.data || '{}'); } catch (e) { d = {}; }
             var leadDay = d.lead_day || _ltDay;
-            if (leadDay === _ltDay) _ltTodayCount++;
+            if (leadDay === _ltDay) {
+              _ltTodayCount++;
+            } else {
+              _ltCarryCount++;
+              if (_ltCarryCount > 10) return; // max 10 carry-over leads
+            }
             _ltFoundLeads.push({
               id: r.id, name: r.name, phone: r.phone, stage: r.stage,
               group: d.group || r.kind || '', fitReason: d.fit_reason || '',
@@ -8485,6 +8518,30 @@ export default {
       leadCursor = leadPage.list_complete ? undefined : leadPage.cursor;
     } while (leadCursor);
     report.leads = _leadReport;
+
+    /* ── Expire old leads: stage=found older than 7 IST days → stage=expired ── */
+    var _expireCutoff = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
+    var _expireCount = 0;
+    if (env.DB) {
+      try {
+        var _expR = await env.DB.prepare(
+          "UPDATE customers SET stage = 'expired', updated_at = datetime('now') " +
+          "WHERE source = 'places' AND stage = 'found' AND deleted_at IS NULL " +
+          "AND json_extract(data, '$.lead_day') < ? AND json_extract(data, '$.lead_day') IS NOT NULL"
+        ).bind(_expireCutoff).run();
+        _expireCount = (_expR && _expR.meta) ? _expR.meta.changes : 0;
+      } catch (e) {}
+      /* Also expire p_ style leads without lead_day that are > 7 days old by created_at */
+      try {
+        var _expR2 = await env.DB.prepare(
+          "UPDATE customers SET stage = 'expired', updated_at = datetime('now') " +
+          "WHERE source = 'places' AND stage = 'found' AND deleted_at IS NULL " +
+          "AND json_extract(data, '$.lead_day') IS NULL AND created_at < ?"
+        ).bind(_expireCutoff).run();
+        _expireCount += (_expR2 && _expR2.meta) ? _expR2.meta.changes : 0;
+      } catch (e) {}
+    }
+    report.expired = _expireCount;
 
     /* ── Local creators — every other day for B2C firms ── */
     var _creatorReport = [];
