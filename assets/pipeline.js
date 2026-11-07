@@ -690,40 +690,35 @@ function templateMsg(key, lang, vars) {
   return msg;
 }
 
+/* Message language — always reads from server, cached after first fetch.
+   pipelineFetchMsgLang() MUST be awaited before first render so lang is accurate. */
 var _cachedMsgLang = null;
 function pipelineMsgLang() {
-  if (_cachedMsgLang) return _cachedMsgLang;
-  try {
-    var raw = localStorage.getItem(scoutKey('scout_pending_result'));
-    if (raw) {
-      var d = JSON.parse(raw);
-      var lang = (d && d.businessData && d.businessData.language) || 'Hinglish';
-      if (/^Regional/i.test(lang)) lang = 'Hinglish';
-      if (/hindi/i.test(lang) && !/hinglish/i.test(lang)) _cachedMsgLang = 'Hindi';
-      else if (/english/i.test(lang)) _cachedMsgLang = 'English';
-      else _cachedMsgLang = 'Hinglish';
-      return _cachedMsgLang;
-    }
-  } catch (e) {}
+  return _cachedMsgLang || 'Hinglish';
+}
+
+/* Normalise the raw language string from the server into English|Hinglish|Hindi */
+function _normLang(raw) {
+  if (!raw) return 'Hinglish';
+  var l = String(raw).trim();
+  if (/^regional/i.test(l)) return 'Hinglish';
+  if (/^hindi$/i.test(l)) return 'Hindi';
+  if (/^english$/i.test(l)) return 'English';
+  if (/^hinglish$/i.test(l)) return 'Hinglish';
   return 'Hinglish';
 }
 
-function pipelineFetchMsgLang() {
+function pipelineFetchMsgLang(cb) {
   try {
     var token = localStorage.getItem('g7_session_token') || '';
-    if (!token) return;
+    if (!token) { if (cb) cb(); return; }
     fetch(G7_WORKER_URL + '/scout/message-lang', {
       headers: { 'Authorization': 'Bearer ' + token }
     }).then(function(r) { return r.json(); }).then(function(j) {
-      if (j && j.language) {
-        var l = j.language;
-        if (/^Regional/i.test(l)) l = 'Hinglish';
-        if (/hindi/i.test(l) && !/hinglish/i.test(l)) _cachedMsgLang = 'Hindi';
-        else if (/english/i.test(l)) _cachedMsgLang = 'English';
-        else _cachedMsgLang = 'Hinglish';
-      }
-    }).catch(function() {});
-  } catch (e) {}
+      if (j && j.language) _cachedMsgLang = _normLang(j.language);
+      if (cb) cb();
+    }).catch(function() { if (cb) cb(); });
+  } catch (e) { if (cb) cb(); }
 }
 
 /* ---------- Chase rules ---------- */

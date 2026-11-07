@@ -2221,7 +2221,7 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
   if (newCreators.length === 0) return { status: 'all_dupes' };
 
   /* Generate collab messages via Haiku */
-  var businessName = profileJson.ownName || profileJson.businessName || 'our business';
+  var businessName = resolveBusinessName(profileJson, (saved && saved.context) || '') || 'our business';
   var businessType = profileJson.ownPrimaryType || '';
   var msgPrompt = 'You are ' + businessName + ', a local ' + businessType + (city ? ' in ' + city : '') + '. ' +
     'Draft a short, friendly DM and a short email for each creator below, inviting them for a free collab ' +
@@ -2657,7 +2657,7 @@ async function fetchOwnReviews(env, firmCode, profile, lang, cost, preDetails) {
     return (i + 1) + '. ' + (rv.rating || '?') + '★ "' + (rv.text || '(no text)').slice(0, 300) + '" — ' + rv.author;
   }).join('\n');
 
-  var businessName = profile.ownName || '';
+  var businessName = resolveBusinessName(profile, '') || 'this business';
   var prompt = 'You are the owner of ' + businessName + '. Draft a short, polite reply for each customer review below.\n' +
     'Language: ' + (lang || 'English') + '. Keep each reply under 100 words. Thank the reviewer by name. ' +
     'If the review is negative, acknowledge the concern and offer to make it right. ' +
@@ -3095,6 +3095,17 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   return profile;
 }
 
+/* ── Extract the business display name from profile + context.
+     Fallback chain: profile.ownName → first line of context → 'our business'. */
+function resolveBusinessName(profile, context) {
+  if (profile && profile.ownName) return profile.ownName;
+  if (context) {
+    var m = context.match(/^BUSINESS:\s*(.+?)(?:\s*\||\n)/);
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+
 /* ── Humanize a Google Places primaryType for display ── */
 function humanizePrimaryType(raw) {
   if (!raw) return '';
@@ -3298,7 +3309,10 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
     if (!s || s.score < 6) continue; // threshold: only leads scoring 6+ pass
     var entry = Object.assign({}, batch[i]);
     entry.fitScore = s.score || 0;
-    entry.fitReason = String(s.reason || '').slice(0, 160);
+    /* Clean fit reason: strip leading "type_name:" prefix, word-boundary truncation */
+    var _fr = String(s.reason || '').replace(/^[a-z_]+:\s*/i, '');
+    if (_fr.length > 160) { var _wb = _fr.lastIndexOf(' ', 160); _fr = _fr.slice(0, _wb > 80 ? _wb : 160) + '\u2026'; }
+    entry.fitReason = _fr;
     result.push(entry);
   }
   result.sort(function(a, b) { return b.fitScore - a.fitScore; });
@@ -3379,9 +3393,10 @@ function classifyIndianPhone(phone) {
 async function generateLeadMessages(env, leads, profile, businessContext, lang, cost, city) {
   if (leads.length === 0) return leads;
 
-  var ownerName = (profile && profile.ownName) || '';
+  /* resolveBusinessName: profile.ownName → parsed from context → '' */
+  var bizName = resolveBusinessName(profile, businessContext);
   var ownerType = (profile && profile.ownPrimaryType) || '';
-  var senderLine = (ownerName || 'a local business') + (ownerType ? ' (' + ownerType + ')' : '') + (city ? ' in ' + city : '');
+  var senderLine = (bizName || 'a local business') + (ownerType ? ' (' + ownerType + ')' : '') + (city ? ' in ' + city : '');
 
   var leadDescs = leads.map(function(l, i) {
     return (i + 1) + '. ' + l.name + ' (' + l._groupName + ') — offer: ' + (l._groupOffer || 'our services') + ' — fit: ' + l.fitReason;
@@ -3393,7 +3408,7 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
     'LANGUAGE: ' + (lang || 'Hinglish') + '\n\n' +
     'RECIPIENTS:\n' + leadDescs + '\n\n' +
     'RULES:\n' +
-    '- VOICE: Write as the sender\'s business. Use "We at ' + (ownerName || 'our business') + '…" or "This is ' + (ownerName || 'our business') + '…". ' +
+    '- VOICE: Write as the sender\'s business. Use "We at ' + (bizName || 'our business') + '…" or "This is ' + (bizName || 'our business') + '…". ' +
     'In Hindi or Hinglish use the "hum" form (हम). Never use "bol raha/rahi", no gender slash (he/she, uska/uski).\n' +
     '- Never mention Scout, G7, or "getting customers".\n' +
     '- For pricing: use ONLY prices from BUSINESS DETAILS. If none exist, ask what they need instead of inventing a price.\n' +
@@ -3444,6 +3459,63 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
     };
   }
   return leads;
+}
+
+/* ── Regenerate messages for uncontacted leads (stage=found) in batches of 5.
+     Shared by POST /admin/leads/regen-messages and POST /scout/message-lang. */
+async function regenFoundMessages(env, firmCode, lang, ctx) {
+  if (!env.DB) return { ok: false, error: 'no_db' };
+
+  /* Budget check */
+  var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  var bc = await budgetCheck(env, day, firmCode);
+  if (!bc.ok) return { ok: false, error: 'budget_exceeded' };
+
+  var rows = await env.DB.prepare(
+    "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL LIMIT 40"
+  ).bind(firmCode).all();
+  if (!rows.results || rows.results.length === 0) return { ok: true, count: 0, cost: 0 };
+
+  var profile = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var savedCtx = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  var context = (savedCtx && savedCtx.context) || '';
+  var city = (savedCtx && savedCtx.city) || '';
+  var totalCost = newCostAccum();
+  var updated = 0;
+
+  /* Process in batches of 5 */
+  var allLeads = rows.results.map(function(r) {
+    var d; try { d = JSON.parse(r.data || '{}'); } catch(e) { d = {}; }
+    return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: (d.fit_reason || '').replace(/^[a-z_]+:\s*/i, ''), _rowId: r.id, _data: d };
+  });
+
+  for (var bi = 0; bi < allLeads.length; bi += 5) {
+    var batch = allLeads.slice(bi, bi + 5);
+    var withMsgs = await generateLeadMessages(env, batch, profile, context, lang, totalCost, city);
+
+    for (var mi = 0; mi < withMsgs.length; mi++) {
+      var lead = withMsgs[mi];
+      if (lead.messages && lead._data) {
+        lead._data.messages = lead.messages;
+        await env.DB.prepare(
+          "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
+        ).bind(JSON.stringify(lead._data), firmCode, lead._rowId).run();
+        updated++;
+      }
+    }
+  }
+
+  /* Update KV cache */
+  var cached = await env.G7_KV.get('scout:leads:' + firmCode + ':' + day, 'json');
+  if (cached && Array.isArray(cached.leads)) {
+    var msgMap = {};
+    allLeads.forEach(function(l) { if (l._rowId && l.messages) msgMap[l._rowId] = l.messages; });
+    cached.leads.forEach(function(cl) { if (msgMap[cl.id]) cl.messages = msgMap[cl.id]; });
+    await kvPut(env, 'scout:leads:' + firmCode + ':' + day, JSON.stringify(cached), { expirationTtl: 2 * 86400 });
+  }
+
+  await flushCost(env, day, firmCode, totalCost);
+  return { ok: true, count: updated, cost: totalCost.usd };
 }
 
 /* ── Pool helpers — read/write lead_pool in D1 ── */
@@ -5615,6 +5687,33 @@ export default {
       }
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // POST /admin/leads/regen-messages — { adminPassword, firmCode, language }
+    // Regenerates first message, reminders and visit pitch for leads
+    // at stage=found only. Batches of 5, budget-checked, cost recorded.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/admin/leads/regen-messages') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var _arFirm = String(body.firmCode || '').toUpperCase().trim();
+      if (!_arFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+      var _arLang = String(body.language || '').trim();
+      if (!_arLang) {
+        /* Default: read from the firm's message language setting */
+        var _arUser = await env.G7_KV.get('auth:users:' + _arFirm, 'json');
+        _arLang = (_arUser && _arUser.messageLanguage) || 'Hinglish';
+      }
+      try {
+        var _arResult = await regenFoundMessages(env, _arFirm, _arLang, ctx);
+        return jsonResponse(_arResult);
+      } catch (e) {
+        return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 300) }, 500);
+      }
+    }
+
     // POST /admin/regen-news — { adminPassword, firmCode, shared?: bool }
     // Deletes today's per-firm picker + industry feed caches and regenerates.
     // If shared:true, also deletes shared category caches for the day.
@@ -6588,6 +6687,53 @@ export default {
           var _enSet = new Set(_lpBody.enabledGroups);
           _lpExisting.groups.forEach(function(g) { g.enabled = _enSet.has(g.name); });
         }
+        /* Apply group edits: when queries or placesTypes change, regenerate the group name via Haiku */
+        if (Array.isArray(_lpBody.groupEdits)) {
+          var _geNeedRename = [];
+          _lpBody.groupEdits.forEach(function(edit) {
+            if (!edit || !edit.name) return;
+            for (var gi = 0; gi < _lpExisting.groups.length; gi++) {
+              if (_lpExisting.groups[gi].name !== edit.name) continue;
+              var g = _lpExisting.groups[gi];
+              if (Array.isArray(edit.queries)) { g.queries = edit.queries.slice(0, 4).map(function(q) { return String(q).slice(0, 120); }); _geNeedRename.push(gi); }
+              if (Array.isArray(edit.placesTypes)) { g.placesTypes = edit.placesTypes.slice(0, 8); _geNeedRename.push(gi); }
+              if (edit.why) g.why = String(edit.why).slice(0, 200);
+              if (edit.offer) g.offer = String(edit.offer).slice(0, 200);
+              break;
+            }
+          });
+          /* Rename groups whose queries/types changed, using one Haiku call */
+          if (_geNeedRename.length > 0) {
+            var _geUnique = Array.from(new Set(_geNeedRename));
+            var _gePrompt = 'Rename each group below to match its new searches. Output ONLY JSON: [{"idx":0,"name":"New Name"},…]\n\n';
+            _geUnique.forEach(function(gi, i) {
+              var g = _lpExisting.groups[gi];
+              _gePrompt += (i + 1) + '. current: "' + g.name + '" — queries: ' + (g.queries || []).join(', ') + ' — types: ' + (g.placesTypes || []).join(', ') + '\n';
+            });
+            try {
+              var _geCost = newCostAccum();
+              var _geR = await anthropicFetch(ANTHROPIC_ENDPOINT, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+                body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: _gePrompt }] })
+              }, 'profile/rename');
+              if (_geR.ok) {
+                var _geData = await _geR.json();
+                recordCost(_geCost, 'claude-haiku-4-5-20251001', _geData);
+                var _geText = (_geData.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+                try {
+                  var a1 = _geText.indexOf('['), a2 = _geText.lastIndexOf(']');
+                  if (a1 !== -1 && a2 > a1) {
+                    var _geNames = JSON.parse(_geText.slice(a1, a2 + 1));
+                    _geNames.forEach(function(r, i) { if (r.name && _geUnique[i] !== undefined) { _lpExisting.groups[_geUnique[i]].name = String(r.name).slice(0, 60); } });
+                  }
+                } catch (e2) {}
+              }
+              var _geDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+              ctx.waitUntil(flushCost(env, _geDay, _lpSess2.firmCode, _geCost));
+            } catch (e) {}
+          }
+        }
         /* Apply area edits if provided */
         if (Array.isArray(_lpBody.areas)) {
           _lpExisting.areas = _lpBody.areas.slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
@@ -6705,7 +6851,7 @@ export default {
             var _ltPT = (d.facts && d.facts.primaryType) || d.primaryType || '';
             _ltFoundLeads.push({
               id: r.id, name: r.name, phone: r.phone, stage: r.stage,
-              group: d.group || r.kind || '', fitReason: d.fit_reason || '',
+              group: d.group || r.kind || '', fitReason: (d.fit_reason || '').replace(/^[a-z_]+:\s*/i, ''),
               fitScore: d.fit_score || 0, address: d.address || '',
               website: d.website || '', channels: d.channels || [],
               messages: d.messages || {}, mapsUrl: d.mapsUrl || '',
@@ -6884,9 +7030,9 @@ export default {
 
       /* Read business context + language */
       var _rdProfile = await env.G7_KV.get('scout:leadprofile:' + _rdSess.firmCode, 'json') || {};
-      var _rdBizName = (_rdProfile && _rdProfile.ownName) || '';
       var _rdSavedCtx = await env.G7_KV.get('market:ctx:' + _rdSess.firmCode, 'json');
       var _rdContext = (_rdSavedCtx && _rdSavedCtx.context) || '';
+      var _rdBizName = resolveBusinessName(_rdProfile, _rdContext);
 
       var _rdLang = 'Hinglish';
       try {
@@ -7857,53 +8003,9 @@ export default {
 
       /* Regenerate messages for uncontacted leads when language actually changed */
       if (lang !== _mlOldLang && env.DB) {
-        ctx.waitUntil((async function() {
-          try {
-            var _mlRows = await env.DB.prepare(
-              "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL LIMIT 20"
-            ).bind(session.firmCode).all();
-            if (!_mlRows.results || _mlRows.results.length === 0) return;
-
-            var _mlProfile = await env.G7_KV.get('scout:leadprofile:' + session.firmCode, 'json');
-            var _mlSavedCtx = await env.G7_KV.get('market:ctx:' + session.firmCode, 'json');
-            var _mlContext = (_mlSavedCtx && _mlSavedCtx.context) || '';
-            var _mlCity = (_mlSavedCtx && _mlSavedCtx.city) || '';
-            var _mlCost = newCostAccum();
-
-            /* Build pseudo-lead objects for generateLeadMessages */
-            var _mlLeads = _mlRows.results.map(function(r) {
-              var d; try { d = JSON.parse(r.data || '{}'); } catch(e) { d = {}; }
-              return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: d.fit_reason || '', _rowId: r.id, _data: d };
-            });
-
-            var _mlWithMsgs = await generateLeadMessages(env, _mlLeads, _mlProfile, _mlContext, lang, _mlCost, _mlCity);
-
-            /* Write updated messages back to D1 */
-            for (var mi = 0; mi < _mlWithMsgs.length; mi++) {
-              var _mlL = _mlWithMsgs[mi];
-              if (_mlL.messages && _mlL._data) {
-                _mlL._data.messages = _mlL.messages;
-                await env.DB.prepare(
-                  "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
-                ).bind(JSON.stringify(_mlL._data), session.firmCode, _mlL._rowId).run();
-              }
-            }
-
-            /* Update KV cache too */
-            var _mlDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
-            var _mlCached = await env.G7_KV.get('scout:leads:' + session.firmCode + ':' + _mlDay, 'json');
-            if (_mlCached && Array.isArray(_mlCached.leads)) {
-              var _mlMsgMap = {};
-              _mlWithMsgs.forEach(function(l) { if (l._rowId && l.messages) _mlMsgMap[l._rowId] = l.messages; });
-              _mlCached.leads.forEach(function(cl) { if (_mlMsgMap[cl.id]) cl.messages = _mlMsgMap[cl.id]; });
-              await kvPut(env, 'scout:leads:' + session.firmCode + ':' + _mlDay, JSON.stringify(_mlCached), { expirationTtl: 2 * 86400 });
-            }
-
-            await flushCost(env, _mlDay, session.firmCode, _mlCost);
-          } catch (e) {
-            console.log('message-lang regen error: ' + (e.message || e));
-          }
-        })());
+        ctx.waitUntil(regenFoundMessages(env, session.firmCode, lang, ctx).catch(function(e) {
+          console.log('message-lang regen error: ' + (e.message || e));
+        }));
       }
 
       return jsonResponse({ language: user.messageLanguage, regenerating: lang !== _mlOldLang });

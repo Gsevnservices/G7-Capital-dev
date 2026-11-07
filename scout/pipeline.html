@@ -9,7 +9,7 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
 <script src="../assets/scout.js?v=54"></script>
-<script src="../assets/pipeline.js?v=32"></script>
+<script src="../assets/pipeline.js?v=33"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 /* ─── RESET & VARIABLES ─── */
@@ -828,7 +828,7 @@ async function loadGoogleRank() {
         '<button onclick="grankInlineSearch()" class="grank-btn" style="white-space:nowrap">Find</button>' +
         '</div>' +
         '<div id="grankSearchResults" style="max-width:400px;margin:0 auto"></div>' +
-        '<div style="font-size:11px;color:var(--grey2);margin-top:10px"><a href="settings.html#leads" style="color:var(--amber);text-decoration:none">No Google listing?</a> You can set this up in Settings.</div>' +
+        '<div style="font-size:11px;color:var(--grey2);margin-top:10px;line-height:1.7">No Google listing? <a href="https://business.google.com/create" target="_blank" rel="noopener" style="color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.3)">Create one free \u2192</a> or <a href="settings.html#leads" style="color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.3)">connect it in Settings</a></div>' +
         '</div>';
       /* Enter key triggers search */
       setTimeout(function() {
@@ -1129,12 +1129,12 @@ window.addEventListener('DOMContentLoaded', async function() {
 
   document.body.style.visibility = 'visible';
   migrateUnscopedScoutKeys();
-  pipelineFetchMsgLang();
 
-  /* Load server state first so scout_review_link / scout_review_skip
-     are available before the first render. */
+  /* Load server state + message language before first render so chase
+     messages use the correct language and scout_review_link is available. */
   await loadScoutStateFromServer();
   await pipelineLoadFromServer();
+  await new Promise(function(ok) { pipelineFetchMsgLang(ok); });
 
   render();
   initCursor();

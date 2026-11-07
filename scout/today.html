@@ -9,7 +9,7 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
 <script src="../assets/scout.js?v=54"></script>
-<script src="../assets/pipeline.js?v=32"></script>
+<script src="../assets/pipeline.js?v=33"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -60,9 +60,6 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .lead-meta span{display:inline-flex;align-items:center;gap:4px}
 .lead-reason{font-size:12px;color:var(--amber-l);margin-bottom:16px;line-height:1.6;font-style:italic}
 .lead-pt{font-style:normal;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--grey1);background:rgba(250,250,248,0.06);padding:2px 6px;border-radius:2px;vertical-align:middle}
-.no-gmb{font-size:10px;color:var(--grey2);line-height:1.7}
-.no-gmb a{color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.3)}
-.no-gmb a:hover{color:var(--amber-l)}
 
 /* ── Channel buttons ── */
 .ch-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
@@ -567,8 +564,6 @@ function renderLeads(leads, containerId) {
     }
     if (l.mapsUrl) {
       html += '<a href="' + esc(l.mapsUrl) + '" target="_blank" rel="noopener" class="ch-btn maps">Maps</a>';
-    } else {
-      html += '<span class="no-gmb">No Google listing? <a href="https://business.google.com/create" target="_blank" rel="noopener">Create one free \u2192</a> or <a href="settings.html#google">connect it in Settings</a></span>';
     }
     if (channels.indexOf('linkedin') !== -1 && l.enrichment && l.enrichment.linkedIn) {
       html += '<a href="' + esc(l.enrichment.linkedIn) + '" target="_blank" rel="noopener" class="ch-btn li">LinkedIn</a>';
