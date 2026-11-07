@@ -9,8 +9,8 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=51"></script>
-<script src="../assets/pipeline.js?v=29"></script>
+<script src="../assets/scout.js?v=52"></script>
+<script src="../assets/pipeline.js?v=30"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -899,7 +899,8 @@ window.addEventListener('DOMContentLoaded', async function() {
       }
 
       /* State: normal — leads exist */
-      note.textContent = _ll.length + ' new' + (_lr.length > 0 ? ' \u00b7 ' + _lr.length + ' follow-up' : '');
+      var _newCount = _leadsD.todayCount || _ll.length;
+      note.textContent = _newCount + ' new' + (_ll.length > _newCount ? ' \u00b7 ' + (_ll.length - _newCount) + ' carry-over' : '') + (_lr.length > 0 ? ' \u00b7 ' + _lr.length + ' follow-up' : '');
       var h = '';
       _ll.slice(0, 3).forEach(function(l) {
         h += '<div style="margin-bottom:10px;padding:10px 12px;background:var(--black3);border:1px solid var(--border2)">';

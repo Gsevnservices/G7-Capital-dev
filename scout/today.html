@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=51"></script>
-<script src="../assets/pipeline.js?v=29"></script>
+<script src="../assets/scout.js?v=52"></script>
+<script src="../assets/pipeline.js?v=30"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -175,9 +175,15 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
   <div id="statsBar" class="stats-bar" style="display:none"></div>
 
-  <!-- Leads section -->
+  <!-- Carry-over leads from previous days -->
+  <div id="carryoverSection" style="display:none">
+    <div class="section-label" id="carryoverLabel">From yesterday</div>
+    <div id="carryoverList"></div>
+  </div>
+
+  <!-- Today's new leads -->
   <div id="leadsSection" style="display:none">
-    <div class="section-label">New leads</div>
+    <div class="section-label">New today</div>
     <div id="leadsList"></div>
   </div>
 
@@ -345,58 +351,81 @@ async function loadToday() {
 function finishRenderLeads(data) {
   var leads    = data.leads    || [];
   var reminders = data.reminders || [];
+  var today    = data.day || '';
 
-  /* ── Header card: show what Scout is looking for ── */
-  if (data.profileSummary) {
-    var ps = data.profileSummary;
-    var groups = (ps.groups && ps.groups.length) ? ps.groups.join(', ') : '';
-    var areas  = (ps.areas  && ps.areas.length)  ? ps.areas.join(', ')  : '';
-    var subParts = [];
-    if (groups) subParts.push(groups);
-    if (areas)  subParts.push('in ' + areas);
-    var subText = 'Scout is looking for: ' + subParts.join(' ');
-    document.getElementById('pageSub').innerHTML =
-      escHtml(subText) + ' \u00b7 <a href="settings.html" style="color:var(--amber);text-decoration:none">Edit</a>';
-  }
+  /* Split leads into carry-over (older days) and today's new */
+  var carryover = [];
+  var todayLeads = [];
+  leads.forEach(function(l) {
+    if (l.leadDay && l.leadDay < today) carryover.push(l);
+    else todayLeads.push(l);
+  });
 
-  /* ── All-handled state: every lead has been contacted/handled ── */
-  var foundLeads = leads.filter(function(l) { return l.status === 'found'; });
-  if (leads.length > 0 && foundLeads.length === 0 && reminders.length === 0) {
+  /* ── All-handled state: zero found leads and zero reminders ── */
+  /* leads from the API now only include stage=found, so if the list is empty
+     it means there are genuinely zero uncontacted leads */
+  if (leads.length === 0 && reminders.length === 0) {
     document.getElementById('emptyState').style.display = '';
-    document.getElementById('emptyTitle').textContent = 'All today\u2019s leads handled';
-    document.getElementById('emptyText').textContent = 'Next 5 arrive tomorrow at 6 AM.';
+    if (data.generatedAt) {
+      document.getElementById('pageSub').textContent = 'All done for today';
+      document.getElementById('emptyTitle').textContent = 'All leads handled \u2714';
+      document.getElementById('emptyText').textContent = 'Next 5 arrive tomorrow at 6 AM.';
+    } else {
+      document.getElementById('pageSub').textContent = '';
+      document.getElementById('emptyTitle').textContent = 'No leads yet';
+      document.getElementById('emptyText').textContent = 'New leads arrive each morning around 6 AM.';
+    }
     loadStatsWithReplyRate();
     return;
   }
 
-  /* ── No leads and no reminders at all ── */
-  if (leads.length === 0 && reminders.length === 0) {
-    document.getElementById('emptyState').style.display = '';
-    if (!document.getElementById('pageSub').innerHTML.includes('Scout is looking')) {
-      document.getElementById('pageSub').textContent = 'New leads arrive each morning around 6 AM.';
+  /* ── Subtitle: X new today · Y carry-over · Z reminders due ── */
+  var subParts = [];
+  if (todayLeads.length > 0) subParts.push(todayLeads.length + ' new today');
+  if (carryover.length > 0) subParts.push(carryover.length + ' from before');
+  if (reminders.length > 0) subParts.push(reminders.length + ' reminder' + (reminders.length !== 1 ? 's' : '') + ' due');
+  if (subParts.length > 0) {
+    document.getElementById('pageSub').textContent = subParts.join(' \u00b7 ');
+  } else if (data.profileSummary) {
+    var ps = data.profileSummary;
+    var groups = (ps.groups && ps.groups.length) ? ps.groups.join(', ') : '';
+    var areas  = (ps.areas  && ps.areas.length)  ? ps.areas.join(', ')  : '';
+    var st = [];
+    if (groups) st.push(groups);
+    if (areas)  st.push('in ' + areas);
+    document.getElementById('pageSub').innerHTML =
+      escHtml('Scout is looking for: ' + st.join(' ')) +
+      ' \u00b7 <a href="settings.html" style="color:var(--amber);text-decoration:none">Edit</a>';
+  }
+
+  /* ── Render carry-over leads (older days, shown first) ── */
+  if (carryover.length > 0) {
+    document.getElementById('carryoverSection').style.display = '';
+    /* Label: "From yesterday" or "From {weekday}" */
+    var oldestDay = carryover[0].leadDay;
+    var dayDiff = Math.round((new Date(today).getTime() - new Date(oldestDay).getTime()) / 86400000);
+    var label = dayDiff === 1 ? 'From yesterday' : 'From ' + new Date(oldestDay + 'T12:00:00').toLocaleDateString('en-IN', { weekday: 'long' });
+    if (carryover.length > 1) {
+      var days = {};
+      carryover.forEach(function(l) { days[l.leadDay] = true; });
+      if (Object.keys(days).length > 1) label = 'Carry-over (' + carryover.length + ')';
     }
-    return;
+    document.getElementById('carryoverLabel').textContent = label;
+    renderLeads(carryover, 'carryoverList');
   }
 
-  /* ── Standard pageSub (only if profileSummary didn't set it) ── */
-  if (!data.profileSummary) {
-    document.getElementById('pageSub').textContent =
-      leads.length + ' new lead' + (leads.length !== 1 ? 's' : '') + ' today' +
-      (reminders.length > 0 ? ' \u00b7 ' + reminders.length + ' reminder' + (reminders.length !== 1 ? 's' : '') + ' due' : '');
-  }
-
-  /* ── Render leads ── */
-  if (leads.length > 0) {
+  /* ── Render today's new leads ── */
+  if (todayLeads.length > 0) {
     document.getElementById('leadsSection').style.display = '';
-    renderLeads(leads);
+    renderLeads(todayLeads, 'leadsList');
   }
 
-  /* ── Shortfall banner: fewer than 5 leads ── */
-  if (leads.length > 0 && leads.length < 5) {
+  /* ── Shortfall banner: fewer than 5 new leads today ── */
+  if (todayLeads.length > 0 && todayLeads.length < 5 && data.shortfall) {
     var shortDiv = document.createElement('div');
     shortDiv.style.cssText = 'font-size:11px;color:var(--grey1);text-align:center;padding:16px 0;letter-spacing:.05em';
-    shortDiv.textContent = leads.length + ' today: Scout found only ' + leads.length +
-      ' good fit' + (leads.length !== 1 ? 's' : '') + '. More tomorrow.';
+    shortDiv.textContent = 'Scout found only ' + todayLeads.length +
+      ' good fit' + (todayLeads.length !== 1 ? 's' : '') + ' today. More tomorrow.';
     document.getElementById('leadsList').parentNode.appendChild(shortDiv);
   }
 
@@ -410,7 +439,8 @@ function finishRenderLeads(data) {
   loadStatsWithReplyRate();
 }
 
-function renderLeads(leads) {
+function renderLeads(leads, containerId) {
+  containerId = containerId || 'leadsList';
   var html = '';
   for (var i = 0; i < leads.length; i++) {
     var l = leads[i];
@@ -536,7 +566,7 @@ function renderLeads(leads) {
     html += '</div>';
     html += '</div>';
   }
-  document.getElementById('leadsList').innerHTML = html;
+  document.getElementById(containerId).innerHTML = html;
 }
 
 function renderReminders(reminders) {
@@ -743,6 +773,7 @@ async function loadStatsWithReplyRate() {
     var bar = document.getElementById('statsBar');
     var replyRate = s.contacted > 0 ? Math.round((s.replied || 0) / s.contacted * 100) : 0;
     bar.innerHTML =
+      '<div class="stat-item" style="color:var(--grey2);font-size:9px;letter-spacing:.12em">THIS WEEK</div>' +
       '<div class="stat-item">Found <strong>' + (s.found || 0) + '</strong></div>' +
       '<div class="stat-item">Contacted <strong>' + (s.contacted || 0) + '</strong></div>' +
       '<div class="stat-item">Replied <strong>' + (s.replied || 0) + '</strong></div>' +
