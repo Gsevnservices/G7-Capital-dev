@@ -196,6 +196,8 @@ g7_view_deal_id         — Temp: dealId set by history.html before navigating t
 - `splitIntoSections()` uses 4-state machine — do not simplify or it breaks dual-divider format
 - `g7_pending_result` must include `dealContent` field (added in Session 2) for CQ flow to work
 - Cloudflare Worker CORS only allows `gsevnservices.github.io` and `localhost:8080`
+- **Secrets:** Never echo, print, or test token/password/key variables — not even "set / not set" checks. Never read session tokens from KV or put them in commands. For dev testing, use only admin routes with `ADMIN_PASSWORD` sourced silently from `.env.local`.
+- **devlocal branch:** Never delete or recreate it. It carries dev-only commits (CNAME removal, .gitignore CNAME rule) that must not reach main. Always push to dev with: `git checkout devlocal && git merge main && git push dev devlocal:main --force && git checkout main`
 
 ---
 
