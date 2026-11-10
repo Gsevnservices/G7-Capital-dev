@@ -10,6 +10,8 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "playwright": "^1.65.0",
     "wrangler": "^3.114.17"
-  }
+  },
+  "dependencies": {}
 }

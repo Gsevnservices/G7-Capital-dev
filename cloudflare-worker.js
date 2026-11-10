@@ -63,19 +63,19 @@ var _env = null;       // set at top of fetch/scheduled — read-only ref for an
 var _clientErrCounts = {};  // IP:day → count (in-memory, resets on isolate restart)
 
 async function anthropicFetch(url, init, callerRoute) {
-  var r = await fetch(url, init);
-  if (r.status === 403) {
+  var attempts = 0;
+  var r;
+  while (true) {
+    r = await fetch(url, init);
+    if (r.status !== 403) break;
     var body403 = await r.text();
-    if (/request not allowed/i.test(body403)) {
-      console.log(JSON.stringify({ anthropic403: true, colo: _anthropicColo, body: body403.slice(0, 200), retry: true }));
-      await new Promise(function(ok) { setTimeout(ok, 1000); });
-      r = await fetch(url, init);
-      if (r.status === 403) {
-        var body403b = await r.text();
-        console.log(JSON.stringify({ anthropic403: true, colo: _anthropicColo, body: body403b.slice(0, 200), retry: false }));
-        throw new Error('Anthropic blocked this request (' + _anthropicColo + ') \u2014 check Worker placement');
-      }
+    if (!/request not allowed/i.test(body403)) break;
+    attempts++;
+    console.log(JSON.stringify({ anthropic403: true, colo: _anthropicColo, body: body403.slice(0, 200), attempt: attempts }));
+    if (attempts >= 2) {
+      throw new Error('Anthropic blocked this request (' + _anthropicColo + ') after ' + attempts + ' retries \u2014 check Worker placement');
     }
+    await new Promise(function(ok) { setTimeout(ok, 1500); });
   }
   if (!r.ok && _env) {
     var _errRoute = callerRoute || 'anthropic';
@@ -3518,6 +3518,74 @@ async function regenFoundMessages(env, firmCode, lang, ctx) {
   return { ok: true, count: updated, cost: totalCost.usd };
 }
 
+/* Nonce-guarded wrapper around regenFoundMessages.
+   Before writing each batch it checks whether the nonce in KV still matches.
+   If a newer language change wrote a new nonce, this run stops early so the
+   newer run's results win.  Used by the POST /scout/message-lang debounce. */
+async function regenFoundMessagesGuarded(env, firmCode, lang, ctx, nonceKey, myNonce) {
+  if (!env.DB) return { ok: false, error: 'no_db' };
+
+  var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  var bc = await budgetCheck(env, day, firmCode);
+  if (!bc.ok) return { ok: false, error: 'budget_exceeded' };
+
+  var rows = await env.DB.prepare(
+    "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL LIMIT 40"
+  ).bind(firmCode).all();
+  if (!rows.results || rows.results.length === 0) return { ok: true, count: 0, cost: 0 };
+
+  var profile = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var savedCtx = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  var context = (savedCtx && savedCtx.context) || '';
+  var city = (savedCtx && savedCtx.city) || '';
+  var totalCost = newCostAccum();
+  var updated = 0;
+
+  var allLeads = rows.results.map(function(r) {
+    var d; try { d = JSON.parse(r.data || '{}'); } catch(e) { d = {}; }
+    return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: (d.fit_reason || '').replace(/^[a-z_]+:\s*/i, ''), _rowId: r.id, _data: d };
+  });
+
+  for (var bi = 0; bi < allLeads.length; bi += 5) {
+    /* ── Nonce check before each batch ── */
+    var cur = await env.G7_KV.get(nonceKey);
+    if (cur !== myNonce) {
+      console.log('regen-guarded: superseded at batch ' + (bi / 5) + ' — stopping');
+      break;
+    }
+
+    var batch = allLeads.slice(bi, bi + 5);
+    var withMsgs = await generateLeadMessages(env, batch, profile, context, lang, totalCost, city);
+
+    for (var mi = 0; mi < withMsgs.length; mi++) {
+      var lead = withMsgs[mi];
+      if (lead.messages && lead._data) {
+        lead._data.messages = lead.messages;
+        await env.DB.prepare(
+          "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
+        ).bind(JSON.stringify(lead._data), firmCode, lead._rowId).run();
+        updated++;
+      }
+    }
+  }
+
+  /* Clean up nonce if we're still current */
+  var finalNonce = await env.G7_KV.get(nonceKey);
+  if (finalNonce === myNonce) await env.G7_KV.delete(nonceKey);
+
+  /* Update KV cache */
+  var cached = await env.G7_KV.get('scout:leads:' + firmCode + ':' + day, 'json');
+  if (cached && Array.isArray(cached.leads)) {
+    var msgMap = {};
+    allLeads.forEach(function(l) { if (l._rowId && l.messages) msgMap[l._rowId] = l.messages; });
+    cached.leads.forEach(function(cl) { if (msgMap[cl.id]) cl.messages = msgMap[cl.id]; });
+    await kvPut(env, 'scout:leads:' + firmCode + ':' + day, JSON.stringify(cached), { expirationTtl: 2 * 86400 });
+  }
+
+  await flushCost(env, day, firmCode, totalCost);
+  return { ok: true, count: updated, cost: totalCost.usd };
+}
+
 /* ── Pool helpers — read/write lead_pool in D1 ── */
 
 /* Read fresh pool candidates for a firm (not yet promoted to customers, < 30 days old) */
@@ -5685,6 +5753,33 @@ export default {
         ctx.waitUntil(flushCost(env, day, firmCode, cost));
         return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 300) }, 500);
       }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /admin/test-session — { adminPassword, firmCode }
+    // Creates a short-lived session token (1 hour) for automated testing.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/admin/test-session') {
+      if (env.ENVIRONMENT !== 'dev') return jsonResponse({ error: 'Not found' }, 404);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var _tsFirm = String(body.firmCode || '').toUpperCase().trim();
+      if (!_tsFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+      var _tsUser = await env.G7_KV.get('auth:users:' + _tsFirm, 'json');
+      if (!_tsUser) return jsonResponse({ error: 'firm not found' }, 404);
+      var _tsToken = crypto.randomUUID() + '-' + crypto.randomUUID();
+      var _tsNow = Date.now();
+      await kvPut(env, 'auth:sessions:' + _tsToken, JSON.stringify({
+        firmCode: _tsFirm,
+        firmName: _tsUser.firmName,
+        createdAt: _tsNow,
+        refreshedAt: _tsNow,
+        expiresAt: _tsNow + 3600000  // 1 hour
+      }), { expirationTtl: 3700 });
+      return jsonResponse({ token: _tsToken, firmCode: _tsFirm, expiresIn: 3600 });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -8001,14 +8096,25 @@ export default {
       user.messageLanguage = lang;
       await kvPut(env, key, JSON.stringify(user));
 
-      /* Regenerate messages for uncontacted leads when language actually changed */
+      /* Immediate nonce-guarded regen — starts right away (waitUntil has a
+         ~30 s wall-clock budget, so the old 60 s setTimeout couldn't survive).
+         A nonce in KV lets concurrent runs detect supersession: before writing
+         each batch of messages the function checks whether a newer language
+         change has replaced the nonce, and stops early if so. */
+      var _mlDidSchedule = false;
       if (lang !== _mlOldLang && env.DB) {
-        ctx.waitUntil(regenFoundMessages(env, session.firmCode, lang, ctx).catch(function(e) {
+        var _mlNonce = crypto.randomUUID();
+        var _mlDKey = 'regen:nonce:' + session.firmCode;
+        await kvPut(env, _mlDKey, _mlNonce, { expirationTtl: 300 });
+        _mlDidSchedule = true;
+        ctx.waitUntil((async function() {
+          await regenFoundMessagesGuarded(env, session.firmCode, lang, ctx, _mlDKey, _mlNonce);
+        })().catch(function(e) {
           console.log('message-lang regen error: ' + (e.message || e));
         }));
       }
 
-      return jsonResponse({ language: user.messageLanguage, regenerating: lang !== _mlOldLang });
+      return jsonResponse({ language: user.messageLanguage, regenerating: _mlDidSchedule });
     }
 
     // ─────────────────────────────────────────────────────────────

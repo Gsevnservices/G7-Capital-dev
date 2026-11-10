@@ -569,14 +569,13 @@ function renderShots() {
   var grid = document.getElementById('shotGrid');
   if (!grid) return;
   var frames = [
-    { src: '../assets/scout/shots/move.png', cap: 'Scout\'s Move' },
-    { src: '../assets/scout/shots/messages.png', cap: 'Ready Messages' },
-    { src: '../assets/scout/shots/followups.png', cap: 'Follow-Ups Today' }
+    { cap: 'Scout Move' },
+    { cap: 'Ready Messages' },
+    { cap: 'Follow-Ups Today' }
   ];
   var html = '';
   frames.forEach(function(f) {
-    html += '<div class="shot">' +
-      '<img src="' + esc(f.src) + '" alt="' + esc(f.cap) + '" onerror="this.outerHTML=\'<div class=shot-ph>' + esc(f.cap) + '</div>\'">' +
+    html += '<div class="shot"><div class="shot-ph">' + esc(f.cap) + '</div>' +
       '<div class="shot-cap">' + esc(f.cap) + '</div></div>';
   });
   grid.innerHTML = html;
