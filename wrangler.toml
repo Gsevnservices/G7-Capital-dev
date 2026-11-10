@@ -23,6 +23,7 @@ minify = true
 
 [placement]
 mode = "smart"
+hostname = "api.anthropic.com"
 
 [observability]
 enabled = true
@@ -53,6 +54,7 @@ crons = []
 
 [env.dev.placement]
 mode = "smart"
+hostname = "api.anthropic.com"
 
 [env.dev.observability]
 enabled = true

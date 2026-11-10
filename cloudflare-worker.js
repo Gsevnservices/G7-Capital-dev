@@ -67,6 +67,8 @@ async function anthropicFetch(url, init, callerRoute) {
   var r;
   while (true) {
     r = await fetch(url, init);
+    /* Log colo on every Anthropic call for placement visibility */
+    console.log(JSON.stringify({ anthropicCall: true, colo: _anthropicColo, status: r.status, route: callerRoute || 'anthropic' }));
     if (r.status !== 403) break;
     var body403 = await r.text();
     if (!/request not allowed/i.test(body403)) break;
