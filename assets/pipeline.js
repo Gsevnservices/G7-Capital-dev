@@ -645,9 +645,11 @@ function pipelineDisplayName(person) {
 function pipelineGreeting(person, lang) {
   var dn = pipelineDisplayName(person);
   if (dn.kind === 'business') {
+    if (lang === 'Hindi') return '\u0928\u092E\u0938\u094D\u0924\u0947 ' + dn.full + ' \u091F\u0940\u092E';
     if (lang === 'English') return 'Hi ' + dn.full + ' team';
     return 'Namaste ' + dn.full + ' team';
   }
+  if (lang === 'Hindi') return '\u0928\u092E\u0938\u094D\u0924\u0947 ' + dn.first + ' \u091C\u0940';
   if (lang === 'English') return 'Hi ' + dn.first;
   return 'Namaste ' + dn.first + ' ji';
 }
@@ -673,6 +675,41 @@ var FOLLOW_UP_TEMPLATES = {
     English:  'Hi {name}, thank you for choosing {business}! If you have a minute, a Google review would really help us: {link}',
     Hinglish: 'Namaste {name} ji, {business} chunne ke liye dhanyavaad! Ek minute ho toh Google review de dijiye, bahut madad hogi: {link}',
     Hindi:    '\u0928\u092E\u0938\u094D\u0924\u0947 {name} \u091C\u0940, {business} \u091A\u0941\u0928\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F \u0927\u0928\u094D\u092F\u0935\u093E\u0926! \u090F\u0915 \u092E\u093F\u0928\u091F \u0939\u094B \u0924\u094B Google review \u0926\u0947 \u0926\u0940\u091C\u093F\u090F, \u092C\u0939\u0941\u0924 \u092E\u0926\u0926 \u0939\u094B\u0917\u0940: {link}'
+  },
+  callback: {
+    English:  '{greet} \u2014 you had asked us to follow up today. When would be a good time to talk?',
+    Hinglish: '{greet} \u2014 aapne kaha tha aaj follow up karenge. Kab baat kar sakte hain?',
+    Hindi:    '{greet} \u2014 \u0906\u092A\u0928\u0947 \u0915\u0939\u093E \u0925\u093E \u0906\u091C follow up \u0915\u0930\u0947\u0902\u0917\u0947\u0964 \u0915\u092C \u092C\u093E\u0924 \u0915\u0930 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?'
+  },
+  chase_3: {
+    English:  '{greet} \u2014 following up on our last message. Would any day this week work for a quick chat?',
+    Hinglish: '{greet} \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?',
+    Hindi:    '{greet} \u2014 \u092A\u093F\u091B\u0932\u0947 message \u0915\u093E follow-up\u0964 \u0915\u094B\u0908 \u0926\u093F\u0928 \u0938\u0942\u091F \u0915\u0930\u0924\u093E \u0939\u0948 \u092C\u093E\u0924 \u0915\u0930\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F?'
+  },
+  chase_7: {
+    English:  '{greet} \u2014 just following up one more time. Is there a day that works for a quick chat?',
+    Hinglish: '{greet} \u2014 hum ek baar aur pooch rahe hain. Aapke liye koi din suit karta hai baat karne ke liye?',
+    Hindi:    '{greet} \u2014 \u0939\u092E \u090F\u0915 \u092C\u093E\u0930 \u0914\u0930 \u092A\u0942\u091B \u0930\u0939\u0947 \u0939\u0948\u0902\u0964 \u0915\u094B\u0908 \u0926\u093F\u0928 \u0938\u0942\u091F \u0915\u0930\u0924\u093E \u0939\u0948 \u092C\u093E\u0924 \u0915\u0930\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F?'
+  },
+  chase_14: {
+    English:  '{greet} \u2014 this is our last follow-up. If you ever need anything, we are here.',
+    Hinglish: '{greet} \u2014 hum last time follow up kar rahe hain. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.',
+    Hindi:    '{greet} \u2014 \u0939\u092E \u0906\u0916\u093F\u0930\u0940 \u092C\u093E\u0930 follow up \u0915\u0930 \u0930\u0939\u0947 \u0939\u0948\u0902\u0964 \u0915\u092D\u0940 \u091C\u093C\u0930\u0942\u0930\u0924 \u0939\u094B \u0924\u094B \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964'
+  },
+  replied_stale: {
+    English:  '{greet} \u2014 you had shown interest. Shall we block a slot this week? Just let us know the day.',
+    Hinglish: '{greet} \u2014 aapne interest dikhaya tha. Is week ek slot rakh dein? Bas din bata dijiye.',
+    Hindi:    '{greet} \u2014 \u0906\u092A\u0928\u0947 \u0930\u0941\u091A\u093F \u0926\u093F\u0916\u093E\u0908 \u0925\u0940\u0964 \u0907\u0938 \u0939\u092B\u093C\u094D\u0924\u0947 \u090F\u0915 slot \u0930\u0916 \u0926\u0947\u0902? \u092C\u0938 \u0926\u093F\u0928 \u092C\u0924\u093E \u0926\u0940\u091C\u093F\u090F\u0964'
+  },
+  trial_check: {
+    English:  '{greet} \u2014 how did it go? Let us know if there is anything we can help with.',
+    Hinglish: '{greet} \u2014 kaisa raha? Koi baat ho toh bata dena.',
+    Hindi:    '{greet} \u2014 \u0915\u0948\u0938\u093E \u0930\u0939\u093E? \u0915\u094B\u0908 \u092C\u093E\u0924 \u0939\u094B \u0924\u094B \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964'
+  },
+  gone_quiet: {
+    English:  '{greet} \u2014 it has been a while. Whenever you are ready, we are here.',
+    Hinglish: '{greet} \u2014 kaafi time ho gaya. Jab ready ho, bata dena.',
+    Hindi:    '{greet} \u2014 \u0915\u093E\u092B\u093C\u0940 \u0938\u092E\u092F \u0939\u094B \u0917\u092F\u093E\u0964 \u091C\u092C \u0924\u0948\u092F\u093E\u0930 \u0939\u094B\u0902, \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964'
   }
 };
 
@@ -680,6 +717,7 @@ function templateMsg(key, lang, vars) {
   var tpl = FOLLOW_UP_TEMPLATES[key];
   if (!tpl) return '';
   var msg = tpl[lang] || tpl.Hinglish || '';
+  msg = msg.replace(/\{greet\}/g, vars.greet || '');
   msg = msg.replace(/\{name\}/g, vars.name || 'there');
   msg = msg.replace(/\{business\}/g, vars.business || '');
   if (!vars.link) {
@@ -760,9 +798,7 @@ function pipelineDue() {
         out.push({
           person: p, urgency: 4, isCallback: true,
           reason: dn.first + ' asked you to call back today',
-          msg: lang === 'English'
-            ? greet + ' \u2014 you had asked us to follow up today. When would be a good time to talk?'
-            : greet + ' \u2014 aapne kaha tha aaj follow up karenge. Kab baat kar sakte hain?'
+          msg: templateMsg('callback', lang, { greet: greet })
         });
       }
     }
@@ -791,24 +827,16 @@ function pipelineDue() {
 
     if (p.status === 'contacted' && d >= 14) {
       item = { reason: 'No response in ' + d + ' days', urgency: 3,
-               msg: lang === 'English'
-                 ? greet + ' \u2014 this is our last follow-up. If you ever need anything, we are here.'
-                 : greet + ' \u2014 hum last time follow up kar rahe hain. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.' };
+               msg: templateMsg('chase_14', lang, { greet: greet }) };
     } else if (p.status === 'contacted' && d >= 7) {
       item = { reason: 'No reply for ' + d + ' days \u2014 final follow-up', urgency: 2,
-               msg: lang === 'English'
-                 ? greet + ' \u2014 just following up one more time. Is there a day that works for a quick chat?'
-                 : greet + ' \u2014 hum ek baar aur pooch rahe hain. Aapke liye koi din suit karta hai baat karne ke liye?' };
+               msg: templateMsg('chase_7', lang, { greet: greet }) };
     } else if (p.status === 'contacted' && d >= 3) {
       item = { reason: 'No reply for ' + d + ' days', urgency: 1,
-               msg: lang === 'English'
-                 ? greet + ' \u2014 following up on our last message. Would any day this week work for a quick chat?'
-                 : greet + ' \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?' };
+               msg: templateMsg('chase_3', lang, { greet: greet }) };
     } else if (p.status === 'replied' && d >= 5) {
       item = { reason: 'Replied ' + d + ' days ago but has not booked', urgency: 3,
-               msg: lang === 'English'
-                 ? greet + ' \u2014 you had shown interest. Shall we block a slot this week? Just let us know the day.'
-                 : greet + ' \u2014 aapne interest dikhaya tha. Is week ek slot rakh dein? Bas din bata dijiye.' };
+               msg: templateMsg('replied_stale', lang, { greet: greet }) };
     } else if (p.status === 'trial_booked' && bucket === 'trade') {
       if (d >= 15) {
         item = { reason: 'Quote sent ' + d + ' days ago', urgency: 2,
@@ -822,14 +850,10 @@ function pipelineDue() {
       }
     } else if (p.status === 'trial_booked' && d >= 1) {
       item = { reason: stageLabel('trial_booked') + ' was ' + d + ' day(s) ago \u2014 did they show?', urgency: 3,
-               msg: lang === 'English'
-                 ? greet + ' \u2014 how did it go? Let us know if there is anything we can help with.'
-                 : greet + ' \u2014 kaisa raha? Koi baat ho toh bata dena.' };
+               msg: templateMsg('trial_check', lang, { greet: greet }) };
     } else if (p.status === 'gone_quiet' && d >= 14) {
       item = { reason: 'Quiet for ' + d + ' days', urgency: 1,
-               msg: lang === 'English'
-                 ? greet + ' \u2014 it has been a while. Whenever you are ready, we are here.'
-                 : greet + ' \u2014 kaafi time ho gaya. Jab ready ho, bata dena.' };
+               msg: templateMsg('gone_quiet', lang, { greet: greet }) };
     }
     /* stage=found (never contacted) is excluded from Chase — shown in "Not contacted yet" section instead */
 
