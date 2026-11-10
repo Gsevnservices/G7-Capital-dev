@@ -3457,7 +3457,8 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
       first: String(m.first_message || '').slice(0, 500),
       reminder1: String(m.reminder1 || '').slice(0, 300),
       reminder2: String(m.reminder2 || '').slice(0, 300),
-      visitPitch: String(m.visit_pitch || '').slice(0, 400)
+      visitPitch: String(m.visit_pitch || '').slice(0, 400),
+      lang: lang || 'Hinglish'
     };
   }
   return leads;
@@ -3586,6 +3587,71 @@ async function regenFoundMessagesGuarded(env, firmCode, lang, ctx, nonceKey, myN
 
   await flushCost(env, day, firmCode, totalCost);
   return { ok: true, count: updated, cost: totalCost.usd };
+}
+
+/* Regenerate messages for at most 5 found leads whose messages.lang doesn't
+   match the target language. Returns { ok, updated, remaining, cost }.
+   Checks nonce before generating — stops if a newer change superseded us.
+   Used by POST /scout/message-lang (initial batch) and POST /scout/leads/regen-batch (loop). */
+async function regenBatch5(env, firmCode, lang, nonceKey, myNonce) {
+  if (!env.DB) return { ok: false, error: 'no_db', updated: 0, remaining: 0 };
+
+  /* Nonce check */
+  if (nonceKey && myNonce) {
+    var cur = await env.G7_KV.get(nonceKey);
+    if (cur !== myNonce) return { ok: true, updated: 0, remaining: 0, superseded: true };
+  }
+
+  var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  var bc = await budgetCheck(env, day, firmCode);
+  if (!bc.ok) return { ok: false, error: 'budget_exceeded', updated: 0, remaining: 0 };
+
+  /* Find leads whose messages.lang != target lang (or have no messages at all) */
+  var rows = await env.DB.prepare(
+    "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.messages.lang') IS NULL OR json_extract(data, '$.messages.lang') != ?) LIMIT 40"
+  ).bind(firmCode, lang).all();
+  if (!rows.results || rows.results.length === 0) return { ok: true, updated: 0, remaining: 0 };
+
+  var total = rows.results.length;
+  /* Take only the first 5 */
+  var batch5 = rows.results.slice(0, 5);
+
+  var profile = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var savedCtx = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
+  var context = (savedCtx && savedCtx.context) || '';
+  var city = (savedCtx && savedCtx.city) || '';
+  var totalCost = newCostAccum();
+
+  var allLeads = batch5.map(function(r) {
+    var d; try { d = JSON.parse(r.data || '{}'); } catch(e) { d = {}; }
+    return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: (d.fit_reason || '').replace(/^[a-z_]+:\s*/i, ''), _rowId: r.id, _data: d };
+  });
+
+  var withMsgs = await generateLeadMessages(env, allLeads, profile, context, lang, totalCost, city);
+  var updated = 0;
+  for (var mi = 0; mi < withMsgs.length; mi++) {
+    var lead = withMsgs[mi];
+    if (lead.messages && lead._data) {
+      lead._data.messages = lead.messages;
+      await env.DB.prepare(
+        "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
+      ).bind(JSON.stringify(lead._data), firmCode, lead._rowId).run();
+      updated++;
+    }
+  }
+
+  /* Update KV cache */
+  var cached = await env.G7_KV.get('scout:leads:' + firmCode + ':' + day, 'json');
+  if (cached && Array.isArray(cached.leads)) {
+    var msgMap = {};
+    allLeads.forEach(function(l) { if (l._rowId && l.messages) msgMap[l._rowId] = l.messages; });
+    cached.leads.forEach(function(cl) { if (msgMap[cl.id]) cl.messages = msgMap[cl.id]; });
+    await kvPut(env, 'scout:leads:' + firmCode + ':' + day, JSON.stringify(cached), { expirationTtl: 2 * 86400 });
+  }
+
+  await flushCost(env, day, firmCode, totalCost);
+  var remaining = total - updated;
+  return { ok: true, updated: updated, remaining: remaining > 0 ? remaining : 0, cost: totalCost.usd };
 }
 
 /* ── Pool helpers — read/write lead_pool in D1 ── */
@@ -5805,9 +5871,10 @@ export default {
       }
       try {
         var _arResult = await regenFoundMessages(env, _arFirm, _arLang, ctx);
+        _arResult.colo = _anthropicColo;
         return jsonResponse(_arResult);
       } catch (e) {
-        return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 300) }, 500);
+        return jsonResponse({ error: 'regen_failed', colo: _anthropicColo, detail: String((e && e.message) || e).slice(0, 300) }, 500);
       }
     }
 
@@ -8098,25 +8165,47 @@ export default {
       user.messageLanguage = lang;
       await kvPut(env, key, JSON.stringify(user));
 
-      /* Immediate nonce-guarded regen — starts right away (waitUntil has a
-         ~30 s wall-clock budget, so the old 60 s setTimeout couldn't survive).
-         A nonce in KV lets concurrent runs detect supersession: before writing
-         each batch of messages the function checks whether a newer language
-         change has replaced the nonce, and stops early if so. */
-      var _mlDidSchedule = false;
+      /* Regenerate at most 5 leads synchronously. The frontend loops via
+         POST /scout/leads/regen-batch until all leads match. This keeps
+         each request well within wall-clock limits. A nonce prevents
+         concurrent language changes from stomping each other. */
+      var _mlRemaining = 0;
       if (lang !== _mlOldLang && env.DB) {
         var _mlNonce = crypto.randomUUID();
         var _mlDKey = 'regen:nonce:' + session.firmCode;
         await kvPut(env, _mlDKey, _mlNonce, { expirationTtl: 300 });
-        _mlDidSchedule = true;
-        ctx.waitUntil((async function() {
-          await regenFoundMessagesGuarded(env, session.firmCode, lang, ctx, _mlDKey, _mlNonce);
-        })().catch(function(e) {
-          console.log('message-lang regen error: ' + (e.message || e));
-        }));
+        var _mlBatch = await regenBatch5(env, session.firmCode, lang, _mlDKey, _mlNonce);
+        _mlRemaining = _mlBatch.remaining;
       }
 
-      return jsonResponse({ language: user.messageLanguage, regenerating: _mlDidSchedule });
+      return jsonResponse({ language: user.messageLanguage, remaining: _mlRemaining });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/leads/regen-batch — regenerate messages for up to 5
+    //   found leads whose messages.lang doesn't match the current setting.
+    //   The frontend calls this in a loop until remaining === 0.
+    //   Checks the nonce so concurrent language changes don't collide.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/leads/regen-batch') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'no_db' }, 500);
+
+      var _rbUser = await env.G7_KV.get('auth:users:' + session.firmCode, 'json');
+      var _rbLang = (_rbUser && _rbUser.messageLanguage) || 'Hinglish';
+      var _rbNonceKey = 'regen:nonce:' + session.firmCode;
+      var _rbNonce = await env.G7_KV.get(_rbNonceKey);
+      /* If there's no nonce (first call from Today page, not from language change),
+         create one so subsequent calls can be checked. */
+      if (!_rbNonce) {
+        _rbNonce = crypto.randomUUID();
+        await kvPut(env, _rbNonceKey, _rbNonce, { expirationTtl: 300 });
+      }
+      var _rbResult = await regenBatch5(env, session.firmCode, _rbLang, _rbNonceKey, _rbNonce);
+      _rbResult.colo = _anthropicColo;
+      _rbResult.lang = _rbLang;
+      return jsonResponse(_rbResult);
     }
 
     // ─────────────────────────────────────────────────────────────

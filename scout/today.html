@@ -182,6 +182,11 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div style="font-size:11px;color:var(--grey1);margin-top:4px">About a minute <span id="genBannerDots" style="color:var(--amber)">\u25CF</span></div>
   </div>
 
+  <!-- Language regen banner: shown while messages are being updated to match the language setting -->
+  <div id="regenBanner" style="display:none;background:rgba(224,146,47,0.06);border:1px solid var(--border);border-radius:8px;padding:12px 20px;margin-bottom:16px;text-align:center">
+    <div style="font-size:12px;color:var(--amber);letter-spacing:.03em" id="regenText">Updating messages\u2026</div>
+  </div>
+
   <!-- Carry-over leads from previous days -->
   <div id="carryoverSection" style="display:none">
     <div class="section-label" id="carryoverLabel">From yesterday</div>
@@ -455,8 +460,68 @@ function finishRenderLeads(data) {
     renderReminders(reminders);
   }
 
+  /* ── Check if any lead's messages.lang doesn't match the current setting ── */
+  checkMessageLangMismatch(leads);
+
   /* ── Stats bar ── */
   loadStatsWithReplyRate();
+}
+
+/* ── Language mismatch regen loop ── */
+var _regenActive = false;
+function checkMessageLangMismatch(leads) {
+  if (_regenActive) return;
+  /* Fetch the current language setting */
+  fetch(SCOUT_WORKER + '/scout/message-lang', { headers: _auth })
+    .then(function(r) { return r.json(); })
+    .then(function(j) {
+      if (!j || !j.language) return;
+      var target = j.language;
+      var mismatched = leads.filter(function(l) {
+        return l.messages && l.messages.first && l.messages.lang !== target;
+      });
+      if (mismatched.length === 0) return;
+      /* Show banner and start regen loop */
+      _regenActive = true;
+      var banner = document.getElementById('regenBanner');
+      var text = document.getElementById('regenText');
+      banner.style.display = '';
+      text.textContent = 'Updating messages to ' + target + '\u2026';
+      regenBatchLoop(target, text);
+    })
+    .catch(function() {});
+}
+
+function regenBatchLoop(targetLang, textEl) {
+  fetch(SCOUT_WORKER + '/scout/leads/regen-batch', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, _auth)
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    if (!j.ok && j.error === 'budget_exceeded') {
+      textEl.textContent = 'Budget limit reached. Try again later.';
+      _regenActive = false;
+      return;
+    }
+    if (j.superseded) {
+      textEl.textContent = 'Language changed — restarting\u2026';
+      _regenActive = false;
+      return;
+    }
+    var done = j.updated || 0;
+    var left = j.remaining || 0;
+    if (left > 0) {
+      textEl.textContent = 'Updating messages to ' + targetLang + '\u2026 ' + left + ' left';
+      setTimeout(function() { regenBatchLoop(targetLang, textEl); }, 500);
+    } else {
+      /* All done — hide banner, reload leads */
+      document.getElementById('regenBanner').style.display = 'none';
+      _regenActive = false;
+      loadToday();
+    }
+  }).catch(function() {
+    textEl.textContent = 'Update failed. Refresh to retry.';
+    _regenActive = false;
+  });
 }
 
 function renderLeads(leads, containerId) {
