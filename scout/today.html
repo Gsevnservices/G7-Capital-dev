@@ -313,14 +313,14 @@ async function loadToday() {
     return;
   }
 
-  /* ── State 2: generating with NO leads — full-screen waiting state ── */
+  /* ── State 2: generating with NO leads — call POST to generate in-request ── */
   if (_todayData.generating && leads.length === 0) {
     document.getElementById('pageSub').textContent = '';
     document.getElementById('emptyState').style.display = '';
     document.getElementById('emptyTitle').textContent = 'Finding your first leads\u2026';
     document.getElementById('emptyText').innerHTML =
       'This takes about a minute. <span id="genDots" style="color:var(--amber)">&#x25CF;</span>';
-    startGeneratingPoll();
+    startGenerate();
     return;
   }
 
@@ -335,12 +335,12 @@ async function loadToday() {
   finishRenderLeads(_todayData);
 }
 
-/* ── Poll for today's generation to finish (shared by empty-state and banner) ── */
-var _pollActive = false;
-function startGeneratingPoll() {
-  if (_pollActive) return; // prevent duplicate timers
-  _pollActive = true;
-  var _genStart = Date.now();
+/* ── Generate leads: POST to /scout/leads/generate (runs in-request, not background) ── */
+var _genActive = false;
+function startGenerate() {
+  if (_genActive) return;
+  _genActive = true;
+  /* Dot animation while waiting */
   var _dotFrames = ['\u25CF', '\u25CF\u25CF', '\u25CF\u25CF\u25CF'];
   var _dotIdx = 0;
   var _dotTimer = setInterval(function() {
@@ -348,31 +348,39 @@ function startGeneratingPoll() {
     var el = document.getElementById('genDots') || document.getElementById('genBannerDots');
     if (el) el.textContent = _dotFrames[_dotIdx];
   }, 500);
-  var _pollTimer = setInterval(async function() {
-    /* Timeout: if generation takes over 3 minutes, show error state */
-    if (Date.now() - _genStart > 180000) {
-      clearInterval(_pollTimer);
-      clearInterval(_dotTimer);
-      _pollActive = false;
+
+  /* AbortController for 3-minute timeout */
+  var ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var _to = setTimeout(function() {
+    if (ac) ac.abort();
+    clearInterval(_dotTimer);
+    _genActive = false;
+    _showGenError();
+  }, 180000);
+
+  fetch(SCOUT_WORKER + '/scout/leads/generate', {
+    method: 'POST', headers: _auth, signal: ac ? ac.signal : undefined
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    clearTimeout(_to);
+    clearInterval(_dotTimer);
+    _genActive = false;
+    if (j.ok && (j.found > 0 || j.status === 'already_generated' || j.status === 'daily_cap')) {
+      /* Reload full today data */
+      loadToday();
+    } else if (j.ok && j.found === 0) {
+      document.getElementById('emptyState').style.display = '';
+      document.getElementById('emptyTitle').textContent = 'No leads found today';
+      document.getElementById('emptyText').textContent = j.status === 'budget_exceeded' ? 'Daily budget reached.' : 'Scout will try again tomorrow.';
+    } else {
       _showGenError();
-      return;
     }
-    try {
-      var pr = await fetch(SCOUT_WORKER + '/scout/leads/today', { headers: _auth });
-      if (!pr.ok) return;
-      var pd = await pr.json();
-      /* Stop polling once today's generation has produced leads or finished */
-      if ((pd.todayCount && pd.todayCount > 0) || (pd.generatedAt && !pd.generating)) {
-        clearInterval(_pollTimer);
-        clearInterval(_dotTimer);
-        _pollActive = false;
-        _todayData = pd;
-        document.getElementById('emptyState').style.display = 'none';
-        document.getElementById('generatingBanner').style.display = 'none';
-        finishRenderLeads(_todayData);
-      }
-    } catch (e) {}
-  }, 8000);
+  }).catch(function(e) {
+    clearTimeout(_to);
+    clearInterval(_dotTimer);
+    _genActive = false;
+    if (e.name === 'AbortError') return; /* timeout already handled */
+    _showGenError();
+  });
 }
 
 function _showGenError() {
@@ -442,7 +450,7 @@ function finishRenderLeads(data) {
   /* ── "Finding today's 5…" banner when generating with carry-over ── */
   if (data.generating && todayLeads.length === 0) {
     document.getElementById('generatingBanner').style.display = '';
-    startGeneratingPoll();
+    startGenerate();
   }
 
   /* ── Render carry-over leads (older days, shown first) ── */

@@ -4127,7 +4127,7 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
     shortfall: shortfallReasons
   }));
 
-  return { status: 'ok', found: savedLeads.length, textSearchCalls: textSearchCalls, detailsCalls: detailsCalls, poolSize: pool.length - picked.length, droppedByType: droppedByType, droppedByFit: droppedByFit, shortfall: shortfallReasons };
+  return { status: 'ok', found: savedLeads.length, leads: savedLeads, textSearchCalls: textSearchCalls, detailsCalls: detailsCalls, poolSize: pool.length - picked.length, droppedByType: droppedByType, droppedByFit: droppedByFit, shortfall: shortfallReasons };
 }
 
 /* ── Places cost entries for COST_TABLE ──
@@ -6374,14 +6374,9 @@ export default {
                 await kvPut(env, 'scout:leadprofile:' + session.firmCode, JSON.stringify(_lpProf), { expirationTtl: 30 * 86400 });
                 await kvPut(env, _lpSrcKey, _lpNewHash, { expirationTtl: 30 * 86400 });
                 await flushCost(env, day, session.firmCode, _lpC);
-                /* Auto-start: run lead generation immediately after profile created */
-                try {
-                  var _lpRunC = newCostAccum();
-                  await runLeadsForFirm(env, session.firmCode, day, _lpRunC);
-                  await flushCost(env, day, session.firmCode, _lpRunC);
-                } catch (e2) {
-                  try { await recordError(env, { source: 'worker', route: 'leads/auto-run', firmCode: session.firmCode, kind: 'auto_run', message: String(e2.message || e2) }); } catch(e3) {}
-                }
+                /* Lead generation is now triggered by POST /scout/leads/generate
+                   when the user visits Today. No ctx.waitUntil here — it was being
+                   terminated before completion. */
               }
             } catch (e) {
               try { await recordError(env, { source: 'worker', route: 'leads/auto-profile', firmCode: session.firmCode, kind: 'auto_gen', message: String(e.message || e) }); } catch(e2) {}
@@ -6878,17 +6873,8 @@ export default {
           _lpExisting.areas = _lpBody.areas.slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
         }
         await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpExisting), { expirationTtl: 30 * 86400 });
-        /* Trigger first lead generation immediately */
-        var _lpDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
-        var _lpCost = newCostAccum();
-        ctx.waitUntil((async function() {
-          try {
-            await runLeadsForFirm(env, _lpSess2.firmCode, _lpDay, _lpCost);
-            await flushCost(env, _lpDay, _lpSess2.firmCode, _lpCost);
-          } catch (e) {
-            await recordError(env, { source: 'worker', route: 'leads/first', firmCode: _lpSess2.firmCode, kind: 'first_run', message: String(e.message || e) });
-          }
-        })());
+        /* Lead generation now runs via POST /scout/leads/generate when the
+           user visits Today. Removed ctx.waitUntil — it was being terminated. */
         return jsonResponse({ ok: true, profile: _lpExisting });
       }
 
@@ -7084,47 +7070,17 @@ export default {
         } catch (e) {}
       }
 
-      /* ── Trigger today's generation if it hasn't run yet ── */
+      /* ── Check if generation is needed ── */
       var _ltProfile = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
       var _ltGenerating = false;
       if (!_ltProfile) {
-        /* No profile at all */
         return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, noProfile: true });
       }
       if (!_ltCached && _ltTodayCount === 0) {
-        /* Today hasn't run — start background generation (even with carry-over) */
+        /* Today hasn't run — tell the frontend to call POST /scout/leads/generate */
         var _ltGenKey = 'scout:leads:generating:' + _ltSess.firmCode + ':' + _ltDay;
         var _ltGenLock = await env.G7_KV.get(_ltGenKey);
-        if (!_ltGenLock) {
-          /* Check daily cap before starting */
-          var _ltCapOk = true;
-          if (env.DB) {
-            try {
-              var _ltCapRow = await env.DB.prepare(
-                "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
-              ).bind(_ltSess.firmCode, _ltDay).first();
-              if (_ltCapRow && _ltCapRow.cnt >= 5) _ltCapOk = false;
-            } catch (e) {}
-          }
-          if (_ltCapOk) {
-            await kvPut(env, _ltGenKey, '1', { expirationTtl: 600 });
-            _ltGenerating = true;
-            ctx.waitUntil((async function() {
-              try {
-                var _ltBC = await budgetCheck(env, _ltDay, _ltSess.firmCode);
-                if (_ltBC.ok) {
-                  var _ltCost = newCostAccum();
-                  await runLeadsForFirm(env, _ltSess.firmCode, _ltDay, _ltCost);
-                  await flushCost(env, _ltDay, _ltSess.firmCode, _ltCost);
-                }
-              } catch (e) {
-                try { await recordError(env, { source: 'worker', route: 'leads/on-demand', firmCode: _ltSess.firmCode, kind: 'on_demand', message: String(e.message || e) }); } catch(e2) {}
-              }
-            })());
-          }
-        } else {
-          _ltGenerating = true; // lock exists = generation already in progress
-        }
+        _ltGenerating = !!_ltGenLock || true; /* always signal generating-needed */
       }
 
       /* Build profile summary for response */
@@ -7140,6 +7096,73 @@ export default {
         generating: _ltGenerating || false,
         profileSummary: _ltProfSummary
       });
+    }
+
+    // ── POST /scout/leads/generate — run lead generation in-request ──
+    // Protected by KV lock (one run per firm per day). Returns leads directly.
+    // The frontend calls this when GET /scout/leads/today says generating=true.
+    if (request.method === 'POST' && path === '/scout/leads/generate') {
+      var _lgSess = await validateSession(request, env);
+      if (!_lgSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _lgDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _lgLockKey = 'scout:leads:generating:' + _lgSess.firmCode + ':' + _lgDay;
+
+      /* KV lock: only one generation per firm per day */
+      var _lgLock = await env.G7_KV.get(_lgLockKey);
+      if (_lgLock === 'done') {
+        /* Already finished — return current data */
+        var _lgExist = await env.G7_KV.get('scout:leads:' + _lgSess.firmCode + ':' + _lgDay, 'json');
+        return jsonResponse({ ok: true, status: 'already_generated', leads: (_lgExist && _lgExist.leads) || [] });
+      }
+      if (_lgLock === 'running') {
+        return jsonResponse({ ok: true, status: 'in_progress' });
+      }
+
+      /* Check daily cap */
+      if (env.DB) {
+        try {
+          var _lgCapRow = await env.DB.prepare(
+            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
+          ).bind(_lgSess.firmCode, _lgDay).first();
+          if (_lgCapRow && _lgCapRow.cnt >= 5) {
+            return jsonResponse({ ok: true, status: 'daily_cap' });
+          }
+        } catch (e) {}
+      }
+
+      /* Budget check */
+      var _lgBC = await budgetCheck(env, _lgDay, _lgSess.firmCode);
+      if (!_lgBC.ok) return jsonResponse({ ok: false, status: 'budget_exceeded' });
+
+      /* Acquire lock */
+      await kvPut(env, _lgLockKey, 'running', { expirationTtl: 300 });
+
+      try {
+        var _lgCost = newCostAccum();
+        var _lgT0 = Date.now();
+        var _lgResult = await runLeadsForFirm(env, _lgSess.firmCode, _lgDay, _lgCost);
+        await flushCost(env, _lgDay, _lgSess.firmCode, _lgCost);
+        var _lgMs = Date.now() - _lgT0;
+
+        /* Mark lock as done */
+        await kvPut(env, _lgLockKey, 'done', { expirationTtl: 600 });
+
+        return jsonResponse({
+          ok: true, status: _lgResult.status || 'ok',
+          found: _lgResult.found || 0,
+          leads: _lgResult.leads || [],
+          textSearchCalls: _lgResult.textSearchCalls || 0,
+          detailsCalls: _lgResult.detailsCalls || 0,
+          timeMs: _lgMs,
+          cost: { usd: _lgCost.usd },
+          colo: _anthropicColo
+        });
+      } catch (e) {
+        /* Release lock on error so retry works */
+        await env.G7_KV.delete(_lgLockKey);
+        try { await recordError(env, { source: 'worker', route: 'leads/generate', firmCode: _lgSess.firmCode, kind: 'generate_failed', message: String(e.message || e) }); } catch(e2) {}
+        return jsonResponse({ ok: false, error: String(e.message || e).slice(0, 200) }, 500);
+      }
     }
 
     // ── POST /scout/leads/reply-draft — Haiku drafts a next-step message ──
