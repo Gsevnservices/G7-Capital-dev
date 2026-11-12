@@ -879,11 +879,23 @@ window.addEventListener('DOMContentLoaded', async function() {
         return;
       }
 
-      /* State: generating in background */
+      /* State: generating — fire POST /scout/leads/generate so leads arrive
+         even without the user opening Today. Show progress while waiting. */
       if (_leadsD.generating) {
         note.textContent = '';
         body.innerHTML = '<div style="font-size:12px;color:var(--grey1);line-height:1.6">Finding your first leads\u2026 this takes about a minute.</div>' +
           '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">View progress \u2192</a>';
+        /* Trigger generation in-request (not background) */
+        fetch(SCOUT_WORKER + '/scout/leads/generate', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('g7_session_token') || '') }
+        }).then(function(gr) { return gr.json(); }).then(function(gj) {
+          if (gj.ok && gj.found > 0) {
+            note.textContent = gj.found + ' new leads';
+            body.innerHTML = '<div style="font-size:12px;color:#5a9e6f;line-height:1.6">Leads ready!</div>' +
+              '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">View leads \u2192</a>';
+          }
+        }).catch(function() {});
         return;
       }
 
