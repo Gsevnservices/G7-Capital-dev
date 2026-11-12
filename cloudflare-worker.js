@@ -1386,6 +1386,8 @@ function pipelineDueFromStore(store, now, bizName, bucket, reviewSkip) {
     }
     if (!p.lastStatusAt && p.lastContactedAt) p.lastStatusAt = p.lastContactedAt;
     var d = daysSince(p.lastStatusAt || p.lastContactedAt, now);
+    /* If we have no real date (999), skip chase entirely — can't pick a template */
+    if (d >= 999) return;
     var dn = wDisplayName(p);
     var greet = wGreeting(p);
     var item = null;
