@@ -2254,7 +2254,7 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-haiku-5-5',
         max_tokens: 1500,
         thinking: { type: 'disabled' },
         messages: [{ role: 'user', content: msgPrompt }]
@@ -2262,7 +2262,7 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
     }, 'creators/msg');
     if (mr.ok) {
       var md = await mr.json();
-      recordCost(cost, 'claude-haiku-4-5-20251001', md);
+      recordCost(cost, 'claude-haiku-5-5', md);
       var mt = (md.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
       try {
         var m1 = mt.indexOf('['), m2 = mt.lastIndexOf(']');
@@ -2520,7 +2520,7 @@ async function generateKeySearches(env, analysisText, city, cost) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-5-5',
       max_tokens: 500,
       thinking: { type: 'disabled' },
       messages: [{ role: 'user', content: prompt }]
@@ -2528,7 +2528,7 @@ async function generateKeySearches(env, analysisText, city, cost) {
   }, 'rank/keysearches');
   if (!r.ok) throw new Error('Haiku key searches ' + r.status);
   var data = await r.json();
-  recordCost(cost, 'claude-haiku-4-5-20251001', data);
+  recordCost(cost, 'claude-haiku-5-5', data);
 
   var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
   try {
@@ -2685,7 +2685,7 @@ async function fetchOwnReviews(env, firmCode, profile, lang, cost, preDetails) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-haiku-5-5',
         max_tokens: 1500,
         thinking: { type: 'disabled' },
         messages: [{ role: 'user', content: prompt }]
@@ -2693,7 +2693,7 @@ async function fetchOwnReviews(env, firmCode, profile, lang, cost, preDetails) {
     }, 'rank/replies');
     if (r.ok) {
       var data = await r.json();
-      recordCost(cost, 'claude-haiku-4-5-20251001', data);
+      recordCost(cost, 'claude-haiku-5-5', data);
       var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
       try {
         var a1 = text.indexOf('['), a2 = text.lastIndexOf(']');
@@ -2823,7 +2823,7 @@ async function runCompetitorSnapshot(env, firmCode, profile, searchResults, cost
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
+            model: 'claude-haiku-5-5',
             max_tokens: 500,
             thinking: { type: 'disabled' },
             messages: [{ role: 'user', content: cPrompt }]
@@ -2831,7 +2831,7 @@ async function runCompetitorSnapshot(env, firmCode, profile, searchResults, cost
         }, 'rank/complaint');
         if (cr.ok) {
           var cData = await cr.json();
-          recordCost(cost, 'claude-haiku-4-5-20251001', cData);
+          recordCost(cost, 'claude-haiku-5-5', cData);
           var cText = (cData.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
           try {
             var j1 = cText.indexOf('{'), j2 = cText.lastIndexOf('}');
@@ -3076,6 +3076,32 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   var _existingProf = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
   profile.confirmedAt = (_existingProf && _existingProf.confirmedAt) || new Date().toISOString();
   profile.createdAt = (_existingProf && _existingProf.createdAt) || new Date().toISOString();
+
+  /* Preserve renamed groups: match new groups to existing ones by placesTypes
+     overlap. If a match exists, keep the old name so user renames survive
+     profile regeneration. */
+  if (_existingProf && Array.isArray(_existingProf.groups)) {
+    var _oldGroups = _existingProf.groups;
+    profile.groups.forEach(function(ng) {
+      var ngTypes = new Set(ng.placesTypes || []);
+      var bestMatch = null, bestOverlap = 0;
+      _oldGroups.forEach(function(og) {
+        var overlap = 0;
+        (og.placesTypes || []).forEach(function(t) { if (ngTypes.has(t)) overlap++; });
+        if (overlap > bestOverlap) { bestOverlap = overlap; bestMatch = og; }
+      });
+      /* If at least half the types overlap, keep the old name */
+      if (bestMatch && bestOverlap >= Math.max(1, Math.ceil(ngTypes.size / 2))) {
+        ng.name = bestMatch.name;
+        /* Also preserve enabled state */
+        if (bestMatch.enabled === false) ng.enabled = false;
+      }
+    });
+    /* Carry over existing areas if the new profile didn't change them much */
+    if (_existingProf.areas && _existingProf.areas.length > 0) {
+      profile.areas = _existingProf.areas;
+    }
+  }
 
   /* Geocode and validate each area — must be a real locality within radiusKm × 2.
      Uses one Text Search per area — only at profile creation time. */
@@ -3795,16 +3821,26 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
 
   /* ── STEP 2: Search Places only when pool < 10 fresh candidates ── */
   if (pool.length < 10) {
-    /* Pick today's (group, area) via rotation */
-    var group = enabledGroups[dayOfYear % enabledGroups.length];
+    /* Pick today's (group, area) via smart rotation.
+       If yesterday's primary group produced 0 leads, try a different one first. */
+    var _rotKey = 'scout:rotate:' + firmCode;
+    var _rotPri = await env.G7_KV.get(_rotKey, 'json');
+    var groupIdx = dayOfYear % enabledGroups.length;
+    /* If a priority group was recorded (e.g. from yesterday's empty run),
+       find it and put it first */
+    if (_rotPri && _rotPri.priorityGroup) {
+      for (var _ri = 0; _ri < enabledGroups.length; _ri++) {
+        if (enabledGroups[_ri].name === _rotPri.priorityGroup) { groupIdx = _ri; break; }
+      }
+    }
+    var group = enabledGroups[groupIdx];
     var queries = group.queries || [];
     if (queries.length > 0) {
       /* Apply learning: skip downweighted groups 70% of the time */
       var gw = groupWeights[group.name];
       var skipGroup = gw && gw < 1 && Math.random() > gw;
       if (skipGroup) {
-        /* Fall through to next group */
-        group = enabledGroups[(dayOfYear + 1) % enabledGroups.length];
+        group = enabledGroups[(groupIdx + 1) % enabledGroups.length];
         queries = group.queries || [];
       }
     }
@@ -3968,16 +4004,27 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var scored = await scoreLeadFit(env, pool, profileJson, pool[0]._groupName, context, cost);
   droppedByFit = _poolBeforeFit - scored.length;
 
-  /* ── STEP 4: Pick top 5, balanced across groups ── */
+  /* ── STEP 4: Pick top 5, balanced across groups (≥3 groups when possible, max 2/group) ── */
   var picked = [];
   var groupCounts = {};
+  /* Pass 1: one per group (ensures group diversity) */
+  var _seenGroups = new Set();
   scored.forEach(function(s) {
     if (picked.length >= 5) return;
     var gn = s._groupName;
-    groupCounts[gn] = (groupCounts[gn] || 0);
-    if (groupCounts[gn] >= 3) return;
+    if (_seenGroups.has(gn)) return;
+    _seenGroups.add(gn);
     picked.push(s);
-    groupCounts[gn]++;
+    groupCounts[gn] = 1;
+  });
+  /* Pass 2: fill remaining slots, max 2 per group */
+  scored.forEach(function(s) {
+    if (picked.length >= 5) return;
+    var gn = s._groupName;
+    if ((groupCounts[gn] || 0) >= 2) return;
+    if (picked.indexOf(s) !== -1) return;
+    picked.push(s);
+    groupCounts[gn] = (groupCounts[gn] || 0) + 1;
   });
 
   if (picked.length === 0) {
@@ -4119,12 +4166,28 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   };
   await kvPut(env, todayKey, JSON.stringify(leadsResult), { expirationTtl: 2 * 86400 });
 
+  /* Record group rotation: if primary group produced 0 leads, prioritize
+     the next group for tomorrow's run */
+  var _pickedGroupCounts = {};
+  savedLeads.forEach(function(l) { _pickedGroupCounts[l.group] = (_pickedGroupCounts[l.group] || 0) + 1; });
+  var _zeroGroup = null;
+  enabledGroups.forEach(function(g) {
+    if (!_pickedGroupCounts[g.name] && !_zeroGroup) _zeroGroup = g.name;
+  });
+  if (_zeroGroup) {
+    /* The group that got 0 leads goes first tomorrow */
+    await kvPut(env, _rotKey, JSON.stringify({ priorityGroup: _zeroGroup, day: day }), { expirationTtl: 2 * 86400 });
+  } else {
+    try { await env.G7_KV.delete(_rotKey); } catch(e) {}
+  }
+
   console.log(JSON.stringify({
     leads: firmCode, day: day, found: savedLeads.length,
     textSearchCalls: textSearchCalls, detailsCalls: detailsCalls,
     poolSize: pool.length - picked.length,
     droppedByType: droppedByType, droppedByFit: droppedByFit,
-    shortfall: shortfallReasons
+    shortfall: shortfallReasons,
+    groupDistribution: _pickedGroupCounts
   }));
 
   return { status: 'ok', found: savedLeads.length, leads: savedLeads, textSearchCalls: textSearchCalls, detailsCalls: detailsCalls, poolSize: pool.length - picked.length, droppedByType: droppedByType, droppedByFit: droppedByFit, shortfall: shortfallReasons };
@@ -6849,11 +6912,11 @@ export default {
               var _geR = await anthropicFetch(ANTHROPIC_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-                body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: _gePrompt }] })
+                body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 300, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: _gePrompt }] })
               }, 'profile/rename');
               if (_geR.ok) {
                 var _geData = await _geR.json();
-                recordCost(_geCost, 'claude-haiku-4-5-20251001', _geData);
+                recordCost(_geCost, 'claude-haiku-5-5', _geData);
                 var _geText = (_geData.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
                 try {
                   var a1 = _geText.indexOf('['), a2 = _geText.lastIndexOf(']');
@@ -7269,13 +7332,13 @@ export default {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001', max_tokens: 300, thinking: { type: 'disabled' },
+            model: 'claude-haiku-5-5', max_tokens: 300, thinking: { type: 'disabled' },
             messages: [{ role: 'user', content: _rdPrompt }]
           })
         }, 'leads/reply-draft');
         if (_rdR.ok) {
           var _rdRData = await _rdR.json();
-          recordCost(_rdCost, 'claude-haiku-4-5-20251001', _rdRData);
+          recordCost(_rdCost, 'claude-haiku-5-5', _rdRData);
           _rdDraft = (_rdRData.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('').trim();
         }
       } catch (e) {}

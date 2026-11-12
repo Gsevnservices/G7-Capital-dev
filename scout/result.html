@@ -1347,6 +1347,23 @@ window.addEventListener('DOMContentLoaded', async function() {
     insightCard.style.display = 'block';
   }
 
+  /* Fire-and-forget: trigger lead generation if today's leads are missing.
+     After analysis completes, the user lands here — ensure leads are generated
+     even if they never visit the Today page or Dashboard. */
+  (function() {
+    var _tok = localStorage.getItem('g7_session_token') || '';
+    fetch(SCOUT_WORKER + '/scout/leads/today', {
+      headers: { 'Authorization': 'Bearer ' + _tok }
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.ok && d.generating) {
+        fetch(SCOUT_WORKER + '/scout/leads/generate', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + _tok }
+        }).catch(function() {});
+      }
+    }).catch(function() {});
+  })();
+
   initCursor();
 });
 
