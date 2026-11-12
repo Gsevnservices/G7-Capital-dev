@@ -198,6 +198,7 @@ g7_view_deal_id         — Temp: dealId set by history.html before navigating t
 - Cloudflare Worker CORS only allows `gsevnservices.github.io` and `localhost:8080`
 - **Secrets:** Never echo, print, or test token/password/key variables — not even "set / not set" checks. Never read session tokens from KV or put them in commands. For dev testing, use only admin routes with `ADMIN_PASSWORD` sourced silently from `.env.local`.
 - **devlocal branch:** Never delete or recreate it. It carries dev-only commits (CNAME removal, .gitignore CNAME rule) that must not reach main. Always push to dev with: `git checkout devlocal && git merge main && git push dev devlocal:main --force && git checkout main`
+- **Image files:** Never open, Read, or view image files (png/jpg), including screenshots in `~/Desktop/g7_shots`. Only save them and list file names and sizes. Opening images drops the API connection.
 
 ---
 

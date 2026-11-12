@@ -178,13 +178,13 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
   <!-- Generating banner: shown while today's leads are being found (with carry-over visible below) -->
   <div id="generatingBanner" style="display:none;background:rgba(224,146,47,0.08);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:24px;text-align:center">
-    <div style="font-size:13px;color:var(--amber);letter-spacing:.04em" id="genBannerText">Finding today's 5 leads\u2026</div>
-    <div style="font-size:11px;color:var(--grey1);margin-top:4px">About a minute <span id="genBannerDots" style="color:var(--amber)">\u25CF</span></div>
+    <div style="font-size:13px;color:var(--amber);letter-spacing:.04em" id="genBannerText">Finding today&rsquo;s 5 leads&hellip;</div>
+    <div style="font-size:11px;color:var(--grey1);margin-top:4px" id="genBannerSub">About a minute <span id="genBannerDots" style="color:var(--amber)">&#x25CF;</span></div>
   </div>
 
   <!-- Language regen banner: shown while messages are being updated to match the language setting -->
   <div id="regenBanner" style="display:none;background:rgba(224,146,47,0.06);border:1px solid var(--border);border-radius:8px;padding:12px 20px;margin-bottom:16px;text-align:center">
-    <div style="font-size:12px;color:var(--amber);letter-spacing:.03em" id="regenText">Updating messages\u2026</div>
+    <div style="font-size:12px;color:var(--amber);letter-spacing:.03em" id="regenText">Updating messages&hellip;</div>
   </div>
 
   <!-- Carry-over leads from previous days -->
@@ -340,6 +340,7 @@ var _pollActive = false;
 function startGeneratingPoll() {
   if (_pollActive) return; // prevent duplicate timers
   _pollActive = true;
+  var _genStart = Date.now();
   var _dotFrames = ['\u25CF', '\u25CF\u25CF', '\u25CF\u25CF\u25CF'];
   var _dotIdx = 0;
   var _dotTimer = setInterval(function() {
@@ -348,6 +349,14 @@ function startGeneratingPoll() {
     if (el) el.textContent = _dotFrames[_dotIdx];
   }, 500);
   var _pollTimer = setInterval(async function() {
+    /* Timeout: if generation takes over 3 minutes, show error state */
+    if (Date.now() - _genStart > 180000) {
+      clearInterval(_pollTimer);
+      clearInterval(_dotTimer);
+      _pollActive = false;
+      _showGenError();
+      return;
+    }
     try {
       var pr = await fetch(SCOUT_WORKER + '/scout/leads/today', { headers: _auth });
       if (!pr.ok) return;
@@ -364,6 +373,19 @@ function startGeneratingPoll() {
       }
     } catch (e) {}
   }, 8000);
+}
+
+function _showGenError() {
+  var banner = document.getElementById('generatingBanner');
+  var empty = document.getElementById('emptyState');
+  if (banner && banner.style.display !== 'none') {
+    document.getElementById('genBannerText').textContent = 'Generation took too long.';
+    document.getElementById('genBannerSub').innerHTML = '<a href="#" onclick="location.reload();return false" style="color:var(--amber);text-decoration:underline">Try again</a>';
+  }
+  if (empty && empty.style.display !== 'none') {
+    document.getElementById('emptyTitle').textContent = 'Generation took too long';
+    document.getElementById('emptyText').innerHTML = '<a href="#" onclick="location.reload();return false" style="color:var(--amber);text-decoration:underline">Try again</a>';
+  }
 }
 
 /* ── finishRenderLeads: called once we have a confirmed profile and real data ── */
@@ -477,8 +499,10 @@ function checkMessageLangMismatch(leads) {
     .then(function(j) {
       if (!j || !j.language) return;
       var target = j.language;
+      /* Include leads with wrong lang OR no messages at all */
       var mismatched = leads.filter(function(l) {
-        return l.messages && l.messages.first && l.messages.lang !== target;
+        if (!l.messages || !l.messages.first) return true;
+        return l.messages.lang !== target;
       });
       if (mismatched.length === 0) return;
       /* Show banner and start regen loop */
@@ -871,7 +895,7 @@ async function loadStatsWithReplyRate() {
       '<div class="stat-item">Replied <strong>' + (s.replied || 0) + '</strong></div>' +
       '<div class="stat-item">Won <strong>' + (s.won || 0) + '</strong></div>' +
       '<div class="stat-item">Reply rate <strong>' + replyRate + '%</strong></div>' +
-      '<div class="stat-item">Fit \u2605 <strong>' + (s.tu > 0 ? Math.round(s.tu / (s.tu + s.td) * 100) : 0) + '%</strong></div>';
+      '<div class="stat-item">Fit \u2605 <strong>' + ((s.tu + s.td) >= 3 ? Math.round(s.tu / (s.tu + s.td) * 100) + '% (' + s.tu + '\uD83D\uDC4D / ' + (s.tu + s.td) + ')' : '\u2014') + '</strong></div>';
     bar.style.display = '';
 
     /* Reply type breakdown by group */
