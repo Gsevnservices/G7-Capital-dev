@@ -466,6 +466,21 @@ function _rowToPerson(row) {
   person.value = row.value || 0;
   person.next_action_at = row.next_action_at || null;
   // lastStatusAt and lastContactedAt live in data JSON — do NOT overwrite from columns
+  // Backfill: server-side lead actions write contactedAt, not lastContactedAt
+  if (!person.lastContactedAt && person.contactedAt) person.lastContactedAt = person.contactedAt;
+  // If still missing, fall back to first contact event in history, then updated_at
+  if (!person.lastContactedAt && person.status !== 'found') {
+    var _firstContact = null;
+    if (Array.isArray(person.history)) {
+      for (var hi = 0; hi < person.history.length; hi++) {
+        if (person.history[hi].event === 'contacted' && person.history[hi].at) {
+          _firstContact = person.history[hi].at; break;
+        }
+      }
+    }
+    person.lastContactedAt = _firstContact || row.updated_at || row.created_at || null;
+  }
+  if (!person.lastStatusAt && person.lastContactedAt) person.lastStatusAt = person.lastContactedAt;
   if (!person.history) person.history = [];
   if (!Array.isArray(person.messagesSent)) person.messagesSent = [];
   return person;
@@ -821,6 +836,8 @@ function pipelineDue() {
     if (p.status === 'not_interested') return;
 
     var d = pipelineDaysSince(p.lastStatusAt || p.lastContactedAt);
+    /* If we have no real date (999), skip chase entirely — can't pick a template */
+    if (d >= 999) return;
     var dn = pipelineDisplayName(p);
     var greet = pipelineGreeting(p, lang);
     var item = null;

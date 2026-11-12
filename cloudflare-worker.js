@@ -1375,6 +1375,16 @@ function pipelineDueFromStore(store, now, bizName, bucket, reviewSkip) {
       return;
     }
     if (p.status === 'not_interested') return;
+    /* Backfill: server lead-actions write contactedAt, not lastContactedAt */
+    if (!p.lastContactedAt && p.contactedAt) p.lastContactedAt = p.contactedAt;
+    if (!p.lastContactedAt && p.status !== 'found' && Array.isArray(p.history)) {
+      for (var _hi = 0; _hi < p.history.length; _hi++) {
+        if (p.history[_hi].event === 'contacted' && p.history[_hi].at) {
+          p.lastContactedAt = p.history[_hi].at; break;
+        }
+      }
+    }
+    if (!p.lastStatusAt && p.lastContactedAt) p.lastStatusAt = p.lastContactedAt;
     var d = daysSince(p.lastStatusAt || p.lastContactedAt, now);
     var dn = wDisplayName(p);
     var greet = wGreeting(p);
@@ -2923,15 +2933,46 @@ function haversineKm(lat1, lng1, lat2, lng2) {
   return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/* ── Extract area/locality from a Google Places formatted address ──
+   e.g. "123, Domlur, Bengaluru, Karnataka 560071, India" → "Domlur"
+   Picks the second-to-last meaningful part before the city/state/country tail. */
+function extractAreaFromAddress(addr) {
+  if (!addr || typeof addr !== 'string') return '';
+  /* Split on commas, trim each part */
+  var parts = addr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (parts.length < 3) return '';
+  /* Last 3 are typically: City, "State ZIP", Country — skip those.
+     The part just before the city is the locality/neighbourhood. */
+  /* Remove parts that look like pin codes or country */
+  var cleaned = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    /* Skip if it's just a pin/zip code */
+    if (/^\d{5,6}$/.test(p)) continue;
+    /* Skip "India" or country names at end */
+    if (i === parts.length - 1 && /^(india|usa|uk|united states|united kingdom)$/i.test(p)) continue;
+    /* Skip state + pincode combos like "Karnataka 560071" */
+    if (/\d{5,6}/.test(p) && i >= parts.length - 2) continue;
+    cleaned.push(p);
+  }
+  /* For addresses like "123, Domlur, Bengaluru" the area is index -2 (before city).
+     For "4th Floor, 123, Domlur Layout, Bengaluru" area is still the one before city. */
+  if (cleaned.length >= 3) return cleaned[cleaned.length - 2];
+  if (cleaned.length === 2) return cleaned[0];
+  return '';
+}
+
 /* ── Known chains (lowercase) — places with same name 3+ times are also flagged ── */
 var KNOWN_CHAINS = [
   'starbucks','mcdonald','subway','domino','pizza hut','burger king','kfc',
-  'cafe coffee day','ccd','costa coffee','tim hortons','dunkin',
+  'cafe coffee day','ccd','costa coffee','tim hortons','dunkin','third wave coffee',
   'jawed habib','lakme salon','naturals salon','vlcc','apollo pharmacy',
   'medplus','netmeds','reliance digital','croma','lenskart',
   'byju','unacademy','whitehat','vedantu','allen','aakash','fiitjee',
-  'kidzee','eurokids','podar','smartkidz','decathlon','cult.fit','anytime fitness',
-  'gold gym','talwalkars','snap fitness'
+  'kidzee','eurokids','podar','smartkidz','decathlon','cult.fit','cult fit','anytime fitness',
+  "gold's gym",'gold gym','golds gym','talwalkars','snap fitness',
+  'wework','we work','regus','awfis','indiqube','smartworks','91springboard',
+  'innov8','bhive','cowrks'
 ];
 
 /* ── Lead profile generation (Haiku) ──
@@ -3521,78 +3562,10 @@ async function regenFoundMessages(env, firmCode, lang, ctx) {
   return { ok: true, count: updated, cost: totalCost.usd };
 }
 
-/* Nonce-guarded wrapper around regenFoundMessages.
-   Before writing each batch it checks whether the nonce in KV still matches.
-   If a newer language change wrote a new nonce, this run stops early so the
-   newer run's results win.  Used by the POST /scout/message-lang debounce. */
-async function regenFoundMessagesGuarded(env, firmCode, lang, ctx, nonceKey, myNonce) {
-  if (!env.DB) return { ok: false, error: 'no_db' };
-
-  var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
-  var bc = await budgetCheck(env, day, firmCode);
-  if (!bc.ok) return { ok: false, error: 'budget_exceeded' };
-
-  var rows = await env.DB.prepare(
-    "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL LIMIT 40"
-  ).bind(firmCode).all();
-  if (!rows.results || rows.results.length === 0) return { ok: true, count: 0, cost: 0 };
-
-  var profile = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
-  var savedCtx = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
-  var context = (savedCtx && savedCtx.context) || '';
-  var city = (savedCtx && savedCtx.city) || '';
-  var totalCost = newCostAccum();
-  var updated = 0;
-
-  var allLeads = rows.results.map(function(r) {
-    var d; try { d = JSON.parse(r.data || '{}'); } catch(e) { d = {}; }
-    return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: (d.fit_reason || '').replace(/^[a-z_]+:\s*/i, ''), _rowId: r.id, _data: d };
-  });
-
-  for (var bi = 0; bi < allLeads.length; bi += 5) {
-    /* ── Nonce check before each batch ── */
-    var cur = await env.G7_KV.get(nonceKey);
-    if (cur !== myNonce) {
-      console.log('regen-guarded: superseded at batch ' + (bi / 5) + ' — stopping');
-      break;
-    }
-
-    var batch = allLeads.slice(bi, bi + 5);
-    var withMsgs = await generateLeadMessages(env, batch, profile, context, lang, totalCost, city);
-
-    for (var mi = 0; mi < withMsgs.length; mi++) {
-      var lead = withMsgs[mi];
-      if (lead.messages && lead._data) {
-        lead._data.messages = lead.messages;
-        await env.DB.prepare(
-          "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
-        ).bind(JSON.stringify(lead._data), firmCode, lead._rowId).run();
-        updated++;
-      }
-    }
-  }
-
-  /* Clean up nonce if we're still current */
-  var finalNonce = await env.G7_KV.get(nonceKey);
-  if (finalNonce === myNonce) await env.G7_KV.delete(nonceKey);
-
-  /* Update KV cache */
-  var cached = await env.G7_KV.get('scout:leads:' + firmCode + ':' + day, 'json');
-  if (cached && Array.isArray(cached.leads)) {
-    var msgMap = {};
-    allLeads.forEach(function(l) { if (l._rowId && l.messages) msgMap[l._rowId] = l.messages; });
-    cached.leads.forEach(function(cl) { if (msgMap[cl.id]) cl.messages = msgMap[cl.id]; });
-    await kvPut(env, 'scout:leads:' + firmCode + ':' + day, JSON.stringify(cached), { expirationTtl: 2 * 86400 });
-  }
-
-  await flushCost(env, day, firmCode, totalCost);
-  return { ok: true, count: updated, cost: totalCost.usd };
-}
-
 /* Regenerate messages for at most 5 found leads whose messages.lang doesn't
    match the target language. Returns { ok, updated, remaining, cost }.
    Checks nonce before generating — stops if a newer change superseded us.
-   Used by POST /scout/message-lang (initial batch) and POST /scout/leads/regen-batch (loop). */
+   Used by POST /scout/leads/regen-batch (frontend-driven loop). */
 async function regenBatch5(env, firmCode, lang, nonceKey, myNonce) {
   if (!env.DB) return { ok: false, error: 'no_db', updated: 0, remaining: 0 };
 
@@ -4085,7 +4058,7 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
         channels: lead.channels,
         messages: lead.messages,
         enrichment: lead.enrichment || {},
-        area: lead._area,
+        area: extractAreaFromAddress(lead.address) || lead._area,
         query: lead._query,
         mapsUrl: lead.mapsUrl,
         phoneType: lead.phoneType
@@ -8161,24 +8134,12 @@ export default {
       const key = 'auth:users:' + session.firmCode;
       const user = await env.G7_KV.get(key, 'json');
       if (!user) return jsonResponse({ error: 'Account not found.' }, 404);
-      var _mlOldLang = user.messageLanguage || '';
       user.messageLanguage = lang;
       await kvPut(env, key, JSON.stringify(user));
 
-      /* Regenerate at most 5 leads synchronously. The frontend loops via
-         POST /scout/leads/regen-batch until all leads match. This keeps
-         each request well within wall-clock limits. A nonce prevents
-         concurrent language changes from stomping each other. */
-      var _mlRemaining = 0;
-      if (lang !== _mlOldLang && env.DB) {
-        var _mlNonce = crypto.randomUUID();
-        var _mlDKey = 'regen:nonce:' + session.firmCode;
-        await kvPut(env, _mlDKey, _mlNonce, { expirationTtl: 300 });
-        var _mlBatch = await regenBatch5(env, session.firmCode, lang, _mlDKey, _mlNonce);
-        _mlRemaining = _mlBatch.remaining;
-      }
-
-      return jsonResponse({ language: user.messageLanguage, remaining: _mlRemaining });
+      /* Just save the setting. Today's batch loop (POST /scout/leads/regen-batch)
+         handles regeneration — the frontend drives it when it detects mismatches. */
+      return jsonResponse({ language: user.messageLanguage });
     }
 
     // ─────────────────────────────────────────────────────────────

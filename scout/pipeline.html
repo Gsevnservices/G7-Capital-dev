@@ -88,7 +88,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .ev-status.not_interested{color:#C45A5A;border-color:rgba(196,90,90,0.3)}
 .ev-days{font-size:10px;color:var(--grey2);letter-spacing:.05em;white-space:nowrap}
 .ev-actions{display:flex;gap:6px;padding:10px 14px;flex-wrap:wrap}
-@media(max-width:700px){.everyone-row{flex-wrap:wrap}.ev-cell{min-width:50%;border-bottom:1px solid var(--border2)}.ev-actions{padding:10px 14px;border-right:none;flex:100%}}
+@media(max-width:700px){.everyone-row{flex-wrap:wrap}.ev-cell{min-width:50%;border-bottom:1px solid var(--border2);border-right:none}.ev-actions{padding:10px 14px;border-right:none;flex:100%}}
+@media(max-width:420px){.everyone-row{display:flex;flex-wrap:wrap}.ev-cell{flex:100%;min-width:0;border-right:none;padding:10px 14px}.ev-name{white-space:normal;word-break:break-word}.ev-actions{flex:100%;flex-wrap:wrap;gap:6px;padding:10px 14px;overflow-x:hidden}.ev-actions .copy-btn{flex:0 0 auto;white-space:nowrap}}
 
 /* ─── NOT CONTACTED SECTION ─── */
 .nc-section{margin-bottom:20px;border:1px solid var(--border2)}
@@ -457,9 +458,9 @@ function renderEveryone() {
     var days = pipelineDaysSince(p.lastStatusAt || p.lastContactedAt);
     var dayN = days === 1 ? '1 day ago' : days + ' days ago';
     var lbl = stageLabel(p.status);
-    var daysLabel = days >= 999 ? ''
-                  : days === 0   ? lbl + ' today'
-                  :                lbl + ' ' + dayN;
+    var daysLabel = (days >= 999 || days < 0) ? lbl
+                  : days === 0                ? lbl + ' today'
+                  :                             lbl + ' ' + dayN;
     html += '<div class="everyone-row">';
     /* Name + note */
     html += '<div class="ev-cell" style="min-width:140px">';
