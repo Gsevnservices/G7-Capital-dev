@@ -879,9 +879,9 @@ window.addEventListener('DOMContentLoaded', async function() {
         return;
       }
 
-      /* State: generating — fire POST /scout/leads/generate so leads arrive
-         even without the user opening Today. Show progress while waiting. */
-      if (_leadsD.generating) {
+      /* State: generating and no leads yet — fire POST /scout/leads/generate.
+         Only show this state when there are truly zero leads (no carry-over). */
+      if (_leadsD.generating && (_leadsD.leads || []).length === 0) {
         note.textContent = '';
         body.innerHTML = '<div style="font-size:12px;color:var(--grey1);line-height:1.6">Finding your first leads\u2026 this takes about a minute.</div>' +
           '<a href="today.html" style="display:inline-block;margin-top:10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">View progress \u2192</a>';

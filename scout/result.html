@@ -1355,7 +1355,7 @@ window.addEventListener('DOMContentLoaded', async function() {
     fetch(SCOUT_WORKER + '/scout/leads/today', {
       headers: { 'Authorization': 'Bearer ' + _tok }
     }).then(function(r) { return r.json(); }).then(function(d) {
-      if (d.ok && d.generating) {
+      if (d.generating && (d.leads || []).length === 0) {
         fetch(SCOUT_WORKER + '/scout/leads/generate', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + _tok }

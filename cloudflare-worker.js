@@ -380,7 +380,7 @@ const COST_TABLE = {
    each request or cron firm-run; pass it explicitly through every function
    that calls Anthropic; flush it once at the end. */
 function newCostAccum() {
-  return { calls: 0, usd: 0, web_search_requests: 0, input_tokens: 0, output_tokens: 0 };
+  return { calls: 0, usd: 0, web_search_requests: 0, input_tokens: 0, output_tokens: 0, log: [] };
 }
 
 /* Record one Anthropic call's usage into the given accumulator. */
@@ -395,7 +395,9 @@ function recordCost(cost, model, data) {
   cost.output_tokens += out;
   cost.web_search_requests += srch;
   var t = COST_TABLE[model] || COST_TABLE['claude-sonnet-5-5'];
-  cost.usd += (inp / 1e6) * t.input + (out / 1e6) * t.output + srch * t.search;
+  var callUsd = (inp / 1e6) * t.input + (out / 1e6) * t.output + srch * t.search;
+  cost.usd += callUsd;
+  if (cost.log) cost.log.push({ model: model, input: inp, output: out, search: srch, usd: callUsd });
 }
 
 /* Flush accumulated cost to KV. firmCode = the firm that triggered the
@@ -4202,7 +4204,13 @@ var PLACES_DETAILS_COST = 0.020;
 
 function recordPlacesCost(cost, textSearchCalls, detailsCalls) {
   if (!cost) return;
-  cost.usd += (textSearchCalls || 0) * PLACES_TEXT_SEARCH_COST + (detailsCalls || 0) * PLACES_DETAILS_COST;
+  var ts = textSearchCalls || 0, dc = detailsCalls || 0;
+  var placesUsd = ts * PLACES_TEXT_SEARCH_COST + dc * PLACES_DETAILS_COST;
+  cost.usd += placesUsd;
+  if (cost.log) {
+    if (ts > 0) cost.log.push({ model: 'places-text-search', calls: ts, usd: ts * PLACES_TEXT_SEARCH_COST });
+    if (dc > 0) cost.log.push({ model: 'places-details', calls: dc, usd: dc * PLACES_DETAILS_COST });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -7217,7 +7225,7 @@ export default {
           textSearchCalls: _lgResult.textSearchCalls || 0,
           detailsCalls: _lgResult.detailsCalls || 0,
           timeMs: _lgMs,
-          cost: { usd: _lgCost.usd },
+          cost: { usd: _lgCost.usd, log: _lgCost.log || [] },
           colo: _anthropicColo
         });
       } catch (e) {
