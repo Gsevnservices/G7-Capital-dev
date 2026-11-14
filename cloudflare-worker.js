@@ -2979,6 +2979,115 @@ var KNOWN_CHAINS = [
   'innov8','bhive','cowrks'
 ];
 
+/* ── Valid Google Places (New) types — from developers.google.com/maps/documentation/places/web-service/place-types ── */
+var VALID_PLACE_TYPES = new Set([
+  /* Housing */ 'apartment_building','apartment_complex','condominium_complex','housing_complex',
+  /* Sports */ 'fitness_center','gym','sports_club','sports_complex','swimming_pool','athletic_field','golf_course','ice_skating_rink','playground','ski_resort','sports_activity_location','sports_coaching','stadium','arena',
+  /* Health & Wellness */ 'yoga_studio','wellness_center','spa','massage','massage_spa','sauna','skin_care_clinic','tanning_studio','chiropractor','dental_clinic','dentist','doctor','drugstore','hospital','medical_center','medical_clinic','pharmacy','physiotherapist',
+  /* Business */ 'coworking_space','business_center','corporate_office','farm','ranch',
+  /* Lodging */ 'lodging','hostel','hotel','guest_house','bed_and_breakfast','motel','resort_hotel','campground','inn',
+  /* Services */ 'real_estate_agency','beauty_salon','hair_salon','nail_salon','barber_shop','laundry','locksmith','plumber','electrician','painter','roofing_contractor','moving_company','insurance_agency','lawyer','consultant','florist','funeral_home','travel_agency','tour_agency','veterinary_care','child_care_agency','tailor',
+  /* Shopping */ 'grocery_store','supermarket','convenience_store','department_store','clothing_store','electronics_store','furniture_store','hardware_store','book_store','pet_store','shoe_store','shopping_mall','store','market','liquor_store','jewelry_store','home_goods_store','home_improvement_store','sporting_goods_store','bicycle_store','auto_parts_store',
+  /* Food & Drink */ 'restaurant','cafe','coffee_shop','bakery','bar','fast_food_restaurant','pizza_restaurant','ice_cream_shop','indian_restaurant','chinese_restaurant','japanese_restaurant','thai_restaurant','italian_restaurant','french_restaurant','mexican_restaurant','seafood_restaurant','steak_house','vegetarian_restaurant','vegan_restaurant','breakfast_restaurant','brunch_restaurant','buffet_restaurant','deli','food_court','meal_delivery','meal_takeaway','pub','wine_bar','tea_house','juice_shop','donut_shop','sandwich_shop','dessert_restaurant','diner',
+  /* Education */ 'school','university','library','preschool','primary_school','secondary_school',
+  /* Entertainment */ 'amusement_park','aquarium','bowling_alley','casino','movie_theater','night_club','park','zoo','museum','art_gallery','tourist_attraction','community_center','event_venue','convention_center','wedding_venue','concert_hall','performing_arts_theater','internet_cafe','karaoke','marina','water_park',
+  /* Finance */ 'accounting','atm','bank',
+  /* Government */ 'city_hall','courthouse','embassy','fire_station','government_office','local_government_office','police','post_office',
+  /* Places of worship */ 'church','hindu_temple','mosque','synagogue',
+  /* Transportation */ 'airport','bus_station','bus_stop','subway_station','train_station','taxi_stand','transit_station','gas_station','parking',
+  /* Table B generic */ 'establishment','point_of_interest','food','finance','health','general_contractor','geocode','neighborhood','political','premise','route','street_address','sublocality','locality'
+]);
+
+/* Synonym groups: types that are equivalent for matching purposes.
+   When comparing candidate types against group placesTypes, any type in the same
+   synonym group counts as a match. */
+var TYPE_SYNONYM_GROUPS = [
+  ['apartment_building', 'apartment_complex', 'housing_complex', 'condominium_complex'],
+  ['gym', 'fitness_center'],
+  ['coworking_space', 'business_center'],
+  ['yoga_studio', 'wellness_center'],
+  ['hotel', 'lodging'],
+  ['cafe', 'coffee_shop'],
+  ['beauty_salon', 'hair_salon'],
+  ['restaurant', 'food'],
+  ['school', 'educational_institution'],
+  ['hospital', 'medical_center', 'general_hospital']
+];
+
+/* Build lookup: type → Set of all its synonyms (including itself) */
+var TYPE_SYNONYMS = {};
+TYPE_SYNONYM_GROUPS.forEach(function(group) {
+  var s = new Set(group);
+  group.forEach(function(t) { TYPE_SYNONYMS[t] = s; });
+});
+
+/* Common invalid types that Haiku generates → correct valid type */
+var TYPE_CORRECTIONS = {
+  'yoga': 'yoga_studio',
+  'shared_office': 'coworking_space',
+  'startup_office': 'coworking_space',
+  'it_company': 'corporate_office',
+  'residential_area': 'housing_complex',
+  'medical': 'medical_center',
+  'dental': 'dental_clinic',
+  'clinic': 'medical_clinic',
+  'salon': 'beauty_salon',
+  'temple': 'hindu_temple',
+  'office': 'corporate_office',
+  'studio': 'art_studio',
+  'gymnastics': 'gym',
+  'pilates': 'fitness_center',
+  'crossfit': 'gym',
+  'health_club': 'fitness_center',
+  'swimming': 'swimming_pool',
+  'daycare': 'child_care_agency',
+  'nursery': 'preschool',
+  'kindergarten': 'preschool',
+  'pet_shop': 'pet_store',
+  'clothing': 'clothing_store',
+  'supermart': 'supermarket',
+  'coworking': 'coworking_space',
+  'co_working_space': 'coworking_space'
+};
+
+/* Correct a single type: fix known invalids, pass through valid ones, drop unknown */
+function correctPlaceType(t) {
+  var lower = String(t || '').toLowerCase().trim();
+  if (!lower) return null;
+  if (VALID_PLACE_TYPES.has(lower)) return lower;
+  if (TYPE_CORRECTIONS[lower]) return TYPE_CORRECTIONS[lower];
+  return null; /* unknown type — drop */
+}
+
+/* Correct all placesTypes in a profile's groups. Returns the profile (mutated). */
+function correctProfileTypes(profile) {
+  if (!profile || !Array.isArray(profile.groups)) return profile;
+  profile.groups.forEach(function(g) {
+    if (!Array.isArray(g.placesTypes)) return;
+    var corrected = [];
+    var seen = new Set();
+    g.placesTypes.forEach(function(t) {
+      var fixed = correctPlaceType(t);
+      if (fixed && !seen.has(fixed)) { corrected.push(fixed); seen.add(fixed); }
+      /* Also add synonyms so matching is broader */
+      if (fixed && TYPE_SYNONYMS[fixed]) {
+        TYPE_SYNONYMS[fixed].forEach(function(syn) {
+          if (!seen.has(syn)) { corrected.push(syn); seen.add(syn); }
+        });
+      }
+    });
+    g.placesTypes = corrected;
+  });
+  return profile;
+}
+
+/* Check if two types match (same type or synonyms) */
+function typesMatch(a, b) {
+  if (a === b) return true;
+  var syns = TYPE_SYNONYMS[a];
+  return syns ? syns.has(b) : false;
+}
+
 /* ── Lead profile generation (Haiku) ──
    Reads the analysis, generates groups with search queries, areas, exclusions.
    KV key: scout:leadprofile:{FIRM}
@@ -3074,6 +3183,8 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   profile.areas = (Array.isArray(profile.areas) ? profile.areas : []).slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
   profile.radiusKm = typeof profile.radiusKm === 'number' ? Math.min(profile.radiusKm, 15) : 3;
   profile.exclude = (Array.isArray(profile.exclude) ? profile.exclude : []).slice(0, 20).map(function(e) { return String(e).slice(0, 60).toLowerCase(); });
+  /* Correct invalid types and expand synonyms */
+  correctProfileTypes(profile);
   /* Preserve confirmedAt from existing profile if re-generating */
   var _existingProf = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
   profile.confirmedAt = (_existingProf && _existingProf.confirmedAt) || new Date().toISOString();
@@ -3301,10 +3412,18 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
       if (matchedGroup && matchedGroup.placesTypes && matchedGroup.placesTypes.length > 0) {
         var gTypes = new Set(matchedGroup.placesTypes.map(function(t) { return t.toLowerCase(); }));
         var typeMatch = false;
-        if (gTypes.has(cPrimary)) typeMatch = true;
+        /* Direct match or synonym match for primaryType */
+        if (gTypes.has(cPrimary)) { typeMatch = true; }
+        if (!typeMatch) { gTypes.forEach(function(gt) { if (typesMatch(cPrimary, gt)) typeMatch = true; }); }
+        /* Check specific types too */
         if (!typeMatch) {
           for (var ti = 0; ti < specificTypes.length; ti++) {
-            if (gTypes.has(specificTypes[ti].toLowerCase())) { typeMatch = true; break; }
+            var st = specificTypes[ti].toLowerCase();
+            if (gTypes.has(st)) { typeMatch = true; break; }
+            /* Synonym match */
+            var found = false;
+            gTypes.forEach(function(gt) { if (typesMatch(st, gt)) found = true; });
+            if (found) { typeMatch = true; break; }
           }
         }
         if (!typeMatch) { droppedByType++; drops.push({ name: c.name, reason: 'type_excluded' }); continue; }
@@ -3845,6 +3964,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   var dryRun = opts && opts.dryRun;
   var allDrops = []; /* collects drop reasons across all stages */
   var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  if (profileJson) correctProfileTypes(profileJson);
 
   /* Check if leads already generated today — skip in dry run */
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
@@ -3977,11 +4097,11 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     var sLat = ac ? ac.lat : _defLat;
     var sLng = ac ? ac.lng : _defLng;
 
-    /* Geocode if missing */
+    /* Geocode if missing — does NOT count toward textSearchCalls */
     if (!sLat && !sLng) {
       try {
         var geoR = await placesTextSearch(env, ar + (city ? ', ' + city : ''), 0, 0, 50000, 1);
-        textSearchCalls++;
+        /* Note: geocode is a 1-result lookup, not a lead search — don't count it */
         if (geoR.length > 0) {
           sLat = geoR[0].lat; sLng = geoR[0].lng;
           if (!profileJson.areaCoords) profileJson.areaCoords = {};
@@ -4021,6 +4141,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
       pool = pool.concat(fRes.candidates);
       if (textSearchCalls > 1) shortfallReasons.push('extra_search:' + g.name);
     } catch (e) {
+      textSearchCalls++; /* Count failed searches toward limit to prevent infinite retry */
       shortfallReasons.push('search_failed:' + g.name + ':' + String(e.message || e).slice(0, 100));
       await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'places_search', message: String(e.message || e) });
     }
@@ -4095,17 +4216,28 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     groupCounts = bp1.groupCounts;
   }
 
-  /* Retry searches for uncovered groups if fewer than 5 picked */
+  /* Retry searches for uncovered groups if fewer than 5 picked.
+     Priority: unsearched groups first, then rotate areas for searched groups. */
   var _searchOffset = 1;
+  var _areaRotation = 0;
   while (picked.length < 5 && textSearchCalls < MAX_SEARCHES) {
-    /* Find the next group not yet searched */
-    var _nextGIdx = (groupIdx + _searchOffset) % enabledGroups.length;
+    /* First try: find an unsearched group */
+    var _nextGIdx = -1;
+    for (var _ug = 0; _ug < enabledGroups.length; _ug++) {
+      var _candidateIdx = (groupIdx + _searchOffset + _ug) % enabledGroups.length;
+      if (!_searchedGroupNames.has(enabledGroups[_candidateIdx].name)) {
+        _nextGIdx = _candidateIdx;
+        break;
+      }
+    }
+    /* If all groups searched, rotate area for the first group */
+    if (_nextGIdx === -1) {
+      _areaRotation++;
+      _nextGIdx = groupIdx % enabledGroups.length;
+    }
     _searchOffset++;
-    if (_searchOffset > enabledGroups.length) break; /* tried all groups */
-    var _nextG = enabledGroups[_nextGIdx];
-    if (_searchedGroupNames.has(_nextG.name)) continue;
 
-    await _searchOneGroup(_nextGIdx, dayOfYear + _searchOffset);
+    await _searchOneGroup(_nextGIdx, dayOfYear + _searchOffset + _areaRotation);
 
     /* Re-score only the new candidates (avoid re-scoring already scored ones) */
     _dedupeAndEnrich();
@@ -4115,11 +4247,15 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
       return true;
     });
     if (newCandidates.length > 0) {
-      var newScored = await scoreLeadFit(env, newCandidates, profileJson, newCandidates[0]._groupName, context, cost);
-      droppedByFit += newCandidates.length - newScored.length;
-      var _scoredIdsN = new Set(newScored.map(function(s) { return s.placeId; }));
-      newCandidates.forEach(function(p) { if (!_scoredIdsN.has(p.placeId)) allDrops.push({ name: p.name, reason: 'fit_below_6' }); });
-      scored = scored.concat(newScored);
+      try {
+        var newScored = await scoreLeadFit(env, newCandidates, profileJson, newCandidates[0]._groupName, context, cost);
+        droppedByFit += newCandidates.length - newScored.length;
+        var _scoredIdsN = new Set(newScored.map(function(s) { return s.placeId; }));
+        newCandidates.forEach(function(p) { if (!_scoredIdsN.has(p.placeId)) allDrops.push({ name: p.name, reason: 'fit_below_6' }); });
+        scored = scored.concat(newScored);
+      } catch (e) {
+        shortfallReasons.push('score_failed_retry:' + String(e.message || e).slice(0, 100));
+      }
     }
     /* Re-pick from the full scored set */
     var bpN = _balancePick(scored);
