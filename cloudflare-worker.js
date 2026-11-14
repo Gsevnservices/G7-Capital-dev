@@ -2976,7 +2976,7 @@ var KNOWN_CHAINS = [
   'kidzee','eurokids','podar','smartkidz','decathlon','cult.fit','cult fit','anytime fitness',
   "gold's gym",'gold gym','golds gym','talwalkars','snap fitness',
   'wework','we work','regus','awfis','indiqube','smartworks','91springboard',
-  'innov8','bhive','cowrks','gospaze','go spaze'
+  'innov8','bhive','cowrks'
 ];
 
 /* ── Lead profile generation (Haiku) ──
@@ -3232,7 +3232,7 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
   });
 
   /* Residential / property listing filter: types and name patterns */
-  var RESIDENTIAL_TYPES = new Set(['real_estate_agency', 'lodging', 'real_estate_agent', 'apartment_building', 'apartment_complex']);
+  var RESIDENTIAL_TYPES = new Set(['real_estate_agency', 'lodging', 'real_estate_agent']);
   var RESIDENTIAL_NAME_RE = /for rent|1\s*bhk|2\s*bhk|3\s*bhk|\bpg\b|hostel|flats for|paying guest/i;
 
   var out = [];
@@ -3941,179 +3941,193 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   var droppedByType = 0;
   var droppedByFit = 0;
 
-  /* ── STEP 2: Search Places only when pool < 10 fresh candidates ── */
-  if (pool.length < 10) {
-    /* Pick today's (group, area) via smart rotation.
-       If yesterday's primary group produced 0 leads, try a different one first. */
-    var _rotKey = 'scout:rotate:' + firmCode;
-    var _rotPri = await env.G7_KV.get(_rotKey, 'json');
-    var groupIdx = dayOfYear % enabledGroups.length;
-    /* If a priority group was recorded (e.g. from yesterday's empty run),
-       find it and put it first */
-    if (_rotPri && _rotPri.priorityGroup) {
-      for (var _ri = 0; _ri < enabledGroups.length; _ri++) {
-        if (enabledGroups[_ri].name === _rotPri.priorityGroup) { groupIdx = _ri; break; }
-      }
-    }
-    var group = enabledGroups[groupIdx];
-    var queries = group.queries || [];
-    if (queries.length > 0) {
-      /* Apply learning: skip downweighted groups 70% of the time */
-      var gw = groupWeights[group.name];
-      var skipGroup = gw && gw < 1 && Math.random() > gw;
-      if (skipGroup) {
-        group = enabledGroups[(groupIdx + 1) % enabledGroups.length];
-        queries = group.queries || [];
-      }
-    }
-
-    if (queries.length > 0) {
-      var queryIdx = dayOfYear % queries.length;
-      var query = queries[queryIdx];
-      var areaIdx = dayOfYear % areas.length;
-      var area = areas[areaIdx];
-
-      var searchQuery = query + ' near ' + area + (city ? ', ' + city : '');
-      var radiusM = (profileJson.radiusKm || 3) * 1000;
-
-      /* Use stored area coordinates (geocoded at profile creation).
-         Only call Places to geocode if coords are missing (old profiles). */
-      var areaCoords = (profileJson.areaCoords || {})[area];
-      var lat = areaCoords ? areaCoords.lat : 0;
-      var lng = areaCoords ? areaCoords.lng : 0;
-      if (!lat && !lng) {
-        try {
-          var geoResults = await placesTextSearch(env, area + (city ? ', ' + city : ''), 0, 0, 50000, 1);
-          textSearchCalls++;
-          if (geoResults.length > 0) {
-            lat = geoResults[0].lat; lng = geoResults[0].lng;
-            /* Cache for next time — skip in dry run */
-            if (!profileJson.areaCoords) profileJson.areaCoords = {};
-            profileJson.areaCoords[area] = { lat: lat, lng: lng };
-            if (!dryRun) { try { await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profileJson)); } catch(e2) {} }
-          }
-        } catch (e) {
-          shortfallReasons.push('geo_failed:' + area);
-        }
-      }
-
-      /* 1st Text Search */
-      try {
-        var results = await placesTextSearch(env, searchQuery, lat, lng, radiusM, 20);
-        textSearchCalls++;
-
-        /* Apply review size hint */
-        results = results.filter(function(r) {
-          if (group.minReviews && r.reviews < group.minReviews) return false;
-          if (group.maxReviews && r.reviews > group.maxReviews) return false;
-          return true;
-        });
-
-        /* Apply distance filter */
-        if (lat && lng) {
-          results = results.filter(function(r) {
-            if (!r.lat || !r.lng) return true;
-            return haversineKm(lat, lng, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
-          });
-        }
-
-        /* Tag with group info */
-        results.forEach(function(r) {
-          r._groupName = group.name;
-          r._groupOffer = group.offer || '';
-          r._groupChannel = group.channel || 'message';
-          r._area = area;
-          r._query = query;
-          r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
-        });
-
-        /* Hard filter new search results */
-        var _fRes1 = await filterPlacesCandidates(env, firmCode, results, profileJson, ownCategory);
-        var filtered = _fRes1.candidates;
-        droppedByType += _fRes1.droppedByType;
-        if (_fRes1.drops) allDrops = allDrops.concat(_fRes1.drops);
-
-        /* Store filtered candidates in pool — skip in dry run */
-        if (!dryRun) await writePool(env, firmCode, filtered);
-        pool = pool.concat(filtered);
-      } catch (e) {
-        shortfallReasons.push('search_failed:' + group.name + ':' + String(e.message || e).slice(0, 100));
-        await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'places_search', message: String(e.message || e) });
-      }
-
-      /* 2nd Text Search ONLY if pool still < 5 candidates */
-      if (pool.length < 5) {
-        var group2 = enabledGroups[(dayOfYear + 1) % enabledGroups.length];
-        var queries2 = group2.queries || [];
-        if (queries2.length > 0) {
-          var query2 = queries2[(dayOfYear + 1) % queries2.length];
-          var area2 = areas[(dayOfYear + 1) % areas.length];
-          var searchQuery2 = query2 + ' near ' + area2 + (city ? ', ' + city : '');
-          /* Use area2's stored coords if available */
-          var ac2 = (profileJson.areaCoords || {})[area2];
-          var lat2 = ac2 ? ac2.lat : lat;
-          var lng2 = ac2 ? ac2.lng : lng;
-          try {
-            var results2 = await placesTextSearch(env, searchQuery2, lat2, lng2, radiusM, 20);
-            textSearchCalls++;
-            results2 = results2.filter(function(r) {
-              if (group2.minReviews && r.reviews < group2.minReviews) return false;
-              if (group2.maxReviews && r.reviews > group2.maxReviews) return false;
-              return true;
-            });
-            if (lat2 && lng2) {
-              results2 = results2.filter(function(r) {
-                if (!r.lat || !r.lng) return true;
-                return haversineKm(lat2, lng2, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
-              });
-            }
-            results2.forEach(function(r) {
-              r._groupName = group2.name;
-              r._groupOffer = group2.offer || '';
-              r._groupChannel = group2.channel || 'message';
-              r._area = area2;
-              r._query = query2;
-              r._distance = (lat && lng && r.lat && r.lng) ? haversineKm(lat, lng, r.lat, r.lng) : null;
-            });
-            var _fRes2 = await filterPlacesCandidates(env, firmCode, results2, profileJson, ownCategory);
-            var filtered2 = _fRes2.candidates;
-            droppedByType += _fRes2.droppedByType;
-            if (_fRes2.drops) allDrops = allDrops.concat(_fRes2.drops);
-            if (!dryRun) await writePool(env, firmCode, filtered2);
-            pool = pool.concat(filtered2);
-            shortfallReasons.push('2nd_search');
-          } catch (e) {
-            shortfallReasons.push('2nd_search_failed');
-          }
-        }
-      }
+  var radiusM = (profileJson.radiusKm || 3) * 1000;
+  var _rotKey = 'scout:rotate:' + firmCode;
+  var _rotPri = await env.G7_KV.get(_rotKey, 'json');
+  var groupIdx = dayOfYear % enabledGroups.length;
+  if (_rotPri && _rotPri.priorityGroup) {
+    for (var _ri = 0; _ri < enabledGroups.length; _ri++) {
+      if (enabledGroups[_ri].name === _rotPri.priorityGroup) { groupIdx = _ri; break; }
     }
   }
 
-  /* Deduplicate pool by placeId */
-  var seenIds = new Set();
-  pool = pool.filter(function(p) {
-    if (!p.placeId || seenIds.has(p.placeId)) return false;
-    seenIds.add(p.placeId);
-    return true;
-  });
+  /* Apply learning: skip downweighted groups 70% of the time */
+  var _firstGroup = enabledGroups[groupIdx];
+  if (_firstGroup) {
+    var gw = groupWeights[_firstGroup.name];
+    if (gw && gw < 1 && Math.random() > gw) groupIdx = (groupIdx + 1) % enabledGroups.length;
+  }
 
-  /* Enrich pool candidates with group metadata (offer, channel, area) */
-  var groupMap = {};
-  enabledGroups.forEach(function(g) { groupMap[g.name] = g; });
-  pool.forEach(function(p) {
-    var g = groupMap[p._groupName];
-    if (g) {
-      if (!p._groupOffer) p._groupOffer = g.offer || '';
-      if (!p._groupChannel) p._groupChannel = g.channel || 'message';
-    } else {
-      if (!p._groupOffer) p._groupOffer = '';
-      if (!p._groupChannel) p._groupChannel = 'message';
+  /* Default coords from first area */
+  var _defArea = areas[0] || '';
+  var _defCoords = (profileJson.areaCoords || {})[_defArea];
+  var _defLat = _defCoords ? _defCoords.lat : 0;
+  var _defLng = _defCoords ? _defCoords.lng : 0;
+
+  /* Helper: run one Places text search for a group, filter, add to pool */
+  var _searchedGroupNames = new Set();
+  async function _searchOneGroup(gIdx, aIdx) {
+    var g = enabledGroups[gIdx % enabledGroups.length];
+    var qs = g.queries || [];
+    if (qs.length === 0) return;
+    var q = qs[aIdx % qs.length];
+    var ar = areas[aIdx % areas.length] || _defArea;
+    var sq = q + ' near ' + ar + (city ? ', ' + city : '');
+    var ac = (profileJson.areaCoords || {})[ar];
+    var sLat = ac ? ac.lat : _defLat;
+    var sLng = ac ? ac.lng : _defLng;
+
+    /* Geocode if missing */
+    if (!sLat && !sLng) {
+      try {
+        var geoR = await placesTextSearch(env, ar + (city ? ', ' + city : ''), 0, 0, 50000, 1);
+        textSearchCalls++;
+        if (geoR.length > 0) {
+          sLat = geoR[0].lat; sLng = geoR[0].lng;
+          if (!profileJson.areaCoords) profileJson.areaCoords = {};
+          profileJson.areaCoords[ar] = { lat: sLat, lng: sLng };
+          if (!dryRun) { try { await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profileJson)); } catch(e2) {} }
+        }
+      } catch (e) { shortfallReasons.push('geo_failed:' + ar); }
     }
-    if (!p._area) p._area = areas[0] || '';
-  });
 
-  /* Record Places cost (text searches only — details tracked separately below) */
+    try {
+      var res = await placesTextSearch(env, sq, sLat, sLng, radiusM, 20);
+      textSearchCalls++;
+      _searchedGroupNames.add(g.name);
+      res = res.filter(function(r) {
+        if (g.minReviews && r.reviews < g.minReviews) return false;
+        if (g.maxReviews && r.reviews > g.maxReviews) return false;
+        return true;
+      });
+      if (sLat && sLng) {
+        res = res.filter(function(r) {
+          if (!r.lat || !r.lng) return true;
+          return haversineKm(sLat, sLng, r.lat, r.lng) <= (profileJson.radiusKm || 3) * 1.2;
+        });
+      }
+      res.forEach(function(r) {
+        r._groupName = g.name;
+        r._groupOffer = g.offer || '';
+        r._groupChannel = g.channel || 'message';
+        r._area = ar;
+        r._query = q;
+        r._distance = (sLat && sLng && r.lat && r.lng) ? haversineKm(sLat, sLng, r.lat, r.lng) : null;
+      });
+      var fRes = await filterPlacesCandidates(env, firmCode, res, profileJson, ownCategory);
+      droppedByType += fRes.droppedByType;
+      if (fRes.drops) allDrops = allDrops.concat(fRes.drops);
+      if (!dryRun) await writePool(env, firmCode, fRes.candidates);
+      pool = pool.concat(fRes.candidates);
+      if (textSearchCalls > 1) shortfallReasons.push('extra_search:' + g.name);
+    } catch (e) {
+      shortfallReasons.push('search_failed:' + g.name + ':' + String(e.message || e).slice(0, 100));
+      await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'places_search', message: String(e.message || e) });
+    }
+  }
+
+  /* Helper: deduplicate, enrich metadata, score, and pick */
+  function _dedupeAndEnrich() {
+    var seenIds = new Set();
+    pool = pool.filter(function(p) {
+      if (!p.placeId || seenIds.has(p.placeId)) return false;
+      seenIds.add(p.placeId);
+      return true;
+    });
+    var groupMap = {};
+    enabledGroups.forEach(function(g) { groupMap[g.name] = g; });
+    pool.forEach(function(p) {
+      var g = groupMap[p._groupName];
+      if (g) {
+        if (!p._groupOffer) p._groupOffer = g.offer || '';
+        if (!p._groupChannel) p._groupChannel = g.channel || 'message';
+      } else {
+        if (!p._groupOffer) p._groupOffer = '';
+        if (!p._groupChannel) p._groupChannel = 'message';
+      }
+      if (!p._area) p._area = areas[0] || '';
+    });
+  }
+
+  function _balancePick(scored) {
+    var picked = [];
+    var groupCounts = {};
+    var _seenGroups = new Set();
+    scored.forEach(function(s) {
+      if (picked.length >= 5) return;
+      var gn = s._groupName;
+      if (_seenGroups.has(gn)) return;
+      _seenGroups.add(gn);
+      picked.push(s);
+      groupCounts[gn] = 1;
+    });
+    scored.forEach(function(s) {
+      if (picked.length >= 5) return;
+      var gn = s._groupName;
+      if ((groupCounts[gn] || 0) >= 2) return;
+      if (picked.indexOf(s) !== -1) return;
+      picked.push(s);
+      groupCounts[gn] = (groupCounts[gn] || 0) + 1;
+    });
+    return { picked: picked, groupCounts: groupCounts };
+  }
+
+  /* ── STEP 2–4: Search → score → pick, retry up to 3 searches if < 5 pass ── */
+  var scored = [];
+  var picked = [];
+  var groupCounts = {};
+  var MAX_SEARCHES = 3;
+
+  /* 1st search if pool needs candidates */
+  if (pool.length < 10) {
+    await _searchOneGroup(groupIdx, dayOfYear);
+  }
+
+  /* Score and pick after 1st search */
+  _dedupeAndEnrich();
+  if (pool.length > 0) {
+    scored = await scoreLeadFit(env, pool, profileJson, pool[0]._groupName, context, cost);
+    droppedByFit += pool.length - scored.length;
+    var _scoredIds1 = new Set(scored.map(function(s) { return s.placeId; }));
+    pool.forEach(function(p) { if (!_scoredIds1.has(p.placeId)) allDrops.push({ name: p.name, reason: 'fit_below_6' }); });
+    var bp1 = _balancePick(scored);
+    picked = bp1.picked;
+    groupCounts = bp1.groupCounts;
+  }
+
+  /* Retry searches for uncovered groups if fewer than 5 picked */
+  var _searchOffset = 1;
+  while (picked.length < 5 && textSearchCalls < MAX_SEARCHES) {
+    /* Find the next group not yet searched */
+    var _nextGIdx = (groupIdx + _searchOffset) % enabledGroups.length;
+    _searchOffset++;
+    if (_searchOffset > enabledGroups.length) break; /* tried all groups */
+    var _nextG = enabledGroups[_nextGIdx];
+    if (_searchedGroupNames.has(_nextG.name)) continue;
+
+    await _searchOneGroup(_nextGIdx, dayOfYear + _searchOffset);
+
+    /* Re-score only the new candidates (avoid re-scoring already scored ones) */
+    _dedupeAndEnrich();
+    var newCandidates = pool.filter(function(p) {
+      /* Not already in scored set */
+      for (var si = 0; si < scored.length; si++) { if (scored[si].placeId === p.placeId) return false; }
+      return true;
+    });
+    if (newCandidates.length > 0) {
+      var newScored = await scoreLeadFit(env, newCandidates, profileJson, newCandidates[0]._groupName, context, cost);
+      droppedByFit += newCandidates.length - newScored.length;
+      var _scoredIdsN = new Set(newScored.map(function(s) { return s.placeId; }));
+      newCandidates.forEach(function(p) { if (!_scoredIdsN.has(p.placeId)) allDrops.push({ name: p.name, reason: 'fit_below_6' }); });
+      scored = scored.concat(newScored);
+    }
+    /* Re-pick from the full scored set */
+    var bpN = _balancePick(scored);
+    picked = bpN.picked;
+    groupCounts = bpN.groupCounts;
+  }
+
+  /* Record all Places text search cost */
   recordPlacesCost(cost, textSearchCalls, 0);
 
   if (pool.length === 0) {
@@ -4122,39 +4136,6 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     if (!dryRun) await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
     return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, drops: allDrops };
   }
-
-  /* ── STEP 3: Fit scoring on pool candidates ── */
-  var _poolBeforeFit = pool.length;
-  var scored = await scoreLeadFit(env, pool, profileJson, pool[0]._groupName, context, cost);
-  droppedByFit = _poolBeforeFit - scored.length;
-  /* Track fit drops */
-  var scoredIds = new Set(scored.map(function(s) { return s.placeId; }));
-  pool.forEach(function(p) {
-    if (!scoredIds.has(p.placeId)) allDrops.push({ name: p.name, reason: 'fit_below_6' });
-  });
-
-  /* ── STEP 4: Pick top 5, balanced across groups (≥3 groups when possible, max 2/group) ── */
-  var picked = [];
-  var groupCounts = {};
-  /* Pass 1: one per group (ensures group diversity) */
-  var _seenGroups = new Set();
-  scored.forEach(function(s) {
-    if (picked.length >= 5) return;
-    var gn = s._groupName;
-    if (_seenGroups.has(gn)) return;
-    _seenGroups.add(gn);
-    picked.push(s);
-    groupCounts[gn] = 1;
-  });
-  /* Pass 2: fill remaining slots, max 2 per group */
-  scored.forEach(function(s) {
-    if (picked.length >= 5) return;
-    var gn = s._groupName;
-    if ((groupCounts[gn] || 0) >= 2) return;
-    if (picked.indexOf(s) !== -1) return;
-    picked.push(s);
-    groupCounts[gn] = (groupCounts[gn] || 0) + 1;
-  });
 
   if (picked.length === 0) {
     shortfallReasons.push('no_scored_candidates');
@@ -4213,7 +4194,6 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
 
   /* ── Dry run: skip messages, pool removal, D1 save, KV cache ── */
   if (dryRun) {
-    recordPlacesCost(cost, 0, detailsCalls);
     var dryPicks = picked.map(function(p) {
       return { name: p.name, group: p._groupName, fitScore: p.fitScore, fitReason: p.fitReason,
                rating: p.rating, reviews: p.reviews, address: p.address, phone: p.phone,
