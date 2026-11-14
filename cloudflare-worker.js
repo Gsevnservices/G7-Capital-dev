@@ -634,7 +634,7 @@ async function recordAnalysisFailure(env, record) {
     list.unshift(record);
     if (list.length > 20) list = list.slice(0, 20);
     await kvPut(env, 'scout:analysis-failures', JSON.stringify(list),
-      { expirationTtl: 30 * 86400 });
+      );
 
     /* Rate-limit email: one per firm per calendar day */
     var today = new Date().toISOString().slice(0, 10);
@@ -2631,8 +2631,8 @@ async function runRankCheck(env, firmCode, profile, cost, ownDetails) {
 
   /* Store in KV with week key */
   var weekKey = getISOWeek();
-  await kvPut(env, 'scout:googlerank:' + firmCode + ':' + weekKey, JSON.stringify(rankData), { expirationTtl: 60 * 86400 });
-  await kvPut(env, 'scout:googlerank:latest:' + firmCode, JSON.stringify(rankData), { expirationTtl: 30 * 86400 });
+  await kvPut(env, 'scout:googlerank:' + firmCode + ':' + weekKey, JSON.stringify(rankData));
+  await kvPut(env, 'scout:googlerank:latest:' + firmCode, JSON.stringify(rankData));
   await kvPut(env, 'scout:googlerank:lastcheck:' + firmCode, new Date().toISOString(), { expirationTtl: 2 * 86400 });
 
   /* Record cost */
@@ -2728,7 +2728,7 @@ async function fetchOwnReviews(env, firmCode, profile, lang, cost, preDetails) {
     fetchedAt: new Date().toISOString()
   };
 
-  await kvPut(env, 'scout:googlereviews:' + firmCode, JSON.stringify(reviewData), { expirationTtl: 14 * 86400 });
+  await kvPut(env, 'scout:googlereviews:' + firmCode, JSON.stringify(reviewData));
   return reviewData;
 }
 
@@ -2855,8 +2855,8 @@ async function runCompetitorSnapshot(env, firmCode, profile, searchResults, cost
     snapshotAt: now
   };
 
-  await kvPut(env, 'scout:competitors:' + firmCode + ':' + weekKey, JSON.stringify(compData), { expirationTtl: 60 * 86400 });
-  await kvPut(env, 'scout:competitors:latest:' + firmCode, JSON.stringify(compData), { expirationTtl: 30 * 86400 });
+  await kvPut(env, 'scout:competitors:' + firmCode + ':' + weekKey, JSON.stringify(compData));
+  await kvPut(env, 'scout:competitors:latest:' + firmCode, JSON.stringify(compData));
   return compData;
 }
 
@@ -3729,11 +3729,100 @@ async function purgeExpiredPool(env, firmCode) {
   } catch (e) {}
 }
 
+/* ── Self-healing: rebuild market:ctx from scout state blob ──────────
+   The analysis context was expiring after 7 days of inactivity.
+   This rebuilds it server-side from firms:{FIRM}:scout_state, matching
+   the same format the client builds in scoutContext(). */
+async function rebuildMarketContext(env, firmCode) {
+  var st = await loadScoutState(env, firmCode);
+  if (!st) return null;
+  var pr = st.pick('scout_pending_result');
+  if (!pr) return null;
+  var bd = pr.businessData || {};
+  var a = {};
+  try {
+    var raw = pr.scoutOutput || '{}';
+    if (typeof raw === 'string') {
+      a = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim());
+    } else { a = raw; }
+  } catch (e) {}
+
+  var parts = [];
+  parts.push('BUSINESS: ' + [bd.businessName, bd.businessType || bd.businessTypeInput, bd.location].filter(Boolean).join(' | '));
+  if (bd.whatYouSell)      parts.push('SELLS: ' + bd.whatYouSell);
+  if (bd.avgTransaction)   parts.push('TYPICAL SALE: ' + bd.avgTransaction);
+  if (bd.revenueModel)     parts.push('REVENUE MODEL: ' + bd.revenueModel + (bd.billingPeriod ? ' / ' + bd.billingPeriod : ''));
+  if (bd.currentCustomers) parts.push('CURRENT CUSTOMERS: ' + bd.currentCustomers);
+  if (bd.targetCustomers)  parts.push('12-MONTH TARGET: ' + bd.targetCustomers);
+  if (bd.bestCustomers)    parts.push('BEST EXISTING CUSTOMERS: ' + bd.bestCustomers);
+  if (bd.bestMonths)       parts.push('BEST MONTHS: ' + bd.bestMonths);
+  if (bd.worstMonths)      parts.push('WORST MONTHS: ' + bd.worstMonths);
+  if (bd.seasonalEvents)   parts.push('LOCAL EVENTS: ' + bd.seasonalEvents);
+  if (bd.whatWorked)       parts.push('WHAT HAS WORKED: ' + bd.whatWorked);
+  if (bd.whatFailed)       parts.push('WHAT HAS FAILED: ' + bd.whatFailed);
+  var comps = [bd.comp1name, bd.comp2name].filter(Boolean);
+  if (comps.length) parts.push('COMPETITORS: ' + comps.join(', ') +
+    (bd.comp1better ? ' | stronger than us at: ' + bd.comp1better : '') +
+    (bd.comp1worse  ? ' | weaker at: ' + bd.comp1worse : ''));
+  if (a.tab1 && Array.isArray(a.tab1.icps)) {
+    try {
+      parts.push('CUSTOMER GROUPS: ' + a.tab1.icps.map(function(g) {
+        return (g.name || '') + (g.why ? ' — ' + g.why : (g.description ? ' — ' + g.description : ''));
+      }).join(' || '));
+    } catch (e) {}
+  }
+  if (a.headline && a.headline.momentumNote) parts.push('SCOUT ASSESSMENT: ' + a.headline.momentumNote);
+  var lang = bd.language || '';
+  if (lang) parts.push('PREFERRED LANGUAGE: ' + lang);
+
+  var context = parts.join('\n');
+  if (context.length > 3500) context = context.slice(0, 3500);
+  var city = bd.location || '';
+  if (city.length > 80) city = city.slice(0, 80);
+
+  var obj = { context: context, city: city };
+  await kvPut(env, 'market:ctx:' + firmCode, JSON.stringify(obj));
+  return obj;
+}
+
+/* ── Self-healing: rebuild lead profile from analysis if missing ─────
+   Calls generateLeadProfile, preserving any group renames from the
+   existing D1 customer data. */
+async function rebuildLeadProfile(env, firmCode, context, city, cost) {
+  var profile = await generateLeadProfile(env, firmCode, context, city, cost);
+  /* Preserve group renames from D1 (existing leads keep their group names) */
+  if (env.DB && profile && profile.groups) {
+    try {
+      var _rlLeadRows = await env.DB.prepare(
+        "SELECT kind, json_extract(data, '$.primaryType') as ptype FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND kind != '' LIMIT 50"
+      ).bind(firmCode).all();
+      var groupTypes = {};
+      (_rlLeadRows.results || []).forEach(function(r) {
+        if (!r.kind || !r.ptype) return;
+        if (!groupTypes[r.kind]) groupTypes[r.kind] = new Set();
+        groupTypes[r.kind].add(r.ptype);
+      });
+      if (Object.keys(groupTypes).length > 0) {
+        profile.groups.forEach(function(ng) {
+          var ngTypes = new Set(ng.placesTypes || []);
+          var bestMatch = null, bestOverlap = 0;
+          Object.keys(groupTypes).forEach(function(ogName) {
+            var overlap = 0;
+            groupTypes[ogName].forEach(function(t) { if (ngTypes.has(t)) overlap++; });
+            if (overlap > bestOverlap) { bestOverlap = overlap; bestMatch = ogName; }
+          });
+          if (bestMatch && bestOverlap >= 1) ng.name = bestMatch;
+        });
+      }
+    } catch (e) {}
+  }
+  await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profile));
+  return profile;
+}
+
 /* ── Main lead generation — pool-first, max 1-2 Text Search/day ── */
 async function runLeadsForFirm(env, firmCode, day, cost) {
   var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
-  if (!profileJson) return { status: 'no_profile' };
-  /* Confirm gate removed — leads start as soon as a profile exists. */
 
   /* Check if leads already generated today */
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
@@ -3755,10 +3844,20 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
   var bc = await budgetCheck(env, day, firmCode);
   if (!bc.ok) return { status: 'budget_exceeded' };
 
+  /* Self-healing: rebuild market context from scout state if missing */
   var saved = await env.G7_KV.get('market:ctx:' + firmCode, 'json');
-  if (!saved || !saved.context) return { status: 'no_context' };
+  if (!saved || !saved.context) {
+    saved = await rebuildMarketContext(env, firmCode);
+    if (!saved || !saved.context) return { status: 'no_context' };
+  }
   var context = saved.context;
   var city = saved.city || '';
+
+  /* Self-healing: rebuild lead profile from analysis if missing */
+  if (!profileJson) {
+    profileJson = await rebuildLeadProfile(env, firmCode, context, city, cost);
+    if (!profileJson) return { status: 'no_profile' };
+  }
 
   /* Message language — prefer explicit setting, fall back to onboarding. */
   var lang = 'Hinglish';
@@ -3870,7 +3969,7 @@ async function runLeadsForFirm(env, firmCode, day, cost) {
             /* Cache for next time */
             if (!profileJson.areaCoords) profileJson.areaCoords = {};
             profileJson.areaCoords[area] = { lat: lat, lng: lng };
-            try { await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profileJson), { expirationTtl: 30 * 86400 }); } catch(e2) {}
+            try { await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profileJson)); } catch(e2) {}
           }
         } catch (e) {
           shortfallReasons.push('geo_failed:' + area);
@@ -6431,7 +6530,7 @@ export default {
         var _ctxNew = JSON.stringify({ context: context, city: city });
         var _ctxOld = await env.G7_KV.get(_ctxKey);
         if (_ctxNew !== _ctxOld) {
-          await kvPut(env, _ctxKey, _ctxNew, { expirationTtl: 7 * 86400 });
+          await kvPut(env, _ctxKey, _ctxNew);
           /* Auto-generate lead profile when analysis changes */
           ctx.waitUntil((async function() {
             try {
@@ -6442,8 +6541,8 @@ export default {
               if (_lpNewHash !== _lpOldHash) {
                 var _lpC = newCostAccum();
                 var _lpProf = await generateLeadProfile(env, session.firmCode, context, city, _lpC);
-                await kvPut(env, 'scout:leadprofile:' + session.firmCode, JSON.stringify(_lpProf), { expirationTtl: 30 * 86400 });
-                await kvPut(env, _lpSrcKey, _lpNewHash, { expirationTtl: 30 * 86400 });
+                await kvPut(env, 'scout:leadprofile:' + session.firmCode, JSON.stringify(_lpProf));
+                await kvPut(env, _lpSrcKey, _lpNewHash);
                 await flushCost(env, day, session.firmCode, _lpC);
                 /* Lead generation is now triggered by POST /scout/leads/generate
                    when the user visits Today. No ctx.waitUntil here — it was being
@@ -6453,15 +6552,8 @@ export default {
               try { await recordError(env, { source: 'worker', route: 'leads/auto-profile', firmCode: session.firmCode, kind: 'auto_gen', message: String(e.message || e) }); } catch(e2) {}
             }
           })());
-        } else {
-          // Value unchanged — still refresh TTL once per day so the key
-          // doesn't expire while the firm is actively using the product.
-          var _ctxTouchKey = 'market:ctx-touch:' + session.firmCode + ':' + day;
-          if (!(await env.G7_KV.get(_ctxTouchKey))) {
-            await kvPut(env, _ctxKey, _ctxNew, { expirationTtl: 7 * 86400 });
-            await kvPut(env, _ctxTouchKey, '1', { expirationTtl: 86400 });
-          }
         }
+        /* No else — key has no TTL, no refresh needed. */
       }
 
       /* Try cache-only assembly first (cron pre-fetches feeds + picker runs). */
@@ -6943,7 +7035,7 @@ export default {
         if (Array.isArray(_lpBody.areas)) {
           _lpExisting.areas = _lpBody.areas.slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
         }
-        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpExisting), { expirationTtl: 30 * 86400 });
+        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpExisting));
         /* Lead generation now runs via POST /scout/leads/generate when the
            user visits Today. Removed ctx.waitUntil — it was being terminated. */
         return jsonResponse({ ok: true, profile: _lpExisting });
@@ -6957,11 +7049,11 @@ export default {
       var _lpDay2 = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
       try {
         var _lpProfile = await generateLeadProfile(env, _lpSess2.firmCode, _lpSaved.context, _lpSaved.city || '', _lpCost2);
-        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpProfile), { expirationTtl: 30 * 86400 });
+        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpProfile));
         /* Store hash of analysis that generated it */
         var _lpSrcHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(_lpSaved.context.slice(0, 3000)));
         var _lpSrcHex = Array.from(new Uint8Array(_lpSrcHash)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 16);
-        await kvPut(env, 'scout:leadprofile:src:' + _lpSess2.firmCode, _lpSrcHex, { expirationTtl: 30 * 86400 });
+        await kvPut(env, 'scout:leadprofile:src:' + _lpSess2.firmCode, _lpSrcHex);
         ctx.waitUntil(flushCost(env, _lpDay2, _lpSess2.firmCode, _lpCost2));
         return jsonResponse({ ok: true, profile: _lpProfile });
       } catch (e) {
@@ -7234,6 +7326,109 @@ export default {
         try { await recordError(env, { source: 'worker', route: 'leads/generate', firmCode: _lgSess.firmCode, kind: 'generate_failed', message: String(e.message || e) }); } catch(e2) {}
         return jsonResponse({ ok: false, error: String(e.message || e).slice(0, 200) }, 500);
       }
+    }
+
+    // ── POST /admin/leads/dry-run — admin-only balance test, no saves ──
+    if (request.method === 'POST' && path === '/admin/leads/dry-run') {
+      if (env.ENVIRONMENT !== 'dev') return jsonResponse({ error: 'Not found' }, 404);
+      let _drBody;
+      try { _drBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_drBody.adminPassword || _drBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'forbidden' }, 403);
+      var _drFirm = String(_drBody.firmCode || '').toUpperCase().trim();
+      if (!_drFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+
+      var _drCost = newCostAccum();
+      var _drProfile = await env.G7_KV.get('scout:leadprofile:' + _drFirm, 'json');
+      var _drSaved = await env.G7_KV.get('market:ctx:' + _drFirm, 'json');
+      if (!_drSaved || !_drSaved.context) {
+        _drSaved = await rebuildMarketContext(env, _drFirm);
+      }
+      if (!_drProfile && _drSaved && _drSaved.context) {
+        _drProfile = await rebuildLeadProfile(env, _drFirm, _drSaved.context, _drSaved.city || '', _drCost);
+      }
+      if (!_drProfile) return jsonResponse({ error: 'no_profile' }, 400);
+      if (!_drSaved) return jsonResponse({ error: 'no_context' }, 400);
+
+      var _drDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _drEnabledGroups = _drProfile.groups.filter(function(g) { return g.enabled !== false; });
+      var _drAreas = _drProfile.areas || [];
+
+      /* Fetch pool from Places — no D1 saves */
+      var _drPool = [];
+      var _drTextSearchCalls = 0;
+      var _drDetailsCalls = 0;
+      var _drExclude = new Set((_drProfile.exclude || []).map(function(e) { return e.toLowerCase(); }));
+
+      for (var _drGi = 0; _drGi < _drEnabledGroups.length && _drTextSearchCalls < 6; _drGi++) {
+        var _drG = _drEnabledGroups[_drGi];
+        var _drQueries = (_drG.queries || []).slice(0, 2);
+        for (var _drQi = 0; _drQi < _drQueries.length && _drTextSearchCalls < 6; _drQi++) {
+          var _drQ = _drQueries[_drQi];
+          var _drArea = _drAreas.length > 0 ? _drAreas[_drTextSearchCalls % _drAreas.length] : '';
+          var _drSearchQ = _drQ + (_drArea ? ' near ' + _drArea : '');
+          try {
+            var _drResp = await fetch('https://places.googleapis.com/v1/places:searchText', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': env.GOOGLE_PLACES_KEY, 'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.primaryType' },
+              body: JSON.stringify({ textQuery: _drSearchQ, maxResultCount: 10, languageCode: 'en' })
+            });
+            _drTextSearchCalls++;
+            var _drPlaces = await _drResp.json();
+            (_drPlaces.places || []).forEach(function(p) {
+              var pType = (p.primaryType || '').toLowerCase();
+              if (_drExclude.has(pType)) return;
+              _drPool.push({
+                id: p.id, name: (p.displayName && p.displayName.text) || '', address: p.formattedAddress || '',
+                rating: p.rating || 0, reviews: p.userRatingCount || 0, primaryType: p.primaryType || '',
+                _groupName: _drG.name, _groupOffer: _drG.offer || ''
+              });
+            });
+          } catch (e) {}
+        }
+      }
+
+      /* Deduplicate by place ID */
+      var _drSeen = new Set();
+      _drPool = _drPool.filter(function(p) { if (_drSeen.has(p.id)) return false; _drSeen.add(p.id); return true; });
+
+      /* Score if pool >= 5 */
+      var _drScored = _drPool;
+      if (_drPool.length >= 5) {
+        try {
+          var _drFitResult = await scoreLeadFit(env, _drPool.slice(0, 30), _drProfile, '', _drSaved.context.slice(0, 1500), _drCost);
+          _drScored = _drFitResult.scored || _drPool;
+        } catch (e) { _drScored = _drPool; }
+      }
+
+      /* Apply balance algorithm */
+      var _drPicked = [], _drGroupCounts = {}, _drSeenG = new Set();
+      _drScored.forEach(function(s) {
+        if (_drPicked.length >= 5) return;
+        var gn = s._groupName;
+        if (_drSeenG.has(gn)) return;
+        _drSeenG.add(gn);
+        _drPicked.push(s);
+        _drGroupCounts[gn] = 1;
+      });
+      _drScored.forEach(function(s) {
+        if (_drPicked.length >= 5) return;
+        var gn = s._groupName;
+        if ((_drGroupCounts[gn] || 0) >= 2) return;
+        if (_drPicked.indexOf(s) !== -1) return;
+        _drPicked.push(s);
+        _drGroupCounts[gn] = (_drGroupCounts[gn] || 0) + 1;
+      });
+
+      recordPlacesCost(_drCost, _drTextSearchCalls, _drDetailsCalls);
+      await flushCost(env, _drDay, _drFirm, _drCost);
+
+      return jsonResponse({
+        ok: true, poolSize: _drPool.length, textSearchCalls: _drTextSearchCalls,
+        picks: _drPicked.map(function(p) { return { name: p.name, group: p._groupName, rating: p.rating, reviews: p.reviews }; }),
+        groupCounts: _drGroupCounts,
+        distinctGroups: Object.keys(_drGroupCounts).length,
+        cost: { usd: _drCost.usd, log: _drCost.log || [] }
+      });
     }
 
     // ── POST /scout/leads/reply-draft — Haiku drafts a next-step message ──
@@ -7586,7 +7781,7 @@ export default {
         }
       }
 
-      await kvPut(env, 'scout:leadprofile:' + _olSess.firmCode, JSON.stringify(_olProfile), { expirationTtl: 30 * 86400 });
+      await kvPut(env, 'scout:leadprofile:' + _olSess.firmCode, JSON.stringify(_olProfile));
       return jsonResponse({ ok: true, profile: _olProfile });
     }
 
@@ -7623,7 +7818,7 @@ export default {
         _ksProfile.keySearches = _ksBody.keySearches.slice(0, 5).map(function(s) { return String(s).slice(0, 120).toLowerCase(); });
       }
 
-      await kvPut(env, 'scout:leadprofile:' + _ksSess.firmCode, JSON.stringify(_ksProfile), { expirationTtl: 30 * 86400 });
+      await kvPut(env, 'scout:leadprofile:' + _ksSess.firmCode, JSON.stringify(_ksProfile));
       return jsonResponse({ ok: true, keySearches: _ksProfile.keySearches });
     }
 
@@ -7854,7 +8049,7 @@ export default {
         if (!_glSaved || !_glSaved.context) return jsonResponse({ error: 'No analysis for this firm' }, 400);
         _glProfile = await generateLeadProfile(env, _glFirm, _glSaved.context, _glSaved.city || '', _glCost);
         _glProfile.confirmedAt = new Date().toISOString(); /* Admin auto-confirms */
-        await kvPut(env, 'scout:leadprofile:' + _glFirm, JSON.stringify(_glProfile), { expirationTtl: 30 * 86400 });
+        await kvPut(env, 'scout:leadprofile:' + _glFirm, JSON.stringify(_glProfile));
       }
 
       /* Force regenerate today's leads */
