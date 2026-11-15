@@ -44,8 +44,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
 /* ── Settings layout ── */
 .settings-wrap{max-width:560px;margin:0 auto;padding:40px 24px 100px}
-.settings-section{margin-bottom:40px}
-.settings-section-label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:20px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+
+/* ── Section ── */
+.ss{margin-bottom:48px;scroll-margin-top:100px}
+.ss-head{margin-bottom:20px}
+.ss-label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:6px}
+.ss-desc{font-size:12px;color:var(--grey2);line-height:1.5}
+
+/* ── Rows ── */
 .s-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;min-height:44px}
 .s-row-label{font-size:13px;color:var(--grey1);line-height:1.4}
 .s-toggle{background:transparent;border:0;padding:8px 0;font-family:inherit;font-size:10px;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:flex-end}
@@ -64,10 +70,35 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .s-lang-btn{background:transparent;border:0;padding:8px 4px;font-family:inherit;font-size:10px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;min-height:44px;display:flex;align-items:center}
 .s-lang-btn.active{color:var(--gold)}
 .s-lang-btn:not(.active){color:var(--grey2)}
+.s-note{font-size:12px;color:var(--grey2);line-height:1.6;margin-bottom:14px}
+
+/* ── Checkbox lists ── */
 .s-news-cats{margin-top:10px}
 .s-news-cats label{display:flex;align-items:center;gap:10px;margin-bottom:8px;cursor:pointer;font-size:13px;color:var(--grey1);min-height:44px}
 .s-news-cats input[type="checkbox"]{width:18px;height:18px;accent-color:var(--gold);cursor:pointer}
-.s-note{font-size:12px;color:var(--grey2);line-height:1.6;margin-bottom:14px}
+
+/* ── Group rows ── */
+.sg-row{display:flex;justify-content:space-between;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--border2)}
+.sg-info{flex:1;min-width:0}
+.sg-name{font-size:13px;color:var(--white)}
+.sg-why{font-size:10px;color:var(--grey2);line-height:1.4;margin-top:2px}
+
+/* ── Area tags ── */
+.area-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.area-tag{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:var(--black2);border:1px solid var(--border2);font-size:12px;color:var(--white2)}
+.area-tag button{background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+
+/* ── Collapse ── */
+.collapse-header{display:flex;align-items:center;gap:8px;cursor:pointer;padding:12px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey2);border-top:1px solid var(--border2)}
+.collapse-header:hover{color:var(--grey1)}
+.collapse-header .arrow{transition:transform .2s}
+.collapse-body{display:none;padding-bottom:16px}
+.collapse-body.open{display:block}
+
+/* ── Listing ── */
+.listing-linked{display:flex;align-items:center;gap:10px;padding:12px;background:var(--black2);border:1px solid var(--border);border-radius:6px;margin-bottom:8px}
+.ll-name{font-size:13px;color:var(--white);flex:1}
+.ll-badge{font-size:9px;padding:2px 8px;background:rgba(201,168,76,0.15);color:var(--gold);letter-spacing:.1em;text-transform:uppercase}
 </style>
 </head>
 <body>
@@ -95,77 +126,116 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 
 <div class="settings-wrap" id="settingsWrap">
 
-  <!-- PLAN -->
-  <div class="settings-section" id="s-plan">
-    <div class="settings-section-label">Plan</div>
-    <div id="planSettings">
-      <div style="font-size:13px;color:var(--grey2)">Loading&hellip;</div>
+  <!-- 1. CUSTOMER FINDER -->
+  <div class="ss" id="customer-finder">
+    <div class="ss-head">
+      <div class="ss-label">Customer Finder</div>
+      <div class="ss-desc">Who Scout finds for you every day.</div>
     </div>
+    <div id="finderContent"><div class="s-note">Loading...</div></div>
   </div>
 
-  <!-- EMAILS -->
-  <div class="settings-section" id="s-emails">
-    <div class="settings-section-label">Emails</div>
-    <div id="emailSettings">
-      <div style="font-size:13px;color:var(--grey2)">Loading&hellip;</div>
+  <!-- 2. GOOGLE LISTING -->
+  <div class="ss" id="google">
+    <div class="ss-head">
+      <div class="ss-label">Google Listing</div>
+      <div class="ss-desc">How customers find you on Google.</div>
     </div>
+    <div id="googleContent"><div class="s-note">Loading...</div></div>
   </div>
 
-  <!-- MESSAGES -->
-  <div class="settings-section" id="s-messages">
-    <div class="settings-section-label">Messages</div>
+  <!-- 3. MESSAGES -->
+  <div class="ss" id="messages">
+    <div class="ss-head">
+      <div class="ss-label">Messages</div>
+      <div class="ss-desc">The language and voice of every message Scout writes.</div>
+    </div>
     <div class="s-row">
       <span class="s-row-label">Message language</span>
       <span id="langPicker" style="display:flex;gap:4px"></span>
     </div>
+    <div class="s-saved" id="langSaved">Saved</div>
   </div>
 
-  <!-- REVIEWS -->
-  <div class="settings-section" id="s-reviews">
-    <div class="settings-section-label">Reviews</div>
-    <div style="margin-bottom:14px">
-      <div class="s-row-label" style="margin-bottom:8px">Google review link</div>
-      <div class="s-input-row">
-        <input class="s-input" type="url" id="reviewLink" placeholder="https://g.page/&hellip;">
-        <button class="s-btn" id="reviewSave">Save</button>
+  <!-- 4. EMAILS -->
+  <div class="ss" id="emails">
+    <div class="ss-head">
+      <div class="ss-label">Emails</div>
+      <div class="ss-desc">What Scout sends to your inbox.</div>
+    </div>
+    <div id="emailContent"><div class="s-note">Loading...</div></div>
+  </div>
+
+  <!-- 5. NEWS -->
+  <div class="ss" id="news">
+    <div class="ss-head">
+      <div class="ss-label">News</div>
+      <div class="ss-desc">Daily updates relevant to your business.</div>
+    </div>
+    <div id="newsContent"><div class="s-note">Loading...</div></div>
+  </div>
+
+  <!-- 6. REGULARS & QR (B2C only) -->
+  <div class="ss" id="regulars" style="display:none">
+    <div class="ss-head">
+      <div class="ss-label">Regulars &amp; QR</div>
+      <div class="ss-desc">Bring back your repeat customers.</div>
+    </div>
+    <div id="regularsContent"><div class="s-note">Loading...</div></div>
+  </div>
+
+  <!-- 7. PLAN -->
+  <div class="ss" id="plan">
+    <div class="ss-head">
+      <div class="ss-label">Plan</div>
+      <div class="ss-desc">Your plan and usage.</div>
+    </div>
+    <div id="planContent"><div class="s-note">Loading...</div></div>
+  </div>
+
+  <!-- 8. ACCOUNT -->
+  <div class="ss" id="account">
+    <div class="ss-head">
+      <div class="ss-label">Account</div>
+      <div class="ss-desc">Password, email, and sign out.</div>
+    </div>
+    <div id="accountContent"><div class="s-note">Loading...</div></div>
+  </div>
+
+  <!-- COLLAPSED: More options -->
+  <div style="margin-top:8px">
+    <div class="collapse-header" id="moreToggle">
+      <span class="arrow" id="moreArrow">&#9654;</span>
+      <span>More options</span>
+      <span style="font-size:10px;color:var(--grey2);font-weight:400;letter-spacing:0;text-transform:none;margin-left:auto">optional</span>
+    </div>
+    <div class="collapse-body" id="moreBody">
+
+      <!-- DELIVERY PLATFORMS -->
+      <div class="ss" id="delivery" style="margin-top:16px">
+        <div class="ss-head">
+          <div class="ss-label">Delivery Platforms</div>
+          <div class="ss-desc">Your Zomato and Swiggy listings.</div>
+        </div>
+        <div id="deliveryContent"><div class="s-note">Loading...</div></div>
       </div>
-      <div class="s-hint">Find it: Google Business Profile &rarr; Ask for reviews &rarr; Copy link.</div>
-      <div class="s-err" id="reviewErr"></div>
-      <div class="s-saved" id="reviewSaved">Saved</div>
-    </div>
-    <div class="s-row">
-      <span class="s-row-label">Ask customers for reviews</span>
-      <button class="s-toggle" id="reviewToggle"></button>
+
+      <!-- REVIEWS -->
+      <div class="ss" id="reviews">
+        <div class="ss-head">
+          <div class="ss-label">Reviews</div>
+          <div class="ss-desc">Google review link and review-ask settings.</div>
+        </div>
+        <div id="reviewsContent"><div class="s-note">Loading...</div></div>
+      </div>
     </div>
   </div>
 
-  <!-- NEWS -->
-  <div class="settings-section" id="s-news">
-    <div class="settings-section-label">News</div>
-    <div id="newsCats">
-      <div style="font-size:13px;color:var(--grey2)">Loading&hellip;</div>
+  <!-- COST CHECK (admin only) -->
+  <div class="ss" id="s-cost" style="display:none;margin-top:32px">
+    <div class="ss-head">
+      <div class="ss-label">API Cost — Today</div>
     </div>
-  </div>
-
-  <!-- CUSTOMER FINDER -->
-  <div class="settings-section" id="s-leads">
-    <div class="settings-section-label">Customer Finder</div>
-    <div id="leadsSettings">
-      <div style="font-size:13px;color:var(--grey2)">Loading&hellip;</div>
-    </div>
-  </div>
-
-  <!-- ACCOUNT -->
-  <div class="settings-section" id="s-account">
-    <div class="settings-section-label">Account</div>
-    <div id="accountSettings">
-      <div style="font-size:13px;color:var(--grey2)">Loading&hellip;</div>
-    </div>
-  </div>
-
-  <!-- COST CHECK (admin only — hidden until admin password entered) -->
-  <div class="settings-section" id="s-cost" style="display:none">
-    <div class="settings-section-label">API Cost — Today</div>
     <div id="costTable"></div>
   </div>
 
@@ -174,7 +244,8 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 <script>
 
 var _auth = {};
-var _emailState = { actions: false, news: false, on: false, hasEmail: false, email: '' };
+var _profile = null;
+var _isB2C = false;
 
 /* ── INIT ── */
 window.addEventListener('DOMContentLoaded', async function() {
@@ -186,147 +257,334 @@ window.addEventListener('DOMContentLoaded', async function() {
   migrateUnscopedScoutKeys();
   await loadScoutStateFromServer();
 
-  renderPlan();
-  renderEmails();
+  /* Load profile first — needed for B2C check */
+  try {
+    var pr = await fetch(SCOUT_WORKER + '/scout/lead-profile', { headers: _auth });
+    if (pr.ok) { var pj = await pr.json(); _profile = pj.profile || null; }
+  } catch(e) {}
+
+  /* B2C check via setup endpoint */
+  try {
+    var sr = await fetch(SCOUT_WORKER + '/scout/setup', { headers: _auth });
+    if (sr.ok) { var sd = await sr.json(); _isB2C = sd.isB2C; }
+  } catch(e) {}
+
+  /* Show regulars section for B2C */
+  if (_isB2C) document.getElementById('regulars').style.display = '';
+
+  /* Render all sections in parallel */
+  renderFinder();
+  renderGoogle();
   renderLanguage();
-  renderReviews();
+  renderEmails();
   renderNews();
-  renderLeadsSettings();
+  renderRegulars();
+  renderPlan();
   renderAccount();
+  renderDelivery();
+  renderReviews();
   renderCostCheck();
+
+  /* More options toggle */
+  document.getElementById('moreToggle').onclick = function() {
+    var body = document.getElementById('moreBody');
+    var arrow = document.getElementById('moreArrow');
+    var open = body.classList.toggle('open');
+    arrow.style.transform = open ? 'rotate(90deg)' : '';
+  };
 
   /* Scroll to hash section */
   if (location.hash) {
-    var target = document.getElementById('s-' + location.hash.slice(1));
-    if (target) setTimeout(function() { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
+    var hid = location.hash.slice(1);
+    /* Support old #leads → #customer-finder */
+    var idMap = { leads: 'customer-finder', 's-leads': 'customer-finder', 's-emails': 'emails', 's-messages': 'messages', 's-news': 'news', 's-reviews': 'reviews', 's-plan': 'plan', 's-account': 'account' };
+    var target = document.getElementById(idMap[hid] || hid);
+    if (target) setTimeout(function() { target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 200);
+    /* If target is inside More options, open it */
+    if (target && document.getElementById('moreBody').contains(target)) {
+      document.getElementById('moreBody').classList.add('open');
+      document.getElementById('moreArrow').style.transform = 'rotate(90deg)';
+    }
   }
 });
 
-/* ── FLASH HELPERS ── */
-function flashSaved(id) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.style.display = '';
-  clearTimeout(el._t);
-  el._t = setTimeout(function() { el.style.display = 'none'; }, 2000);
-}
-function flashErr(id, msg) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = msg;
-  el.style.display = '';
-  clearTimeout(el._t);
-  el._t = setTimeout(function() { el.style.display = 'none'; }, 4000);
-}
+/* ── Helpers ── */
+function flashSaved(id){var el=document.getElementById(id);if(!el)return;el.style.display='';clearTimeout(el._t);el._t=setTimeout(function(){el.style.display='none'},2000)}
+function flashErr(id,msg){var el=document.getElementById(id);if(!el)return;el.textContent=msg;el.style.display='';clearTimeout(el._t);el._t=setTimeout(function(){el.style.display='none'},4000)}
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
 /* ═══════════════════════════════════════
-   PLAN
+   1. CUSTOMER FINDER
 ═══════════════════════════════════════ */
-async function renderPlan() {
-  var el = document.getElementById('planSettings');
-  try {
-    var r = await fetch(SCOUT_WORKER + '/scout/plan', { headers: _auth });
-    if (!r.ok) { el.innerHTML = '<div class="s-note">Could not load plan.</div>'; return; }
-    var d = await r.json();
-    var isPaid = d.plan === 'paid';
-    var html = '';
-
-    /* Plan badge */
-    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
-    html += '<span style="display:inline-block;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:4px 12px;border-radius:2px;' +
-      (isPaid ? 'background:rgba(224,146,47,0.15);color:#F0B968;border:1px solid rgba(224,146,47,0.3)' : 'background:rgba(255,255,255,0.06);color:#8A8880;border:1px solid rgba(255,255,255,0.1)') + '">' +
-      (isPaid ? 'Paid plan' : 'Free plan') + '</span>';
-    if (!isPaid) {
-      html += '<a href="mailto:gsevnservices@gmail.com?subject=Upgrade%20my%20Scout%20account&body=Hi%2C%20I\'d%20like%20to%20upgrade%20my%20Scout%20account%20to%20the%20paid%20plan." ' +
-        'style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#E0922F;text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Talk to us about upgrading \u2192</a>';
-    }
-    html += '</div>';
-
-    /* Usage rows */
-    var labels = { ask: 'Ask Scout', analysis: 'Business analysis', checkin: 'Weekly check-in', leads: 'New leads today', groupsearch: 'Extra group search' };
-    var feats = d.features || {};
-    for (var k in labels) {
-      if (!feats[k]) continue;
-      var f = feats[k];
-      var pct = f.limit > 0 ? Math.min(100, Math.round(f.used / f.limit * 100)) : (f.used > 0 ? 100 : 0);
-      var barColor = pct >= 100 ? '#c44' : '#E0922F';
-      html += '<div style="margin-bottom:14px">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">';
-      html += '<span style="font-size:12px;color:var(--white);letter-spacing:.08em">' + labels[k] + '</span>';
-      html += '<span style="font-size:11px;color:#8A8880">';
-      if (f.limit > 0) {
-        html += f.used + ' of ' + f.limit + ' used';
-        if (f.period === 'day') html += ' today';
-        else if (f.period === 'month') html += ' this month';
-      } else {
-        html += 'Paid only';
-      }
-      html += '</span></div>';
-      /* Progress bar */
-      html += '<div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">';
-      html += '<div style="width:' + pct + '%;height:100%;background:' + barColor + ';transition:width .3s"></div>';
-      html += '</div>';
-      /* Paid limit hint for free users */
-      if (!isPaid && f.paidLimit) {
-        html += '<div style="font-size:10px;color:#5A5855;margin-top:3px">Paid: ' + f.paidLimit + '/' + (f.period === 'day' ? 'day' : f.period === 'month' ? 'month' : 'lifetime') + '</div>';
-      }
-      html += '</div>';
-    }
-
-    el.innerHTML = html;
-  } catch (e) {
-    el.innerHTML = '<div class="s-note">Could not load plan.</div>';
-  }
-}
-
-/* ═══════════════════════════════════════
-   EMAILS
-═══════════════════════════════════════ */
-async function renderEmails() {
-  var el = document.getElementById('emailSettings');
-  try {
-    var r = await fetch(SCOUT_WORKER + '/scout/brief-email', { headers: _auth });
-    if (r.ok) _emailState = await r.json();
-  } catch (e) { el.innerHTML = '<div class="s-note">Could not load email settings.</div>'; return; }
-
-  if (!_emailState.hasEmail) {
-    el.innerHTML =
-      '<div class="s-note">Add a recovery email first so Scout can send you daily briefings.</div>' +
-      '<div class="s-note" style="margin-top:4px">You can add one in the Account section below.</div>';
+async function renderFinder() {
+  var el = document.getElementById('finderContent');
+  if (!_profile) {
+    el.innerHTML = '<div class="s-note">No lead profile yet. <a href="setup.html?step=groups" class="s-link">Set up Scout</a> to start finding leads.</div>';
     return;
   }
-
+  var p = _profile;
   var html = '';
-  html += '<div class="s-row">' +
-    '<span class="s-row-label">Daily actions email</span>' +
-    '<button class="s-toggle ' + (_emailState.actions ? 'on' : 'off') + '" id="emailActionsToggle">' +
-    (_emailState.actions ? 'On' : 'Off') + '</button></div>';
-  html += '<div class="s-row">' +
-    '<span class="s-row-label">News email</span>' +
-    '<button class="s-toggle ' + (_emailState.news ? 'on' : 'off') + '" id="emailNewsToggle">' +
-    (_emailState.news ? 'On' : 'Off') + '</button></div>';
-  html += '<div class="s-saved" id="emailSaved">Saved</div>';
+
+  /* Plan usage */
+  try {
+    var pr = await fetch(SCOUT_WORKER + '/scout/plan', { headers: _auth });
+    if (pr.ok) {
+      var pd = await pr.json();
+      var feats = pd.features || {};
+      if (feats.leads) {
+        html += '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span style="color:var(--grey1)">New leads today</span><span style="color:var(--white)">' + feats.leads.used + '/' + feats.leads.limit + '</span></div>';
+        var pct = feats.leads.limit > 0 ? Math.min(100, Math.round(feats.leads.used / feats.leads.limit * 100)) : 0;
+        html += '<div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;margin-bottom:12px"><div style="width:' + pct + '%;height:100%;background:' + (pct >= 100 ? '#c44' : 'var(--gold)') + '"></div></div>';
+      }
+      if (feats.groupsearch) {
+        html += '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:12px"><span style="color:var(--grey1)">Extra group search</span><span style="color:var(--white)">' + feats.groupsearch.used + '/' + feats.groupsearch.limit + '</span></div>';
+      }
+    }
+  } catch(e) {}
+
+  /* Groups */
+  html += '<div style="margin-bottom:16px">';
+  (p.groups || []).forEach(function(g, i) {
+    var on = g.enabled !== false;
+    html += '<div class="sg-row"><div class="sg-info"><div class="sg-name">' + escHtml(g.name) + '</div>';
+    html += '<div class="sg-why">' + escHtml(g.why || '') + '</div></div>';
+    html += '<button class="s-toggle ' + (on ? 'on' : 'off') + '" data-gidx="' + i + '" data-on="' + on + '">' + (on ? 'On' : 'Off') + '</button>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  /* Areas */
+  html += '<div style="margin-bottom:12px"><div style="font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:8px">Search areas</div>';
+  html += '<div class="area-tags" id="finderAreas">';
+  (p.areas || []).forEach(function(a) {
+    html += '<span class="area-tag">' + escHtml(a) +
+      '<button class="area-rm" data-area="' + escHtml(a) + '" title="Remove">&times;</button></span>';
+  });
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px"><input class="s-input" type="text" id="finderAreaInput" placeholder="Add area" style="flex:1">';
+  html += '<button class="s-btn" id="finderAreaAdd">Add</button></div>';
+  html += '<div id="finderAreaMsg" style="font-size:10px;color:var(--grey2);margin-top:4px;min-height:16px"></div>';
+  html += '</div>';
+
+  if (!p.confirmedAt) {
+    html += '<button class="s-btn" id="finderConfirmBtn" style="background:var(--gold);border-color:var(--gold);color:var(--black)">Confirm &mdash; start finding leads</button>';
+  } else {
+    html += '<div style="font-size:11px;color:var(--grey2)">Active since ' + new Date(p.confirmedAt).toLocaleDateString() + '</div>';
+  }
+  html += '<div class="s-saved" id="finderSaved">Saved</div>';
+
   el.innerHTML = html;
 
-  document.getElementById('emailActionsToggle').onclick = function() { saveEmailToggle({ actions: !_emailState.actions }); };
-  document.getElementById('emailNewsToggle').onclick = function() { saveEmailToggle({ news: !_emailState.news }); };
-}
+  /* Toggle handlers */
+  el.querySelectorAll('.s-toggle[data-gidx]').forEach(function(btn) {
+    btn.onclick = async function() {
+      var isOn = btn.getAttribute('data-on') === 'true';
+      btn.setAttribute('data-on', String(!isOn));
+      btn.textContent = !isOn ? 'On' : 'Off';
+      btn.className = 's-toggle ' + (!isOn ? 'on' : 'off');
+      /* Save immediately */
+      var enabled = [];
+      el.querySelectorAll('.s-toggle[data-gidx]').forEach(function(b) {
+        if (b.getAttribute('data-on') === 'true') enabled.push(_profile.groups[parseInt(b.getAttribute('data-gidx'))].name);
+      });
+      if (enabled.length === 0) { btn.setAttribute('data-on', 'true'); btn.textContent = 'On'; btn.className = 's-toggle on'; return; }
+      try {
+        await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+          method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+          body: JSON.stringify({ action: 'confirm', enabledGroups: enabled })
+        });
+        flashSaved('finderSaved');
+      } catch(e) {}
+    };
+  });
 
-async function saveEmailToggle(body) {
-  try {
-    var r = await fetch(SCOUT_WORKER + '/scout/brief-email', {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-      body: JSON.stringify(body)
+  /* Area remove */
+  el.querySelectorAll('.area-rm').forEach(function(btn) {
+    btn.onclick = async function() {
+      var name = btn.getAttribute('data-area');
+      var newAreas = (_profile.areas || []).filter(function(a){ return a !== name; });
+      if (newAreas.length < 1) { document.getElementById('finderAreaMsg').textContent = 'Need at least 1 area'; return; }
+      try {
+        var r = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+          method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+          body: JSON.stringify({ action: 'confirm', areas: newAreas })
+        });
+        if (r.ok) { _profile.areas = newAreas; renderFinder(); flashSaved('finderSaved'); }
+      } catch(e) {}
+    };
+  });
+
+  /* Area add */
+  var addBtn = document.getElementById('finderAreaAdd');
+  var addInput = document.getElementById('finderAreaInput');
+  var addFn = async function() {
+    var name = (addInput.value || '').trim();
+    var msg = document.getElementById('finderAreaMsg');
+    if (!name) return;
+    if ((_profile.areas || []).length >= 6) { msg.textContent = 'Maximum 6 areas'; return; }
+    if ((_profile.areas || []).some(function(a){ return a.toLowerCase() === name.toLowerCase(); })) { msg.textContent = 'Already added'; return; }
+    addBtn.disabled = true; addBtn.textContent = 'Checking...'; msg.textContent = '';
+    try {
+      var vr = await fetch(SCOUT_WORKER + '/scout/leads/validate-area', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({ area: name })
+      });
+      var vd = await vr.json();
+      if (!vd.valid) { msg.textContent = vd.reason === 'too_far' ? 'Too far (' + vd.distKm + 'km)' : 'Could not find that area'; addBtn.disabled = false; addBtn.textContent = 'Add'; return; }
+      var newAreas = (_profile.areas || []).concat([name]);
+      var sr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({ action: 'confirm', areas: newAreas })
+      });
+      if (sr.ok) { _profile.areas = newAreas; addInput.value = ''; renderFinder(); flashSaved('finderSaved'); }
+    } catch(e) { msg.textContent = 'Error'; }
+    addBtn.disabled = false; addBtn.textContent = 'Add';
+  };
+  if (addBtn) { addBtn.onclick = addFn; addInput.onkeydown = function(e){if(e.key==='Enter')addFn()}; }
+
+  /* Confirm handler */
+  var confirmBtn = document.getElementById('finderConfirmBtn');
+  if (confirmBtn) confirmBtn.onclick = async function() {
+    confirmBtn.disabled = true; confirmBtn.textContent = 'Confirming...';
+    var enabled = [];
+    el.querySelectorAll('.s-toggle[data-gidx]').forEach(function(b) {
+      if (b.getAttribute('data-on') === 'true') enabled.push(_profile.groups[parseInt(b.getAttribute('data-gidx'))].name);
     });
-    if (!r.ok) { var j = await r.json().catch(function(){ return {}; }); flashErr('emailSaved', j.error || 'Could not save.'); return; }
-  } catch (e) {}
-  flashSaved('emailSaved');
-  renderEmails();
+    try {
+      var cr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({ action: 'confirm', enabledGroups: enabled })
+      });
+      if (cr.ok) { var cj = await cr.json(); if (cj.profile) _profile = cj.profile; flashSaved('finderSaved'); renderFinder(); }
+    } catch(e) {}
+    confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm \u2014 start finding leads';
+  };
 }
 
 /* ═══════════════════════════════════════
-   LANGUAGE
+   2. GOOGLE LISTING
+═══════════════════════════════════════ */
+function renderGoogle() {
+  var el = document.getElementById('googleContent');
+  if (!_profile) {
+    el.innerHTML = '<div class="s-note">Run a business analysis first, then <a href="setup.html?step=google" class="s-link">connect your Google listing</a>.</div>';
+    return;
+  }
+  var html = '';
+  if (_profile.ownPlaceId) {
+    html += '<div class="listing-linked"><span class="ll-name">' + escHtml(_profile.ownName || _profile.ownPlaceId) + '</span><span class="ll-badge">Connected</span></div>';
+    html += '<button class="s-btn" id="googleChangeBtn" style="font-size:10px;padding:4px 10px">Change</button>';
+  } else {
+    html += '<div class="s-note">Connect your Google listing to track visibility and reviews. <a href="setup.html?step=google" class="s-link">Set up in 1 min \u2192</a></div>';
+    html += '<button class="s-btn" id="googleChangeBtn">Find my business on Google</button>';
+  }
+  html += '<div id="googleSearchBox" style="display:none;margin-top:12px">';
+  html += '<input class="s-input" type="text" id="googleSearchInput" placeholder="Search for your business name...">';
+  html += '<div id="googleResults" style="margin-top:8px"></div>';
+  html += '</div>';
+  html += '<div class="s-saved" id="googleSaved">Listing saved</div>';
+  html += '<div style="margin-top:10px"><a href="https://business.google.com/create" target="_blank" rel="noopener" style="font-size:11px;color:var(--grey2);text-decoration:none;border-bottom:1px solid var(--grey2)">No Google listing? Create one free &rarr;</a></div>';
+
+  /* Key searches */
+  if (_profile.ownPlaceId) {
+    var ks = _profile.keySearches || [];
+    html += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border2)">';
+    html += '<div style="font-size:12px;color:var(--grey1);margin-bottom:8px">Key searches</div>';
+    html += '<div id="ksListWrap">';
+    ks.forEach(function(s, i) {
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+        '<input type="text" class="s-input ks-input" value="' + escHtml(s) + '" style="flex:1;padding:6px 10px;font-size:12px">' +
+        '<button class="ks-del" data-idx="' + i + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px">&times;</button></div>';
+    });
+    html += '</div>';
+    if (ks.length < 5) html += '<button class="s-btn" id="addKsBtn" style="font-size:10px;padding:4px 10px;margin-top:4px">+ Add search</button>';
+    html += '<button class="s-btn" id="saveKsBtn" style="margin-top:10px">Save key searches</button>';
+    html += '<div class="s-saved" id="ksSaved">Saved</div>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+
+  /* Show/hide search box */
+  var changeBtn = document.getElementById('googleChangeBtn');
+  if (changeBtn) changeBtn.onclick = function() {
+    var box = document.getElementById('googleSearchBox');
+    box.style.display = box.style.display === 'none' ? '' : 'none';
+    if (box.style.display !== 'none') document.getElementById('googleSearchInput').focus();
+  };
+
+  /* Search handler */
+  var searchInput = document.getElementById('googleSearchInput');
+  var resultsEl = document.getElementById('googleResults');
+  if (searchInput) {
+    var _debounce = null;
+    searchInput.oninput = function() {
+      clearTimeout(_debounce);
+      var q = searchInput.value.trim();
+      if (q.length < 2) { resultsEl.innerHTML = ''; return; }
+      _debounce = setTimeout(async function() {
+        resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Searching...</div>';
+        try {
+          var sr = await fetch(SCOUT_WORKER + '/scout/own-listing/search?q=' + encodeURIComponent(q), { headers: _auth });
+          if (!sr.ok) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Search failed</div>'; return; }
+          var sd = await sr.json();
+          if (!sd.results || sd.results.length === 0) { resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">No results</div>'; return; }
+          resultsEl.innerHTML = sd.results.map(function(p) {
+            return '<div class="listing-item" data-place=\'' + escHtml(JSON.stringify({placeId:p.placeId,name:p.name,lat:p.lat,lng:p.lng,primaryType:p.primaryType||''})) + '\' style="padding:10px 12px;margin-bottom:4px;background:var(--black2);border-radius:6px;cursor:pointer;transition:background .2s">' +
+              '<div style="font-size:13px;color:var(--white)">' + escHtml(p.name) + '</div>' +
+              '<div style="font-size:10px;color:var(--grey2);margin-top:2px">' + (p.rating ? p.rating + '\u2605 (' + p.reviews + ') \u00b7 ' : '') + escHtml(p.primaryType || '') + '</div></div>';
+          }).join('');
+          resultsEl.querySelectorAll('.listing-item').forEach(function(item) {
+            item.onmouseenter = function(){item.style.background='var(--black3)'};
+            item.onmouseleave = function(){item.style.background='var(--black2)'};
+            item.onclick = async function() {
+              var place = JSON.parse(item.getAttribute('data-place'));
+              resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Saving...</div>';
+              try {
+                var sv = await fetch(SCOUT_WORKER + '/scout/own-listing', {
+                  method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+                  body: JSON.stringify(place)
+                });
+                if (sv.ok) { _profile.ownPlaceId = place.placeId; _profile.ownName = place.name; flashSaved('googleSaved'); renderGoogle(); }
+              } catch(e) {}
+            };
+          });
+        } catch(e) {}
+      }, 400);
+    };
+  }
+
+  /* Key search handlers */
+  el.querySelectorAll('.ks-del').forEach(function(b){b.onclick=function(){b.parentElement.remove()}});
+  var addKsBtn = document.getElementById('addKsBtn');
+  if (addKsBtn) addKsBtn.onclick = function() {
+    var wrap = document.getElementById('ksListWrap');
+    if (wrap.children.length >= 5) return;
+    var div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+    div.innerHTML = '<input type="text" class="s-input ks-input" placeholder="e.g. best cafe near koramangala" style="flex:1;padding:6px 10px;font-size:12px">' +
+      '<button class="ks-del" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px">&times;</button>';
+    div.querySelector('.ks-del').onclick = function(){div.remove()};
+    wrap.appendChild(div);
+    div.querySelector('input').focus();
+  };
+  var saveKsBtn = document.getElementById('saveKsBtn');
+  if (saveKsBtn) saveKsBtn.onclick = async function() {
+    var searches = [];
+    el.querySelectorAll('.ks-input').forEach(function(inp){var v=inp.value.trim();if(v)searches.push(v)});
+    saveKsBtn.disabled = true; saveKsBtn.textContent = 'Saving...';
+    try {
+      await fetch(SCOUT_WORKER + '/scout/own-listing/key-searches', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({ keySearches: searches })
+      });
+      flashSaved('ksSaved');
+    } catch(e) {}
+    saveKsBtn.disabled = false; saveKsBtn.textContent = 'Save key searches';
+  };
+}
+
+/* ═══════════════════════════════════════
+   3. LANGUAGE
 ═══════════════════════════════════════ */
 async function renderLanguage() {
   var lp = document.getElementById('langPicker');
@@ -335,571 +593,206 @@ async function renderLanguage() {
   try {
     var r = await fetch(SCOUT_WORKER + '/scout/message-lang', { headers: _auth });
     if (r.ok) { var j = await r.json(); cur = j.language || cur; }
-  } catch (e) {}
-
-  var langs = ['English', 'Hinglish', 'Hindi'];
+  } catch(e) {}
+  var langs = ['English','Hinglish','Hindi'];
   lp.innerHTML = langs.map(function(l) {
     return '<button class="s-lang-btn ' + (l === cur ? 'active' : '') + '" data-lang="' + l + '">' + l + '</button>';
   }).join('');
-
   lp.querySelectorAll('button').forEach(function(b) {
     b.onclick = async function() {
       var picked = b.getAttribute('data-lang');
       try {
         await fetch(SCOUT_WORKER + '/scout/message-lang', {
-          method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+          method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
           body: JSON.stringify({ language: picked })
         });
-      } catch (e) {}
+      } catch(e) {}
+      flashSaved('langSaved');
       renderLanguage();
     };
   });
 }
 
 /* ═══════════════════════════════════════
-   REVIEWS
+   4. EMAILS
 ═══════════════════════════════════════ */
-function renderReviews() {
-  /* Review link */
-  var rl = '';
-  try { rl = localStorage.getItem(scoutKey('scout_review_link')) || ''; } catch(e) {}
-  document.getElementById('reviewLink').value = rl;
+var _emailState = { actions: false, news: false, hasEmail: false, email: '' };
 
-  document.getElementById('reviewSave').onclick = function() {
-    var val = (document.getElementById('reviewLink').value || '').trim();
-    if (val && !val.match(/^https:\/\//i)) {
-      flashErr('reviewErr', "That doesn\u2019t look like a link \u2014 it should start with https://");
-      document.getElementById('reviewLink').focus();
-      return;
-    }
-    try {
-      localStorage.setItem(scoutKey('scout_review_link'), val);
-      if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer();
-    } catch(e) {}
-    document.getElementById('reviewErr').style.display = 'none';
-    flashSaved('reviewSaved');
-  };
+async function renderEmails() {
+  var el = document.getElementById('emailContent');
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/brief-email', { headers: _auth });
+    if (r.ok) _emailState = await r.json();
+  } catch(e) { el.innerHTML = '<div class="s-note">Could not load email settings.</div>'; return; }
 
-  /* Review asks toggle */
-  var skip = false;
-  try { skip = localStorage.getItem(scoutKey('scout_review_skip')) === 'true'; } catch(e) {}
-  var btn = document.getElementById('reviewToggle');
-  btn.textContent = skip ? 'Off' : 'On';
-  btn.className = 's-toggle ' + (skip ? 'off' : 'on');
-  btn.onclick = function() {
-    var cur = localStorage.getItem(scoutKey('scout_review_skip')) === 'true';
-    var next = !cur;
-    try {
-      if (next) localStorage.setItem(scoutKey('scout_review_skip'), 'true');
-      else localStorage.removeItem(scoutKey('scout_review_skip'));
-      if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer();
-    } catch(e) {}
-    renderReviews();
-  };
+  if (!_emailState.hasEmail) {
+    el.innerHTML = '<div class="s-note">Add a recovery email in <a href="#account" class="s-link">Account</a> first so Scout can send you daily briefings.</div>';
+    return;
+  }
+  var html = '';
+  html += '<div class="s-row"><span class="s-row-label">Daily actions email</span>' +
+    '<button class="s-toggle ' + (_emailState.actions ? 'on' : 'off') + '" id="emailActionsToggle">' + (_emailState.actions ? 'On' : 'Off') + '</button></div>';
+  html += '<div class="s-row"><span class="s-row-label">News email</span>' +
+    '<button class="s-toggle ' + (_emailState.news ? 'on' : 'off') + '" id="emailNewsToggle">' + (_emailState.news ? 'On' : 'Off') + '</button></div>';
+  html += '<div class="s-saved" id="emailSaved">Saved</div>';
+  el.innerHTML = html;
+
+  document.getElementById('emailActionsToggle').onclick = function(){ saveEmailToggle({ actions: !_emailState.actions }); };
+  document.getElementById('emailNewsToggle').onclick = function(){ saveEmailToggle({ news: !_emailState.news }); };
+}
+
+async function saveEmailToggle(body) {
+  try {
+    await fetch(SCOUT_WORKER + '/scout/brief-email', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify(body)
+    });
+  } catch(e) {}
+  flashSaved('emailSaved');
+  renderEmails();
 }
 
 /* ═══════════════════════════════════════
-   NEWS CATEGORIES
+   5. NEWS
 ═══════════════════════════════════════ */
 async function renderNews() {
-  var el = document.getElementById('newsCats');
+  var el = document.getElementById('newsContent');
   try {
     var r = await fetch(SCOUT_WORKER + '/scout/news-prefs', { headers: _auth });
     if (!r.ok) throw new Error();
     var pj = await r.json();
     var current = pj.prefs || [];
     var options = pj.options || [];
-
-    var html = '';
-    html += '<div class="s-news-cats">';
+    var html = '<div class="s-news-cats">';
     options.forEach(function(o) {
       var ck = current.indexOf(o.key) !== -1 ? ' checked' : '';
-      html += '<label>' +
-        '<input type="checkbox" value="' + escHtml(o.key) + '"' + ck + '>' +
-        escHtml(o.label) + '</label>';
+      html += '<label><input type="checkbox" value="' + escHtml(o.key) + '"' + ck + '>' + escHtml(o.label) + '</label>';
     });
     html += '</div>';
-    html += '<button class="s-btn" id="newsSave" style="margin-top:12px">Save</button>';
-    html += '<div class="s-saved" id="newsSaved">Saved &mdash; takes effect from tomorrow&rsquo;s news</div>';
+    html += '<button class="s-btn" id="newsSaveBtn" style="margin-top:12px">Save</button>';
+    html += '<div class="s-saved" id="newsSaved">Saved &mdash; takes effect from tomorrow</div>';
     el.innerHTML = html;
-
-    document.getElementById('newsSave').onclick = async function() {
+    document.getElementById('newsSaveBtn').onclick = async function() {
       var picks = [];
-      el.querySelectorAll('input[type="checkbox"]:checked').forEach(function(cb) { picks.push(cb.value); });
+      el.querySelectorAll('input[type="checkbox"]:checked').forEach(function(cb){picks.push(cb.value)});
       try {
-        var sr = await fetch(SCOUT_WORKER + '/scout/news-prefs', {
-          method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+        await fetch(SCOUT_WORKER + '/scout/news-prefs', {
+          method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
           body: JSON.stringify({ prefs: picks })
         });
-        if (!sr.ok) throw new Error();
         flashSaved('newsSaved');
-      } catch (e) {
-        flashErr('newsSaved', 'Could not save. Try again.');
-      }
+      } catch(e) { flashErr('newsSaved', 'Could not save'); }
     };
-  } catch (e) {
-    el.innerHTML = '<div class="s-note">Could not load news categories.</div>';
-  }
+  } catch(e) { el.innerHTML = '<div class="s-note">Could not load news categories.</div>'; }
 }
 
 /* ═══════════════════════════════════════
-   CUSTOMER FINDER
+   6. REGULARS & QR (B2C only)
 ═══════════════════════════════════════ */
-async function renderLeadsSettings() {
-  var el = document.getElementById('leadsSettings');
-  try {
-    var r = await fetch(SCOUT_WORKER + '/scout/lead-profile', { headers: _auth });
-    if (!r.ok) { el.innerHTML = '<div class="s-note">Could not load lead profile.</div>'; return; }
-    var d = await r.json();
-    if (!d.profile) {
-      el.innerHTML =
-        '<div class="s-note">No lead profile yet. Run a business analysis and Scout will generate one.</div>' +
-        '<div style="margin-top:12px"><button class="s-btn" id="genProfileBtn">Generate now</button></div>' +
-        '<div class="s-saved" id="profileSaved">Profile generated</div>';
-      var genBtn = document.getElementById('genProfileBtn');
-      if (genBtn) genBtn.onclick = async function() {
-        genBtn.disabled = true; genBtn.textContent = 'Generating\u2026';
-        try {
-          var gr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
-            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-            body: JSON.stringify({})
-          });
-          if (!gr.ok) { var gj = await gr.json().catch(function(){ return {}; }); flashErr('profileSaved', gj.error || 'Failed'); genBtn.disabled = false; genBtn.textContent = 'Generate now'; return; }
-          flashSaved('profileSaved');
-          renderLeadsSettings();
-        } catch (e) { genBtn.disabled = false; genBtn.textContent = 'Generate now'; }
-      };
-      return;
-    }
+function renderRegulars() {
+  if (!_isB2C) return;
+  var el = document.getElementById('regularsContent');
+  if (!_profile) { el.innerHTML = '<div class="s-note">Run a business analysis first.</div>'; return; }
+  var rc = _profile.regularsConfig || {};
+  var html = '';
+  html += '<div style="margin-bottom:10px"><label style="font-size:12px;color:var(--grey1);margin-bottom:4px;display:block">Offer text</label>';
+  html += '<input class="s-input" type="text" id="regOfferInput" value="' + escHtml(rc.offerText || '') + '" placeholder="e.g. 10% off your 5th visit"></div>';
+  html += '<div style="margin-bottom:10px"><label style="font-size:12px;color:var(--grey1);margin-bottom:4px;display:block">Bring-back after (days)</label>';
+  html += '<input class="s-input" type="number" id="regDaysInput" value="' + (rc.bringBackDays || 21) + '" min="7" max="90" style="width:100px"></div>';
 
-    var p = d.profile;
-    var html = '';
+  /* Count of regulars */
+  html += '<div id="regCount" style="font-size:11px;color:var(--grey2);margin-bottom:10px"></div>';
 
-    /* ── Google Listing ── */
-    html += '<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(201,168,76,0.15)">';
-    html += '<div class="s-row-label" style="margin-bottom:10px">Find my business on Google</div>';
-    if (p.ownPlaceId) {
-      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-      html += '<span style="font-size:13px;color:var(--white)">' + escHtml(p.ownName || p.ownPlaceId) + '</span>';
-      html += '<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:rgba(201,168,76,0.15);color:var(--gold)">Connected</span>';
-      html += '</div>';
-      html += '<button class="s-btn" id="changeListingBtn" style="font-size:10px;padding:4px 10px">Change</button>';
-    } else {
-      html += '<div class="s-note">Connect your Google listing to see how customers find you.</div>';
-      html += '<button class="s-btn" id="changeListingBtn" style="margin-top:8px">Connect your Google listing</button>';
-    }
-    html += '<div id="listingSearchBox" style="display:none;margin-top:12px">';
-    html += '<input type="text" id="listingSearchInput" placeholder="Search for your business name\u2026" style="width:100%;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:6px;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '<div id="listingResults" style="margin-top:8px"></div>';
-    html += '</div>';
-    html += '<div class="s-saved" id="listingSaved">Listing saved</div>';
-    html += '</div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="s-btn" id="regSaveBtn">Save regulars</button>';
+  if (rc.code) html += '<button class="s-btn" id="regPrintBtn" style="border-color:var(--gold)">Print table card</button>';
+  html += '</div>';
+  html += '<div class="s-saved" id="regSaved">Saved</div>';
+  el.innerHTML = html;
 
-    /* ── Key Searches ── */
-    if (p.ownPlaceId) {
-      html += '<div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(201,168,76,0.15)">';
-      html += '<div class="s-row-label" style="margin-bottom:8px">Key searches</div>';
-      html += '<div class="s-note" style="margin-bottom:8px">Searches customers use to find businesses like yours:</div>';
-      var ks = p.keySearches || [];
-      html += '<div id="keySearchesList">';
-      ks.forEach(function(s, i) {
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
-        html += '<input type="text" class="ks-input" data-idx="' + i + '" value="' + escHtml(s) + '" style="flex:1;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-        html += '<button class="ks-del" data-idx="' + i + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px" title="Remove">\u2715</button>';
-        html += '</div>';
+  document.getElementById('regSaveBtn').onclick = async function() {
+    var btn = document.getElementById('regSaveBtn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+      var r = await fetch(SCOUT_WORKER + '/scout/regulars/setup', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({
+          offerText: (document.getElementById('regOfferInput').value || '').trim(),
+          bringBackDays: parseInt(document.getElementById('regDaysInput').value, 10) || 21
+        })
       });
-      html += '</div>';
-      if (ks.length < 5) {
-        html += '<button class="s-btn" id="addKeySearchBtn" style="font-size:10px;padding:4px 10px;margin-top:4px">+ Add search</button>';
-      }
-      html += '<button class="s-btn" id="saveKeySearchesBtn" style="margin-top:10px">Save key searches</button>';
-      html += '<div class="s-saved" id="keySearchesSaved">Saved</div>';
-      html += '</div>';
-    }
+      if (r.ok) { flashSaved('regSaved'); try { var pj = await fetch(SCOUT_WORKER + '/scout/lead-profile', { headers: _auth }).then(function(r){return r.json()}); if (pj.profile) _profile = pj.profile; } catch(e2){} renderRegulars(); }
+    } catch(e) {}
+    btn.disabled = false; btn.textContent = 'Save regulars';
+  };
+  var printBtn = document.getElementById('regPrintBtn');
+  if (printBtn) printBtn.onclick = function(){ window.open('regular-card.html', '_blank'); };
 
-    /* ── Groups (toggleable) ── */
-    html += '<div class="s-note">Scout looks for these customer groups:</div>';
-    (p.groups || []).forEach(function(g, i) {
-      var on = g.enabled !== false;
-      html += '<div class="s-row">';
-      html += '<span class="s-row-label">' + escHtml(g.name) + '<br><span style="font-size:10px;color:var(--grey2)">' + escHtml(g.why || '') + '</span></span>';
-      html += '<button class="s-toggle ' + (on ? 'on' : 'off') + '" data-group="' + escHtml(g.name) + '" data-on="' + on + '">' + (on ? 'On' : 'Off') + '</button>';
-      html += '</div>';
-    });
-
-    /* Areas — editable */
-    html += '<div style="margin-top:16px"><div class="s-row-label" style="margin-bottom:8px">Search areas</div>';
-    html += '<div id="areasEditable" style="margin-bottom:8px">';
-    (p.areas || []).forEach(function(a) {
-      html += '<span class="area-tag" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;margin:0 6px 6px 0;background:var(--black2);border:1px solid rgba(250,250,248,0.08);font-size:12px;color:var(--white2)">';
-      html += escHtml(a);
-      html += '<button class="area-remove" data-area="' + escHtml(a) + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px;line-height:1;padding:0 2px" title="Remove">\u00d7</button>';
-      html += '</span>';
-    });
-    html += '</div>';
-    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
-    html += '<div style="flex:1;position:relative">';
-    html += '<input type="text" id="addAreaInput" placeholder="Add area (e.g. Koramangala)" style="width:100%;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:0;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '<div id="areaSuggestions" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--black2);border:1px solid rgba(201,168,76,0.15);z-index:20;max-height:160px;overflow-y:auto"></div>';
-    html += '</div>';
-    html += '<button class="s-btn" id="addAreaBtn" style="white-space:nowrap">Add</button>';
-    html += '</div>';
-    html += '<div id="areaValidMsg" style="font-size:10px;color:var(--grey2);margin-top:4px;min-height:16px"></div>';
-    html += '</div>';
-
-    /* Confirm / status */
-    if (!p.confirmedAt) {
-      html += '<div style="margin-top:16px"><button class="s-btn" id="confirmProfileBtn" style="background:var(--gold);border-color:var(--gold);color:var(--black)">Confirm \u2014 start finding leads</button></div>';
-    } else {
-      html += '<div style="margin-top:12px;font-size:11px;color:var(--grey2)">Active since ' + new Date(p.confirmedAt).toLocaleDateString() + '</div>';
-    }
-    html += '<div class="s-saved" id="leadsSettingsSaved">Saved</div>';
-
-    /* ── Regulars QR ── */
-    html += '<div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(201,168,76,0.15)">';
-    html += '<div class="s-row-label" style="margin-bottom:12px">Regulars — Table QR</div>';
-    var rc = p.regularsConfig || {};
-    html += '<div style="margin-bottom:10px">';
-    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Offer text (shown on the QR card)</label>';
-    html += '<input type="text" id="regOfferText" value="' + escHtml(rc.offerText || '') + '" placeholder="e.g. 10% off your next visit" ' +
-      'style="width:100%;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:6px;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '</div>';
-    html += '<div style="margin-bottom:10px">';
-    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Bring-back after (days)</label>';
-    html += '<input type="number" id="regBringBackDays" value="' + (rc.bringBackDays || 21) + '" min="7" max="90" ' +
-      'style="width:100px;padding:8px 12px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:6px;color:var(--white);font-size:13px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '</div>';
-    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-    html += '<button class="s-btn" id="saveRegBtn">Save regulars</button>';
-    if (rc.code) {
-      html += '<button class="s-btn" id="printRegCardBtn" style="border-color:var(--gold);color:var(--gold)">Print table card</button>';
-    }
-    html += '</div>';
-    html += '<div class="s-saved" id="regSaved">Saved</div>';
-    html += '</div>';
-
-    /* ── Zomato / Swiggy ── */
-    var dp = p.deliveryPlatforms || {};
-    html += '<div style="margin-top:24px;padding-top:20px;border-top:1px solid rgba(201,168,76,0.15)">';
-    html += '<div class="s-row-label" style="margin-bottom:12px">Delivery Platforms</div>';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">'; /* 2-col grid */
-    /* Zomato */
-    html += '<div>';
-    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Zomato listing URL</label>';
-    html += '<input type="url" id="dpZomatoUrl" value="' + escHtml(dp.zomatoUrl || '') + '" placeholder="https://zomato.com/..." ' +
-      'style="width:100%;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '</div>';
-    /* Swiggy */
-    html += '<div>';
-    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Swiggy listing URL</label>';
-    html += '<input type="url" id="dpSwiggyUrl" value="' + escHtml(dp.swiggyUrl || '') + '" placeholder="https://swiggy.com/..." ' +
-      'style="width:100%;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '</div>';
-    /* Zomato rating/reviews */
-    html += '<div>';
-    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Zomato rating / reviews</label>';
-    html += '<div style="display:flex;gap:6px">';
-    html += '<input type="number" step="0.1" min="0" max="5" id="dpZomatoRating" value="' + (dp.zomatoRating || '') + '" placeholder="4.2" ' +
-      'style="width:60px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '<input type="number" min="0" id="dpZomatoReviews" value="' + (dp.zomatoReviews || '') + '" placeholder="150" ' +
-      'style="width:80px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '</div></div>';
-    /* Swiggy rating/reviews */
-    html += '<div>';
-    html += '<label class="s-row-label" style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Swiggy rating / reviews</label>';
-    html += '<div style="display:flex;gap:6px">';
-    html += '<input type="number" step="0.1" min="0" max="5" id="dpSwiggyRating" value="' + (dp.swiggyRating || '') + '" placeholder="4.1" ' +
-      'style="width:60px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '<input type="number" min="0" id="dpSwiggyReviews" value="' + (dp.swiggyReviews || '') + '" placeholder="200" ' +
-      'style="width:80px;padding:6px 8px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">';
-    html += '</div></div>';
-    html += '</div>'; /* close grid */
-    if (dp.updatedAt) html += '<div style="font-size:10px;color:var(--grey2);margin-bottom:8px">Last updated: ' + new Date(dp.updatedAt).toLocaleDateString() + '</div>';
-    html += '<button class="s-btn" id="saveDpBtn">Save platforms</button>';
-    html += '<div class="s-saved" id="dpSaved">Saved</div>';
-    html += '</div>';
-
-    el.innerHTML = html;
-
-    /* ── Listing search handler ── */
-    var changeBtn = document.getElementById('changeListingBtn');
-    var searchBox = document.getElementById('listingSearchBox');
-    var searchInput = document.getElementById('listingSearchInput');
-    var resultsEl = document.getElementById('listingResults');
-    if (changeBtn && searchBox) {
-      changeBtn.onclick = function() {
-        searchBox.style.display = searchBox.style.display === 'none' ? 'block' : 'none';
-        if (searchBox.style.display === 'block' && searchInput) searchInput.focus();
-      };
-    }
-    if (searchInput && resultsEl) {
-      var _debounce = null;
-      searchInput.addEventListener('input', function() {
-        clearTimeout(_debounce);
-        var q = searchInput.value.trim();
-        if (q.length < 2) { resultsEl.innerHTML = ''; return; }
-        _debounce = setTimeout(async function() {
-          resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Searching\u2026</div>';
-          try {
-            var sr = await fetch(SCOUT_WORKER + '/scout/own-listing/search?q=' + encodeURIComponent(q), { headers: _auth });
-            if (!sr.ok) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Search failed</div>'; return; }
-            var sd = await sr.json();
-            if (!sd.results || sd.results.length === 0) { resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">No results found</div>'; return; }
-            var rh = '';
-            sd.results.forEach(function(place) {
-              rh += '<div class="listing-result" data-place="' + escHtml(JSON.stringify({ placeId: place.placeId, name: place.name, lat: place.lat, lng: place.lng, primaryType: place.primaryType || '' })) + '" ' +
-                'style="padding:10px 12px;margin-bottom:4px;background:var(--black2);border-radius:6px;cursor:pointer;transition:background .2s">' +
-                '<div style="font-size:13px;color:var(--white)">' + escHtml(place.name) + '</div>' +
-                '<div style="font-size:10px;color:var(--grey2);margin-top:2px">' +
-                (place.rating ? place.rating + '\u2605 (' + place.reviews + ' reviews) \u00b7 ' : '') +
-                escHtml(place.primaryType || '') + '</div>' +
-                '</div>';
-            });
-            resultsEl.innerHTML = rh;
-            resultsEl.querySelectorAll('.listing-result').forEach(function(el) {
-              el.onmouseenter = function() { el.style.background = 'var(--black3)'; };
-              el.onmouseleave = function() { el.style.background = 'var(--black2)'; };
-              el.onclick = async function() {
-                var place = JSON.parse(el.getAttribute('data-place'));
-                resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Saving\u2026</div>';
-                try {
-                  var sv = await fetch(SCOUT_WORKER + '/scout/own-listing', {
-                    method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-                    body: JSON.stringify(place)
-                  });
-                  if (sv.ok) { flashSaved('listingSaved'); renderLeadsSettings(); }
-                  else { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Could not save</div>'; }
-                } catch (e) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Error saving</div>'; }
-              };
-            });
-          } catch (e) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Search error</div>'; }
-        }, 400);
-      });
-    }
-
-    /* ── Key searches handlers ── */
-    el.querySelectorAll('.ks-del').forEach(function(btn) {
-      btn.onclick = function() { btn.parentElement.remove(); };
-    });
-    var addKsBtn = document.getElementById('addKeySearchBtn');
-    if (addKsBtn) {
-      addKsBtn.onclick = function() {
-        var list = document.getElementById('keySearchesList');
-        if (!list) return;
-        var idx = list.children.length;
-        if (idx >= 5) return;
-        var div = document.createElement('div');
-        div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
-        div.innerHTML = '<input type="text" class="ks-input" data-idx="' + idx + '" placeholder="e.g. best cafe near koramangala" style="flex:1;padding:6px 10px;background:var(--black2);border:1px solid rgba(250,250,248,0.08);border-radius:4px;color:var(--white);font-size:12px;font-family:\'Tenor Sans\',sans-serif">' +
-          '<button class="ks-del" data-idx="' + idx + '" style="background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px" title="Remove">\u2715</button>';
-        div.querySelector('.ks-del').onclick = function() { div.remove(); };
-        list.appendChild(div);
-        div.querySelector('input').focus();
-      };
-    }
-    var saveKsBtn = document.getElementById('saveKeySearchesBtn');
-    if (saveKsBtn) {
-      saveKsBtn.onclick = async function() {
-        var inputs = el.querySelectorAll('.ks-input');
-        var searches = [];
-        inputs.forEach(function(inp) { var v = inp.value.trim(); if (v) searches.push(v); });
-        saveKsBtn.disabled = true; saveKsBtn.textContent = 'Saving\u2026';
-        try {
-          var kr = await fetch(SCOUT_WORKER + '/scout/own-listing/key-searches', {
-            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-            body: JSON.stringify({ keySearches: searches })
-          });
-          if (kr.ok) { flashSaved('keySearchesSaved'); }
-          else { flashErr('keySearchesSaved', 'Could not save'); }
-        } catch (e) { flashErr('keySearchesSaved', 'Error'); }
-        saveKsBtn.disabled = false; saveKsBtn.textContent = 'Save key searches';
-      };
-    }
-
-    /* Toggle handlers */
-    el.querySelectorAll('.s-toggle[data-group]').forEach(function(btn) {
-      btn.onclick = function() {
-        var isOn = btn.getAttribute('data-on') === 'true';
-        btn.setAttribute('data-on', String(!isOn));
-        btn.textContent = !isOn ? 'On' : 'Off';
-        btn.className = 's-toggle ' + (!isOn ? 'on' : 'off');
-      };
-    });
-
-    /* Area remove handlers */
-    el.querySelectorAll('.area-remove').forEach(function(btn) {
-      btn.onclick = async function() {
-        var areaName = btn.getAttribute('data-area');
-        var currentAreas = (p.areas || []).filter(function(a) { return a !== areaName; });
-        if (currentAreas.length < 1) { var _vm = document.getElementById('areaValidMsg'); if (_vm) _vm.textContent = 'Need at least 1 area'; return; }
-        btn.textContent = '\u2026';
-        try {
-          var ar = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
-            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-            body: JSON.stringify({ action: 'confirm', areas: currentAreas })
-          });
-          if (ar.ok) { renderLeadsSettings(); }
-          else { flashErr('areaValidMsg', 'Could not remove area'); btn.textContent = '\u00d7'; }
-        } catch (e) { btn.textContent = '\u00d7'; }
-      };
-    });
-
-    /* Area add handler */
-    var addAreaBtn = document.getElementById('addAreaBtn');
-    var addAreaInput = document.getElementById('addAreaInput');
-    var areaSuggEl = document.getElementById('areaSuggestions');
-    var areaValidMsg = document.getElementById('areaValidMsg');
-    if (addAreaBtn && addAreaInput) {
-      var _addArea = async function() {
-        var name = addAreaInput.value.trim();
-        if (!name) return;
-        if ((p.areas || []).length >= 8) { if (areaValidMsg) areaValidMsg.textContent = 'Maximum 8 areas'; return; }
-        if ((p.areas || []).some(function(a) { return a.toLowerCase() === name.toLowerCase(); })) {
-          if (areaValidMsg) areaValidMsg.textContent = 'Already added'; return;
-        }
-        addAreaBtn.disabled = true; addAreaBtn.textContent = 'Checking\u2026';
-        if (areaValidMsg) areaValidMsg.textContent = '';
-        try {
-          var vr = await fetch(SCOUT_WORKER + '/scout/leads/validate-area', {
-            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-            body: JSON.stringify({ area: name })
-          });
-          var vd = await vr.json();
-          if (!vd.valid) {
-            if (areaValidMsg) areaValidMsg.textContent = vd.reason === 'too_far' ? 'Too far from your business (' + vd.distKm + 'km away, max ' + vd.maxKm + 'km)' : 'Could not find that area';
-            addAreaBtn.disabled = false; addAreaBtn.textContent = 'Add'; return;
-          }
-          /* Valid — save */
-          var newAreas = (p.areas || []).concat([name]);
-          var sr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
-            method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-            body: JSON.stringify({ action: 'confirm', areas: newAreas })
-          });
-          if (sr.ok) {
-            /* Show suggestions if any */
-            if (vd.suggestions && vd.suggestions.length > 0 && areaSuggEl) {
-              var sh = '<div style="padding:8px 12px;font-size:10px;color:var(--grey2);border-bottom:1px solid rgba(250,250,248,0.06)">Nearby areas you could add:</div>';
-              vd.suggestions.forEach(function(s) {
-                sh += '<div class="area-sugg" style="padding:8px 12px;font-size:12px;color:var(--white2);cursor:pointer;transition:background .2s" onmouseover="this.style.background=\'var(--black3)\'" onmouseout="this.style.background=\'transparent\'">' + escHtml(s) + '</div>';
-              });
-              areaSuggEl.innerHTML = sh;
-              areaSuggEl.style.display = 'block';
-              areaSuggEl.querySelectorAll('.area-sugg').forEach(function(sel) {
-                sel.onclick = function() { addAreaInput.value = sel.textContent; areaSuggEl.style.display = 'none'; _addArea(); };
-              });
-              setTimeout(function() { areaSuggEl.style.display = 'none'; }, 8000);
-            }
-            renderLeadsSettings();
-          } else { if (areaValidMsg) areaValidMsg.textContent = 'Could not save'; }
-        } catch (e) { if (areaValidMsg) areaValidMsg.textContent = 'Error validating area'; }
-        addAreaBtn.disabled = false; addAreaBtn.textContent = 'Add';
-      };
-      addAreaBtn.onclick = _addArea;
-      addAreaInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') _addArea(); });
-    }
-
-    /* Confirm handler */
-    var confirmBtn = document.getElementById('confirmProfileBtn');
-    if (confirmBtn) confirmBtn.onclick = async function() {
-      confirmBtn.disabled = true; confirmBtn.textContent = 'Confirming\u2026';
-      var enabledGroups = [];
-      el.querySelectorAll('.s-toggle[data-group]').forEach(function(btn) {
-        if (btn.getAttribute('data-on') === 'true') enabledGroups.push(btn.getAttribute('data-group'));
-      });
-      try {
-        var cr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
-          method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-          body: JSON.stringify({ action: 'confirm', enabledGroups: enabledGroups })
-        });
-        if (!cr.ok) { flashErr('leadsSettingsSaved', 'Could not confirm.'); confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm \u2014 start finding leads'; return; }
-        flashSaved('leadsSettingsSaved');
-        renderLeadsSettings();
-      } catch (e) { confirmBtn.disabled = false; confirmBtn.textContent = 'Confirm \u2014 start finding leads'; }
-    };
-    /* ── Regulars save handler ── */
-    var saveRegBtn = document.getElementById('saveRegBtn');
-    if (saveRegBtn) saveRegBtn.onclick = async function() {
-      saveRegBtn.disabled = true; saveRegBtn.textContent = 'Saving\u2026';
-      var offerText = (document.getElementById('regOfferText') || {}).value || '';
-      var bringBackDays = parseInt((document.getElementById('regBringBackDays') || {}).value, 10) || 21;
-      try {
-        var rr = await fetch(SCOUT_WORKER + '/scout/regulars/setup', {
-          method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-          body: JSON.stringify({ offerText: offerText, bringBackDays: bringBackDays })
-        });
-        if (rr.ok) { flashSaved('regSaved'); renderLeadsSettings(); }
-        else { flashErr('regSaved', 'Could not save'); }
-      } catch (e) { flashErr('regSaved', 'Error'); }
-      saveRegBtn.disabled = false; saveRegBtn.textContent = 'Save regulars';
-    };
-    var printRegBtn = document.getElementById('printRegCardBtn');
-    if (printRegBtn) printRegBtn.onclick = function() {
-      window.open('regular-card.html', '_blank');
-    };
-
-    /* ── Delivery platforms save handler ── */
-    var saveDpBtn = document.getElementById('saveDpBtn');
-    if (saveDpBtn) saveDpBtn.onclick = async function() {
-      saveDpBtn.disabled = true; saveDpBtn.textContent = 'Saving\u2026';
-      var dpData = {
-        zomatoUrl: (document.getElementById('dpZomatoUrl') || {}).value || '',
-        swiggyUrl: (document.getElementById('dpSwiggyUrl') || {}).value || '',
-        zomatoRating: parseFloat((document.getElementById('dpZomatoRating') || {}).value) || 0,
-        zomatoReviews: parseInt((document.getElementById('dpZomatoReviews') || {}).value, 10) || 0,
-        swiggyRating: parseFloat((document.getElementById('dpSwiggyRating') || {}).value) || 0,
-        swiggyReviews: parseInt((document.getElementById('dpSwiggyReviews') || {}).value, 10) || 0
-      };
-      try {
-        var dr = await fetch(SCOUT_WORKER + '/scout/delivery-platforms', {
-          method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
-          body: JSON.stringify(dpData)
-        });
-        if (dr.ok) { flashSaved('dpSaved'); renderLeadsSettings(); }
-        else { flashErr('dpSaved', 'Could not save'); }
-      } catch (e) { flashErr('dpSaved', 'Error'); }
-      saveDpBtn.disabled = false; saveDpBtn.textContent = 'Save platforms';
-    };
-
-  } catch (e) {
-    el.innerHTML = '<div class="s-note">Could not load customer finder settings.</div>';
-  }
+  /* Load regulars count */
+  fetch(SCOUT_WORKER + '/scout/regulars', { headers: _auth }).then(function(r){return r.ok ? r.json() : null}).then(function(d) {
+    if (d && d.regulars) document.getElementById('regCount').textContent = d.regulars.length + ' regulars so far';
+  }).catch(function(){});
 }
 
 /* ═══════════════════════════════════════
-   ACCOUNT
+   7. PLAN
+═══════════════════════════════════════ */
+async function renderPlan() {
+  var el = document.getElementById('planContent');
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/plan', { headers: _auth });
+    if (!r.ok) { el.innerHTML = '<div class="s-note">Could not load plan.</div>'; return; }
+    var d = await r.json();
+    var isPaid = d.plan === 'paid';
+    var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
+    html += '<span style="display:inline-block;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:4px 12px;border-radius:2px;' +
+      (isPaid ? 'background:rgba(224,146,47,0.15);color:#F0B968;border:1px solid rgba(224,146,47,0.3)' : 'background:rgba(255,255,255,0.06);color:#8A8880;border:1px solid rgba(255,255,255,0.1)') + '">' +
+      (isPaid ? 'Paid plan' : 'Free plan') + '</span>';
+    if (!isPaid) html += '<a href="mailto:gsevnservices@gmail.com?subject=Upgrade" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#E0922F;text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Talk to us for pricing &rarr;</a>';
+    html += '</div>';
+
+    var labels = { ask: 'Ask Scout', analysis: 'Business analysis', checkin: 'Weekly check-in', leads: 'New leads today', groupsearch: 'Extra group search' };
+    var feats = d.features || {};
+    for (var k in labels) {
+      if (!feats[k]) continue;
+      var f = feats[k];
+      var pct = f.limit > 0 ? Math.min(100, Math.round(f.used / f.limit * 100)) : 0;
+      html += '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">' +
+        '<span style="color:var(--grey1)">' + labels[k] + '</span><span style="color:var(--white)">' +
+        (f.limit > 0 ? f.used + '/' + f.limit + (f.period === 'day' ? ' today' : f.period === 'month' ? ' this month' : '') : 'Paid only') +
+        '</span></div><div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden"><div style="width:' + pct + '%;height:100%;background:' + (pct >= 100 ? '#c44' : '#E0922F') + '"></div></div></div>';
+    }
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = '<div class="s-note">Could not load plan.</div>'; }
+}
+
+/* ═══════════════════════════════════════
+   8. ACCOUNT
 ═══════════════════════════════════════ */
 async function renderAccount() {
-  var el = document.getElementById('accountSettings');
+  var el = document.getElementById('accountContent');
   var email = '';
   try {
     var r = await fetch(SCOUT_WORKER + '/scout/recovery-email', { headers: _auth });
     if (r.ok) { var j = await r.json(); email = j.email || ''; }
-  } catch (e) {}
+  } catch(e) {}
 
   var hasEmail = !!email;
-  var html = '';
-  html += '<div style="margin-bottom:14px">' +
-    '<div class="s-row-label" style="margin-bottom:8px">Recovery email</div>';
+  var html = '<div style="margin-bottom:14px"><div style="font-size:12px;color:var(--grey1);margin-bottom:8px">Recovery email</div>';
   if (hasEmail) {
-    html += '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">' +
+    html += '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px">' +
       '<span style="font-size:13px;color:var(--white)">' + escHtml(email) + '</span>' +
-      '<a href="#" id="accountChangeLink" style="font-size:11px;color:var(--gold);text-decoration:none;border-bottom:1px solid rgba(201,168,76,0.4)">Change</a></div>';
-    html += '<div id="accountChangeForm" style="display:none">';
-    html += '<div class="s-row-label" style="margin-bottom:6px;font-size:11px">New email</div>';
-    html += '<input class="s-input" type="email" id="accountEmail" placeholder="you@example.com" style="margin-bottom:8px">';
-    html += '<div class="s-row-label" style="margin-bottom:6px;font-size:11px">Current password</div>';
-    html += '<input class="s-input" type="password" id="accountPassword" placeholder="" style="margin-bottom:8px">';
-    html += '<button class="s-btn" id="accountEmailSave">Update</button>';
-    html += '<div class="s-err" id="accountEmailErr"></div>';
-    html += '<div class="s-saved" id="accountEmailSaved">Saved</div>';
+      '<button class="s-btn" id="acctChangeBtn" style="font-size:10px;padding:2px 8px">Change</button></div>';
+    html += '<div id="acctChangeForm" style="display:none">';
+    html += '<input class="s-input" type="email" id="acctEmail" placeholder="new@email.com" style="margin-bottom:6px">';
+    html += '<input class="s-input" type="password" id="acctPassword" placeholder="Current password" style="margin-bottom:6px">';
+    html += '<button class="s-btn" id="acctSaveBtn">Update</button>';
+    html += '<div class="s-err" id="acctErr"></div><div class="s-saved" id="acctSaved">Saved</div>';
     html += '</div>';
   } else {
-    html += '<input class="s-input" type="email" id="accountEmail" placeholder="you@example.com" style="margin-bottom:8px">';
-    html += '<button class="s-btn" id="accountEmailSave">Save</button>';
-    html += '<div class="s-err" id="accountEmailErr"></div>';
-    html += '<div class="s-saved" id="accountEmailSaved">Saved</div>';
+    html += '<input class="s-input" type="email" id="acctEmail" placeholder="you@email.com" style="margin-bottom:6px">';
+    html += '<button class="s-btn" id="acctSaveBtn">Save</button>';
+    html += '<div class="s-err" id="acctErr"></div><div class="s-saved" id="acctSaved">Saved</div>';
   }
   html += '</div>';
   html += '<div style="display:flex;gap:16px;flex-wrap:wrap">' +
@@ -908,88 +801,126 @@ async function renderAccount() {
     '</div>';
   el.innerHTML = html;
 
-  /* Reveal change form on tap */
-  var changeLink = document.getElementById('accountChangeLink');
-  if (changeLink) {
-    changeLink.onclick = function(e) {
-      e.preventDefault();
-      document.getElementById('accountChangeForm').style.display = '';
-      changeLink.style.display = 'none';
-      document.getElementById('accountEmail').focus();
+  if (hasEmail) {
+    document.getElementById('acctChangeBtn').onclick = function() {
+      document.getElementById('acctChangeForm').style.display = '';
+      document.getElementById('acctChangeBtn').style.display = 'none';
+      document.getElementById('acctEmail').focus();
     };
   }
-
-  document.getElementById('accountEmailSave').onclick = async function() {
-    var val = (document.getElementById('accountEmail').value || '').trim();
-    if (!val || !val.match(/.+@.+\..+/)) {
-      flashErr('accountEmailErr', 'Enter a valid email address.');
-      document.getElementById('accountEmail').focus();
-      return;
-    }
+  document.getElementById('acctSaveBtn').onclick = async function() {
+    var val = (document.getElementById('acctEmail').value || '').trim();
+    if (!val || !val.match(/.+@.+\..+/)) { flashErr('acctErr', 'Enter a valid email'); return; }
     var body = { email: val };
     if (hasEmail) {
-      var pw = (document.getElementById('accountPassword').value || '');
-      if (!pw) {
-        flashErr('accountEmailErr', 'Enter your current password to change the email.');
-        document.getElementById('accountPassword').focus();
-        return;
-      }
+      var pw = (document.getElementById('acctPassword').value || '');
+      if (!pw) { flashErr('acctErr', 'Enter your current password'); return; }
       body.currentPassword = pw;
     }
     try {
       var r = await fetch(SCOUT_WORKER + '/scout/recovery-email', {
-        method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, _auth),
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
         body: JSON.stringify(body)
       });
-      if (!r.ok) { var j = await r.json().catch(function(){ return {}; }); flashErr('accountEmailErr', j.error || 'Could not save.'); return; }
-      // Server revoked old sessions and issued a fresh token — save it
-      var rj = await r.json().catch(function(){ return {}; });
-      if (rj.token) {
-        localStorage.setItem('g7_session_token', rj.token);
-        _auth = { 'Authorization': 'Bearer ' + rj.token };
-      }
-    } catch (e) { flashErr('accountEmailErr', 'Could not save. Check your connection.'); return; }
-    document.getElementById('accountEmailErr').style.display = 'none';
-    flashSaved('accountEmailSaved');
-    /* Refresh both sections — email state affects Emails section too */
+      if (!r.ok) { var j = await r.json().catch(function(){return {}}); flashErr('acctErr', j.error || 'Could not save'); return; }
+      var rj = await r.json().catch(function(){return {}});
+      if (rj.token) { localStorage.setItem('g7_session_token', rj.token); _auth = { 'Authorization': 'Bearer ' + rj.token }; }
+    } catch(e) { flashErr('acctErr', 'Error'); return; }
+    flashSaved('acctSaved');
     renderAccount();
     renderEmails();
   };
 }
 
-/* ── LOGOUT ── */
-function handleLogout() {
-  scoutClearLocalState();
-  ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){ localStorage.removeItem(k); });
-  window.location.href = 'landing.html';
-}
+/* ═══════════════════════════════════════
+   DELIVERY PLATFORMS (More options)
+═══════════════════════════════════════ */
+function renderDelivery() {
+  var el = document.getElementById('deliveryContent');
+  if (!_profile) { el.innerHTML = '<div class="s-note">Run a business analysis first.</div>'; return; }
+  var dp = _profile.deliveryPlatforms || {};
+  var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">';
+  html += '<div><label style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Zomato URL</label>' +
+    '<input class="s-input" type="url" id="dpZUrl" value="' + escHtml(dp.zomatoUrl || '') + '" placeholder="https://zomato.com/..." style="font-size:12px;padding:6px 10px"></div>';
+  html += '<div><label style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Swiggy URL</label>' +
+    '<input class="s-input" type="url" id="dpSUrl" value="' + escHtml(dp.swiggyUrl || '') + '" placeholder="https://swiggy.com/..." style="font-size:12px;padding:6px 10px"></div>';
+  html += '<div><label style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Zomato rating / reviews</label>' +
+    '<div style="display:flex;gap:6px"><input class="s-input" type="number" step="0.1" min="0" max="5" id="dpZR" value="' + (dp.zomatoRating || '') + '" placeholder="4.2" style="width:60px;padding:6px 8px;font-size:12px">' +
+    '<input class="s-input" type="number" min="0" id="dpZRev" value="' + (dp.zomatoReviews || '') + '" placeholder="150" style="width:80px;padding:6px 8px;font-size:12px"></div></div>';
+  html += '<div><label style="font-size:9px;color:var(--grey2);margin-bottom:4px;display:block">Swiggy rating / reviews</label>' +
+    '<div style="display:flex;gap:6px"><input class="s-input" type="number" step="0.1" min="0" max="5" id="dpSR" value="' + (dp.swiggyRating || '') + '" placeholder="4.1" style="width:60px;padding:6px 8px;font-size:12px">' +
+    '<input class="s-input" type="number" min="0" id="dpSRev" value="' + (dp.swiggyReviews || '') + '" placeholder="200" style="width:80px;padding:6px 8px;font-size:12px"></div></div>';
+  html += '</div>';
+  html += '<button class="s-btn" id="dpSaveBtn">Save platforms</button>';
+  html += '<div class="s-saved" id="dpSaved">Saved</div>';
+  el.innerHTML = html;
 
-/* ── CUSTOM CURSOR ── */
-function initCursor() {
-  var c = document.getElementById('cursor'), r = document.getElementById('cursorRing');
-  if (!c || !r) return;
-  document.addEventListener('mousemove', function(e){ c.style.left=e.clientX+'px';c.style.top=e.clientY+'px';r.style.left=e.clientX+'px';r.style.top=e.clientY+'px'; });
-  document.addEventListener('mousedown', function(){ c.style.transform='translate(-50%,-50%) scale(0.7)';r.style.transform='translate(-50%,-50%) scale(0.8)'; });
-  document.addEventListener('mouseup',   function(){ c.style.transform='translate(-50%,-50%) scale(1)';r.style.transform='translate(-50%,-50%) scale(1)'; });
+  document.getElementById('dpSaveBtn').onclick = async function() {
+    var btn = document.getElementById('dpSaveBtn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+      await fetch(SCOUT_WORKER + '/scout/delivery-platforms', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({
+          zomatoUrl: document.getElementById('dpZUrl').value || '',
+          swiggyUrl: document.getElementById('dpSUrl').value || '',
+          zomatoRating: parseFloat(document.getElementById('dpZR').value) || 0,
+          zomatoReviews: parseInt(document.getElementById('dpZRev').value, 10) || 0,
+          swiggyRating: parseFloat(document.getElementById('dpSR').value) || 0,
+          swiggyReviews: parseInt(document.getElementById('dpSRev').value, 10) || 0
+        })
+      });
+      flashSaved('dpSaved');
+    } catch(e) {}
+    btn.disabled = false; btn.textContent = 'Save platforms';
+  };
 }
-initCursor();
 
 /* ═══════════════════════════════════════
-   COST CHECK — admin-only cost table
+   REVIEWS (More options)
+═══════════════════════════════════════ */
+function renderReviews() {
+  var el = document.getElementById('reviewsContent');
+  var rl = '';
+  try { rl = localStorage.getItem(scoutKey('scout_review_link')) || ''; } catch(e) {}
+  var skip = false;
+  try { skip = localStorage.getItem(scoutKey('scout_review_skip')) === 'true'; } catch(e) {}
+
+  var html = '<div style="margin-bottom:14px"><div style="font-size:12px;color:var(--grey1);margin-bottom:8px">Google review link</div>';
+  html += '<div class="s-input-row"><input class="s-input" type="url" id="reviewLinkInput" value="' + escHtml(rl) + '" placeholder="https://g.page/...">';
+  html += '<button class="s-btn" id="reviewSaveBtn">Save</button></div>';
+  html += '<div class="s-hint">Find it: Google Business Profile &rarr; Ask for reviews &rarr; Copy link.</div>';
+  html += '<div class="s-saved" id="reviewSaved">Saved</div></div>';
+  html += '<div class="s-row"><span class="s-row-label">Ask customers for reviews</span>';
+  html += '<button class="s-toggle ' + (skip ? 'off' : 'on') + '" id="reviewAskToggle">' + (skip ? 'Off' : 'On') + '</button></div>';
+  el.innerHTML = html;
+
+  document.getElementById('reviewSaveBtn').onclick = function() {
+    var val = (document.getElementById('reviewLinkInput').value || '').trim();
+    if (val && !val.match(/^https:\/\//i)) { flashErr('reviewSaved', 'Should start with https://'); return; }
+    try { localStorage.setItem(scoutKey('scout_review_link'), val); if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer(); } catch(e) {}
+    flashSaved('reviewSaved');
+  };
+  document.getElementById('reviewAskToggle').onclick = function() {
+    var cur = localStorage.getItem(scoutKey('scout_review_skip')) === 'true';
+    try { if (!cur) localStorage.setItem(scoutKey('scout_review_skip'), 'true'); else localStorage.removeItem(scoutKey('scout_review_skip')); if (typeof saveScoutStateToServer === 'function') saveScoutStateToServer(); } catch(e) {}
+    renderReviews();
+  };
+}
+
+/* ═══════════════════════════════════════
+   COST CHECK (admin only)
 ═══════════════════════════════════════ */
 async function renderCostCheck() {
-  /* Only show if URL has ?admin or admin password is in localStorage */
   var isAdmin = window.location.search.indexOf('admin') !== -1 || localStorage.getItem('g7_admin_pw');
   if (!isAdmin) return;
   var sec = document.getElementById('s-cost');
   var el = document.getElementById('costTable');
   if (!sec || !el) return;
   sec.style.display = '';
-
   var pw = localStorage.getItem('g7_admin_pw') || '';
   if (!pw) {
-    el.innerHTML = '<div style="margin-bottom:8px"><input class="s-input" type="password" id="adminPwInput" placeholder="Admin password" style="margin-bottom:8px">' +
+    el.innerHTML = '<div><input class="s-input" type="password" id="adminPwInput" placeholder="Admin password" style="margin-bottom:8px">' +
       '<button class="s-btn" id="adminPwBtn">Check cost</button></div>';
     document.getElementById('adminPwBtn').onclick = function() {
       pw = (document.getElementById('adminPwInput').value || '').trim();
@@ -998,39 +929,44 @@ async function renderCostCheck() {
     return;
   }
   fetchCost(pw);
-
   async function fetchCost(adminPw) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Loading\u2026</div>';
+    el.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Loading...</div>';
     try {
       var r = await fetch(SCOUT_WORKER + '/admin/cost-today', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ adminPassword: adminPw })
       });
       if (!r.ok) { el.innerHTML = '<div style="font-size:11px;color:#c44">Invalid password</div>'; localStorage.removeItem('g7_admin_pw'); return; }
       var d = await r.json();
-      var html = '<div style="margin-bottom:12px;font-size:11px;color:var(--grey2)">' + d.day + '</div>';
+      var html = '<div style="font-size:11px;color:var(--grey2);margin-bottom:8px">' + d.day + '</div>';
       html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
       html += '<tr style="border-bottom:1px solid rgba(250,250,248,0.08)"><th style="text-align:left;padding:6px 0;color:var(--grey2);font-size:9px;letter-spacing:.12em;text-transform:uppercase">Firm</th><th style="text-align:right;padding:6px 0;color:var(--grey2);font-size:9px;letter-spacing:.12em;text-transform:uppercase">USD</th></tr>';
       var firms = d.firms || {};
-      var keys = Object.keys(firms).sort(function(a, b) { return firms[b] - firms[a]; });
-      keys.forEach(function(k) {
+      Object.keys(firms).sort(function(a,b){return firms[b]-firms[a]}).forEach(function(k) {
         html += '<tr style="border-bottom:1px solid rgba(250,250,248,0.04)"><td style="padding:6px 0;color:var(--white)">' + escHtml(k) + '</td><td style="text-align:right;padding:6px 0;color:var(--white)">$' + firms[k].toFixed(4) + '</td></tr>';
       });
-      html += '<tr style="border-top:1px solid rgba(201,168,76,0.2)"><td style="padding:8px 0;color:var(--gold);font-weight:600">Total</td><td style="text-align:right;padding:8px 0;color:var(--gold);font-weight:600">$' + (d.total || 0).toFixed(4) + '</td></tr>';
+      html += '<tr style="border-top:1px solid rgba(201,168,76,0.2)"><td style="padding:8px 0;color:var(--gold)">Total</td><td style="text-align:right;padding:8px 0;color:var(--gold)">$' + (d.total || 0).toFixed(4) + '</td></tr>';
       html += '</table>';
-      /* Reference pricing */
-      html += '<div style="margin-top:16px;font-size:10px;color:var(--grey2);line-height:1.8">';
-      html += '<div style="font-size:8px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:6px">API pricing reference</div>';
-      html += 'Places Text Search: $0.035/call<br>';
-      html += 'Place Details: $0.020/call<br>';
-      html += 'Haiku input: $1.00/M tokens<br>';
-      html += 'Haiku output: $5.00/M tokens<br>';
-      html += 'Web search: $0.01/request';
-      html += '</div>';
       el.innerHTML = html;
-    } catch (e) { el.innerHTML = '<div style="font-size:11px;color:#c44">Error loading costs</div>'; }
+    } catch(e) { el.innerHTML = '<div style="font-size:11px;color:#c44">Error</div>'; }
   }
 }
+
+/* ── LOGOUT ── */
+function handleLogout() {
+  scoutClearLocalState();
+  ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){localStorage.removeItem(k)});
+  window.location.href = 'landing.html';
+}
+
+/* ── CURSOR ── */
+(function(){
+  var c=document.getElementById('cursor'),r=document.getElementById('cursorRing');
+  if(!c||!r)return;
+  document.addEventListener('mousemove',function(e){c.style.left=e.clientX+'px';c.style.top=e.clientY+'px';r.style.left=e.clientX+'px';r.style.top=e.clientY+'px'});
+  document.addEventListener('mousedown',function(){c.style.transform='translate(-50%,-50%) scale(0.7)';r.style.transform='translate(-50%,-50%) scale(0.8)'});
+  document.addEventListener('mouseup',function(){c.style.transform='translate(-50%,-50%) scale(1)';r.style.transform='translate(-50%,-50%) scale(1)'});
+})();
 
 </script>
 </body>

@@ -110,6 +110,15 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 }
 @media(max-width:768px){.dashboard-wrap{padding:32px 24px 60px}}
 
+/* Setup resume banner */
+.setup-banner{display:none;background:rgba(224,146,47,0.06);border:1px solid var(--border);padding:12px 20px;margin-bottom:20px;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.setup-banner.visible{display:flex}
+.setup-banner-text{font-size:12px;color:var(--amber);letter-spacing:.04em}
+.setup-banner-text a{color:var(--amber);text-decoration:underline;margin-left:6px}
+.setup-banner-later{font-size:10px;letter-spacing:.1em;text-transform:uppercase;background:none;border:none;color:var(--grey2);cursor:pointer;font-family:'Tenor Sans',sans-serif;padding:4px 0}
+.setup-banner-later:hover{color:var(--grey1)}
+@media(max-width:390px){.setup-banner{padding:10px 16px}.setup-banner-text{font-size:11px}}
+
 /* Greeting */
 .greeting{
   margin-bottom:40px;
@@ -708,6 +717,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <style>#moreMenuDrop.open{display:block}</style>
     <script>document.addEventListener('click',function(e){var m=document.getElementById('moreMenuDrop');if(m&&m.classList.contains('open')&&!e.target.closest('#moreMenuBtn')&&!e.target.closest('#moreMenuDrop'))m.classList.remove('open')});</script>
 
+    <!-- Setup resume banner -->
+    <div class="setup-banner" id="setupBanner">
+      <span class="setup-banner-text" id="setupBannerText">Setup 1 of 5 · <a href="setup.html">Continue →</a></span>
+      <button class="setup-banner-later" onclick="hideSetupBanner()">Later</button>
+    </div>
+
     <div class="cc-wrap" id="ccWrap">
 
       <div class="cc-rail cc-rail-l">
@@ -979,6 +994,7 @@ function showWelcome() {
 ═══════════════════════════════════════════ */
 function showDashboard(history, weekNum, firmName) {
   document.getElementById('stateDashboard').classList.add('active');
+  checkSetupBanner();
 
   /* ── Parse scout_pending_result once — shared by greeting and Today Card ── */
   var pendingData   = null;  /* outer object: businessData, scoutOutput, … */
@@ -1096,6 +1112,41 @@ function handleLogout() {
     ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){ localStorage.removeItem(k); });
     window.location.href = 'landing.html';
   }
+
+/* ═══════════════════════════════════════════
+   SETUP RESUME BANNER
+═══════════════════════════════════════════ */
+function checkSetupBanner() {
+  var _tok = localStorage.getItem('g7_session_token') || '';
+  fetch(SCOUT_WORKER + '/scout/setup', {
+    headers: { 'Authorization': 'Bearer ' + _tok }
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.isComplete) return;
+    if (d.hiddenUntil && new Date(d.hiddenUntil) > new Date()) return;
+    var done = d.doneCount || 0;
+    var total = d.totalSteps || 5;
+    var nextStep = '';
+    if (d.stepNames) {
+      for (var i = 0; i < d.stepNames.length; i++) {
+        var st = d.setup && d.setup.steps && d.setup.steps[d.stepNames[i]];
+        if (!st || !st.status) { nextStep = d.stepNames[i]; break; }
+      }
+    }
+    var link = nextStep ? 'setup.html?step=' + nextStep : 'setup.html';
+    var el = document.getElementById('setupBannerText');
+    el.innerHTML = 'Setup ' + (done + 1) + ' of ' + total + ' \u00b7 <a href="' + link + '">Continue \u2192</a>';
+    document.getElementById('setupBanner').classList.add('visible');
+  }).catch(function() {});
+}
+
+function hideSetupBanner() {
+  document.getElementById('setupBanner').classList.remove('visible');
+  var _tok = localStorage.getItem('g7_session_token') || '';
+  fetch(SCOUT_WORKER + '/scout/setup/hide', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + _tok, 'Content-Type': 'application/json' }
+  }).catch(function() {});
+}
 
 /* ═══════════════════════════════════════════
    CURSOR

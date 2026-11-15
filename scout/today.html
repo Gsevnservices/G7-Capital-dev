@@ -103,6 +103,15 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .empty-title{font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:300;color:var(--white);margin-bottom:8px}
 .empty-text{font-size:12px;color:var(--grey1);line-height:1.7;max-width:400px;margin:0 auto}
 
+/* ── Setup resume banner ── */
+.setup-banner{display:none;background:rgba(224,146,47,0.06);border:1px solid var(--border);padding:12px 20px;margin-bottom:20px;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.setup-banner.visible{display:flex}
+.setup-banner-text{font-size:12px;color:var(--amber);letter-spacing:.04em}
+.setup-banner-text a{color:var(--amber);text-decoration:underline;margin-left:6px}
+.setup-banner-later{font-size:10px;letter-spacing:.1em;text-transform:uppercase;background:none;border:none;color:var(--grey2);cursor:pointer;font-family:'Tenor Sans',sans-serif;padding:4px 0}
+.setup-banner-later:hover{color:var(--grey1)}
+@media(max-width:390px){.setup-banner{padding:10px 16px}.setup-banner-text{font-size:11px}}
+
 /* ── Stats bar ── */
 .stats-bar{display:flex;gap:24px;margin-bottom:32px;flex-wrap:wrap}
 .stat-item{font-size:11px;color:var(--grey1);letter-spacing:.06em}
@@ -170,6 +179,12 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 </nav>
 
 <div class="page-wrap">
+  <!-- Setup resume banner — shown until guided setup is complete -->
+  <div class="setup-banner" id="setupBanner">
+    <span class="setup-banner-text" id="setupBannerText">Setup 1 of 5 · <a href="setup.html">Continue →</a></span>
+    <button class="setup-banner-later" onclick="hideSetupBanner()">Later</button>
+  </div>
+
   <div class="page-eyebrow">Customer Finder</div>
   <h1 class="page-heading" id="pageTitle">Today's Leads</h1>
   <div class="page-sub" id="pageSub">Loading&hellip;</div>
@@ -286,6 +301,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   if (firmName) document.getElementById('navFirmName').textContent = firmName;
 
   await loadToday();
+  checkSetupBanner();
 });
 
 async function loadToday() {
@@ -937,6 +953,39 @@ function handleLogout() {
   scoutClearLocalState();
   ['g7_session_token','g7_session_firm','g7_session_name'].forEach(function(k){ localStorage.removeItem(k); });
   window.location.href = 'landing.html';
+}
+
+/* ── Setup resume banner — fetch status, show if incomplete ── */
+function checkSetupBanner() {
+  var _tok = localStorage.getItem('g7_session_token') || '';
+  fetch(SCOUT_WORKER + '/scout/setup', {
+    headers: { 'Authorization': 'Bearer ' + _tok }
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.isComplete) return;
+    if (d.hiddenUntil && new Date(d.hiddenUntil) > new Date()) return;
+    var done = d.doneCount || 0;
+    var total = d.totalSteps || 5;
+    var nextStep = '';
+    if (d.stepNames) {
+      for (var i = 0; i < d.stepNames.length; i++) {
+        var st = d.setup && d.setup.steps && d.setup.steps[d.stepNames[i]];
+        if (!st || !st.status) { nextStep = d.stepNames[i]; break; }
+      }
+    }
+    var link = nextStep ? 'setup.html?step=' + nextStep : 'setup.html';
+    var el = document.getElementById('setupBannerText');
+    el.innerHTML = 'Setup ' + (done + 1) + ' of ' + total + ' · <a href="' + link + '">Continue \u2192</a>';
+    document.getElementById('setupBanner').classList.add('visible');
+  }).catch(function() {});
+}
+
+function hideSetupBanner() {
+  document.getElementById('setupBanner').classList.remove('visible');
+  var _tok = localStorage.getItem('g7_session_token') || '';
+  fetch(SCOUT_WORKER + '/scout/setup/hide', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + _tok, 'Content-Type': 'application/json' }
+  }).catch(function() {});
 }
 
 /* ── Custom cursor ── */
