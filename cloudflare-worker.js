@@ -763,6 +763,116 @@ async function kvPut(env, key, value, opts) {
   }
 }
 
+/* ── D1 firm_settings helpers ────────────────────────────────────────
+   Strongly consistent storage for owner-edited settings.
+   Table: firm_settings(firm_code, key, value_json, updated_at)
+   Each key is an independent row — concurrent writes to different keys
+   never overwrite each other.
+
+   getFirmSetting:  reads D1 first; on miss, falls back to KV (one-time
+                    migration) and copies the value into D1.
+   saveFirmSetting: upserts into D1.
+   ─────────────────────────────────────────────────────────────────── */
+async function getFirmSetting(env, firmCode, key) {
+  if (!env.DB) return null;
+  try {
+    var row = await env.DB.prepare(
+      'SELECT value_json FROM firm_settings WHERE firm_code = ? AND key = ?'
+    ).bind(firmCode, key).first();
+    if (row && row.value_json) return JSON.parse(row.value_json);
+  } catch (e) {}
+  return null;
+}
+
+async function saveFirmSetting(env, firmCode, key, value) {
+  if (!env.DB) return;
+  var json = JSON.stringify(value);
+  await env.DB.prepare(
+    "INSERT INTO firm_settings (firm_code, key, value_json, updated_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(firm_code, key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at"
+  ).bind(firmCode, key, json).run();
+}
+
+/* Read setup state from D1 (one row per step + meta row).
+   Falls back to KV scout:setup:{firmCode} on first read and migrates. */
+async function getSetupState(env, firmCode) {
+  var result = { steps: {} };
+  if (!env.DB) {
+    /* No D1 — use KV directly */
+    return await env.G7_KV.get('scout:setup:' + firmCode, 'json') || result;
+  }
+  /* Read all setup rows from D1 */
+  try {
+    var rows = await env.DB.prepare(
+      "SELECT key, value_json FROM firm_settings WHERE firm_code = ? AND key LIKE 'setup:%'"
+    ).bind(firmCode).all();
+    if (rows.results && rows.results.length > 0) {
+      rows.results.forEach(function(r) {
+        try {
+          var val = JSON.parse(r.value_json);
+          if (r.key === 'setup:meta') {
+            if (val.completedAt) result.completedAt = val.completedAt;
+            if (val.hiddenUntil) result.hiddenUntil = val.hiddenUntil;
+          } else {
+            var stepName = r.key.replace('setup:', '');
+            result.steps[stepName] = val;
+          }
+        } catch (e) {}
+      });
+      return result;
+    }
+  } catch (e) {}
+  /* D1 empty — fall back to KV and migrate */
+  var kvData = await env.G7_KV.get('scout:setup:' + firmCode, 'json');
+  if (kvData && kvData.steps && Object.keys(kvData.steps).length > 0) {
+    /* Migrate to D1 */
+    var stmts = [];
+    Object.keys(kvData.steps).forEach(function(stepName) {
+      stmts.push(env.DB.prepare(
+        "INSERT OR REPLACE INTO firm_settings (firm_code, key, value_json, updated_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+      ).bind(firmCode, 'setup:' + stepName, JSON.stringify(kvData.steps[stepName])));
+    });
+    var meta = {};
+    if (kvData.completedAt) meta.completedAt = kvData.completedAt;
+    if (kvData.hiddenUntil) meta.hiddenUntil = kvData.hiddenUntil;
+    if (Object.keys(meta).length > 0) {
+      stmts.push(env.DB.prepare(
+        "INSERT OR REPLACE INTO firm_settings (firm_code, key, value_json, updated_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+      ).bind(firmCode, 'setup:meta', JSON.stringify(meta)));
+    }
+    if (stmts.length > 0) {
+      try { await env.DB.batch(stmts); } catch (e) {}
+    }
+    return kvData;
+  }
+  return result;
+}
+
+/* Read lead profile from D1. Falls back to KV scout:leadprofile:{firmCode}
+   on first read and migrates. */
+async function getLeadProfile(env, firmCode) {
+  if (!env.DB) {
+    return await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  }
+  /* Try D1 first */
+  var d1Val = await getFirmSetting(env, firmCode, 'leadprofile');
+  if (d1Val) return d1Val;
+  /* Fall back to KV and migrate */
+  var kvVal = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  if (kvVal) {
+    try { await saveFirmSetting(env, firmCode, 'leadprofile', kvVal); } catch (e) {}
+  }
+  return kvVal;
+}
+
+/* Save lead profile to both D1 and KV (dual-write during transition). */
+async function saveLeadProfile(env, firmCode, profile) {
+  var json = JSON.stringify(profile);
+  await kvPut(env, 'scout:leadprofile:' + firmCode, json);
+  if (env.DB) {
+    try { await saveFirmSetting(env, firmCode, 'leadprofile', profile); } catch (e) {}
+  }
+}
+
 /* Returns true when an error is a confirmed credit/billing problem (not
    transient overload). Only these trigger the admin alert email. */
 function isBillingError(e) {
@@ -1961,7 +2071,7 @@ async function runMorningForFirm(env, firmCode, day) {
 
 /* ── On-demand group search — runs Places pipeline for one group, adds to Today ── */
 async function runGroupSearch(env, firmCode, groupName, cost) {
-  var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var profileJson = await getLeadProfile(env, firmCode);
   if (!profileJson) throw new Error('no_profile');
   var group = null;
   (profileJson.groups || []).forEach(function(g) { if (g.name === groupName && g.enabled) group = g; });
@@ -2083,7 +2193,36 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
 /* B2C types eligible for creator outreach */
 var CREATOR_B2C_TYPES = /cafe|coffee|restaurant|food|bakery|salon|beauty|hair|spa|gym|fitness|yoga|boutique|cloth|fashion|clinic|dental|dermat/i;
 
-/* Check if a firm qualifies for creators based on its ownPrimaryType or context TYPE line */
+/* ── B2C detection ─────────────────────────────────────────────────────
+   Determines whether a firm is consumer-facing (B2C).
+   Used for: regulars step in setup, creator outreach eligibility.
+   Priority:
+     1. businessData.businessType from the firm's analysis (dropdown value)
+     2. businessData.businessTypeInput (free-text fallback for older accounts)
+     3. profile.ownPrimaryType (Google Places type — last resort)
+   B2C industries: food_service, health_wellness, education, retail.
+   ──────────────────────────────────────────────────────────────────── */
+var B2C_INDUSTRY_KEYS = { food_service: 1, health_wellness: 1, education: 1, retail: 1 };
+
+async function isB2CFirm(env, firmCode, profile) {
+  /* 1. Check businessType from analysis */
+  var st = await loadScoutState(env, firmCode);
+  if (st) {
+    var pend = st.pick('scout_pending_result') || {};
+    var bt = (pend.businessData && pend.businessData.businessType) || '';
+    var bti = (pend.businessData && pend.businessData.businessTypeInput) || '';
+    var industry = resolveIndustry(bt, '') || resolveIndustry(bti, '');
+    if (industry && B2C_INDUSTRY_KEYS[industry]) return true;
+    /* Direct keyword match on the type string (covers edge cases) */
+    if (bt && CREATOR_B2C_TYPES.test(bt)) return true;
+    if (bti && CREATOR_B2C_TYPES.test(bti)) return true;
+  }
+  /* 2. Fallback: Google Places type from profile */
+  if (profile && profile.ownPrimaryType && CREATOR_B2C_TYPES.test(profile.ownPrimaryType)) return true;
+  return false;
+}
+
+/* Legacy alias — call sites that only need sync check on profile/context */
 function isCreatorEligible(profile, context) {
   if (profile && profile.ownPrimaryType && CREATOR_B2C_TYPES.test(profile.ownPrimaryType)) return true;
   if (context) {
@@ -2172,7 +2311,7 @@ async function findLocalCreators(env, firmCode, profile, city, lang, cost) {
 
 /* Run creator outreach for a firm: find creators, dedup, save, generate messages */
 async function runCreatorsForFirm(env, firmCode, day, cost) {
-  var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var profileJson = await getLeadProfile(env, firmCode);
   if (!profileJson) return { status: 'no_profile' };
   /* Confirm gate removed — creators start as soon as a profile exists. */
 
@@ -2187,7 +2326,7 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
   /* Check B2C eligibility */
   var saved = await getMarketContext(env, firmCode);
   if (!saved || !saved.context) return { status: 'no_context' };
-  if (!isCreatorEligible(profileJson, saved.context)) return { status: 'not_b2c' };
+  if (!(await isB2CFirm(env, firmCode, profileJson))) return { status: 'not_b2c' };
 
   var city = saved.city || '';
   /* Message language — prefer explicit setting, fall back to onboarding. */
@@ -3186,7 +3325,7 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   /* Correct invalid types and expand synonyms */
   correctProfileTypes(profile);
   /* Preserve confirmedAt from existing profile if re-generating */
-  var _existingProf = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var _existingProf = await getLeadProfile(env, firmCode);
   profile.confirmedAt = (_existingProf && _existingProf.confirmedAt) || new Date().toISOString();
   profile.createdAt = (_existingProf && _existingProf.createdAt) || new Date().toISOString();
 
@@ -3681,7 +3820,7 @@ async function regenFoundMessages(env, firmCode, lang, ctx) {
   ).bind(firmCode).all();
   if (!rows.results || rows.results.length === 0) return { ok: true, count: 0, cost: 0 };
 
-  var profile = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var profile = await getLeadProfile(env, firmCode);
   var savedCtx = await getMarketContext(env, firmCode);
   var context = (savedCtx && savedCtx.context) || '';
   var city = (savedCtx && savedCtx.city) || '';
@@ -3750,7 +3889,7 @@ async function regenBatch5(env, firmCode, lang, nonceKey, myNonce) {
   /* Take only the first 5 */
   var batch5 = rows.results.slice(0, 5);
 
-  var profile = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var profile = await getLeadProfile(env, firmCode);
   var savedCtx = await getMarketContext(env, firmCode);
   var context = (savedCtx && savedCtx.context) || '';
   var city = (savedCtx && savedCtx.city) || '';
@@ -3955,7 +4094,7 @@ async function rebuildLeadProfile(env, firmCode, context, city, cost) {
       }
     } catch (e) {}
   }
-  await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profile));
+  await saveLeadProfile(env, firmCode, profile);
   return profile;
 }
 
@@ -3963,7 +4102,7 @@ async function rebuildLeadProfile(env, firmCode, context, city, cost) {
 async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   var dryRun = opts && opts.dryRun;
   var allDrops = []; /* collects drop reasons across all stages */
-  var profileJson = await env.G7_KV.get('scout:leadprofile:' + firmCode, 'json');
+  var profileJson = await getLeadProfile(env, firmCode);
   if (profileJson) correctProfileTypes(profileJson);
 
   /* Check if leads already generated today — skip in dry run */
@@ -4106,7 +4245,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
           sLat = geoR[0].lat; sLng = geoR[0].lng;
           if (!profileJson.areaCoords) profileJson.areaCoords = {};
           profileJson.areaCoords[ar] = { lat: sLat, lng: sLng };
-          if (!dryRun) { try { await kvPut(env, 'scout:leadprofile:' + firmCode, JSON.stringify(profileJson)); } catch(e2) {} }
+          if (!dryRun) { try { await saveLeadProfile(env, firmCode, profileJson); } catch(e2) {} }
         }
       } catch (e) { shortfallReasons.push('geo_failed:' + ar); }
     }
@@ -6703,7 +6842,7 @@ export default {
               if (_lpNewHash !== _lpOldHash) {
                 var _lpC = newCostAccum();
                 var _lpProf = await generateLeadProfile(env, session.firmCode, context, city, _lpC);
-                await kvPut(env, 'scout:leadprofile:' + session.firmCode, JSON.stringify(_lpProf));
+                await saveLeadProfile(env, session.firmCode, _lpProf);
                 await kvPut(env, _lpSrcKey, _lpNewHash);
                 await flushCost(env, day, session.firmCode, _lpC);
                 /* Lead generation is now triggered by POST /scout/leads/generate
@@ -7125,7 +7264,7 @@ export default {
     if (request.method === 'GET' && path === '/scout/lead-profile') {
       var _lpSess = await validateSession(request, env);
       if (!_lpSess) return jsonResponse({ error: 'unauthorized' }, 401);
-      var _lpData = await env.G7_KV.get('scout:leadprofile:' + _lpSess.firmCode, 'json');
+      var _lpData = await getLeadProfile(env, _lpSess.firmCode);
       return jsonResponse({ profile: _lpData || null });
     }
 
@@ -7138,7 +7277,7 @@ export default {
 
       /* Confirm existing profile */
       if (_lpBody.action === 'confirm') {
-        var _lpExisting = await env.G7_KV.get('scout:leadprofile:' + _lpSess2.firmCode, 'json');
+        var _lpExisting = await getLeadProfile(env, _lpSess2.firmCode);
         if (!_lpExisting) return jsonResponse({ error: 'No profile to confirm' }, 404);
         _lpExisting.confirmedAt = new Date().toISOString();
         /* Apply group toggles if provided */
@@ -7197,7 +7336,7 @@ export default {
         if (Array.isArray(_lpBody.areas)) {
           _lpExisting.areas = _lpBody.areas.slice(0, 8).map(function(a) { return String(a).slice(0, 80); });
         }
-        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpExisting));
+        await saveLeadProfile(env, _lpSess2.firmCode, _lpExisting);
         /* Lead generation now runs via POST /scout/leads/generate when the
            user visits Today. Removed ctx.waitUntil — it was being terminated. */
         return jsonResponse({ ok: true, profile: _lpExisting });
@@ -7211,7 +7350,7 @@ export default {
       var _lpDay2 = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
       try {
         var _lpProfile = await generateLeadProfile(env, _lpSess2.firmCode, _lpSaved.context, _lpSaved.city || '', _lpCost2);
-        await kvPut(env, 'scout:leadprofile:' + _lpSess2.firmCode, JSON.stringify(_lpProfile));
+        await saveLeadProfile(env, _lpSess2.firmCode, _lpProfile);
         /* Store hash of analysis that generated it */
         var _lpSrcHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(_lpSaved.context.slice(0, 3000)));
         var _lpSrcHex = Array.from(new Uint8Array(_lpSrcHash)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 16);
@@ -7234,7 +7373,7 @@ export default {
       var _vaArea = String(_vaBody.area || '').trim();
       if (!_vaArea) return jsonResponse({ error: 'area is required' }, 400);
 
-      var _vaProfile = await env.G7_KV.get('scout:leadprofile:' + _vaSess.firmCode, 'json');
+      var _vaProfile = await getLeadProfile(env, _vaSess.firmCode);
       var _vaSaved = await getMarketContext(env, _vaSess.firmCode);
       var _vaCity = (_vaSaved && _vaSaved.city) || '';
       var _vaLat = 0, _vaLng = 0;
@@ -7396,7 +7535,7 @@ export default {
       }
 
       /* ── Check if generation is needed ── */
-      var _ltProfile = await env.G7_KV.get('scout:leadprofile:' + _ltSess.firmCode, 'json');
+      var _ltProfile = await getLeadProfile(env, _ltSess.firmCode);
       var _ltGenerating = false;
       if (!_ltProfile) {
         return jsonResponse({ day: _ltDay, leads: [], reminders: [], shortfall: null, generatedAt: null, noProfile: true });
@@ -7532,7 +7671,7 @@ export default {
       }
 
       /* Read business context + language */
-      var _rdProfile = await env.G7_KV.get('scout:leadprofile:' + _rdSess.firmCode, 'json') || {};
+      var _rdProfile = await getLeadProfile(env, _rdSess.firmCode) || {};
       var _rdSavedCtx = await getMarketContext(env, _rdSess.firmCode);
       var _rdContext = (_rdSavedCtx && _rdSavedCtx.context) || '';
       var _rdBizName = resolveBusinessName(_rdProfile, _rdContext);
@@ -7835,7 +7974,7 @@ export default {
       var _olBody;
       try { _olBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
 
-      var _olProfile = await env.G7_KV.get('scout:leadprofile:' + _olSess.firmCode, 'json');
+      var _olProfile = await getLeadProfile(env, _olSess.firmCode);
       if (!_olProfile) _olProfile = {};
 
       _olProfile.ownPlaceId = String(_olBody.placeId || '').slice(0, 200);
@@ -7856,7 +7995,7 @@ export default {
         }
       }
 
-      await kvPut(env, 'scout:leadprofile:' + _olSess.firmCode, JSON.stringify(_olProfile));
+      await saveLeadProfile(env, _olSess.firmCode, _olProfile);
       return jsonResponse({ ok: true, profile: _olProfile });
     }
 
@@ -7886,14 +8025,14 @@ export default {
       var _ksBody;
       try { _ksBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
 
-      var _ksProfile = await env.G7_KV.get('scout:leadprofile:' + _ksSess.firmCode, 'json');
+      var _ksProfile = await getLeadProfile(env, _ksSess.firmCode);
       if (!_ksProfile) return jsonResponse({ error: 'No lead profile' }, 404);
 
       if (Array.isArray(_ksBody.keySearches)) {
         _ksProfile.keySearches = _ksBody.keySearches.slice(0, 5).map(function(s) { return String(s).slice(0, 120).toLowerCase(); });
       }
 
-      await kvPut(env, 'scout:leadprofile:' + _ksSess.firmCode, JSON.stringify(_ksProfile));
+      await saveLeadProfile(env, _ksSess.firmCode, _ksProfile);
       return jsonResponse({ ok: true, keySearches: _ksProfile.keySearches });
     }
 
@@ -7929,7 +8068,7 @@ export default {
         }
       }
 
-      var _grcProfile = await env.G7_KV.get('scout:leadprofile:' + _grcSess.firmCode, 'json');
+      var _grcProfile = await getLeadProfile(env, _grcSess.firmCode);
       if (!_grcProfile || !_grcProfile.ownPlaceId) {
         return jsonResponse({ error: 'Connect your Google listing in Settings first.' }, 400);
       }
@@ -7988,7 +8127,7 @@ export default {
       var _rsBringBackDays = typeof _rsBody.bringBackDays === 'number' ? Math.max(7, Math.min(_rsBody.bringBackDays, 90)) : 21;
 
       /* Load or create opaque code */
-      var _rsProfile = await env.G7_KV.get('scout:leadprofile:' + _rsSess.firmCode, 'json');
+      var _rsProfile = await getLeadProfile(env, _rsSess.firmCode);
       var _rsBizName = (_rsProfile && _rsProfile.ownName) || _rsSess.firmCode;
 
       var _rsCodeKey = 'scout:regulars:code:' + _rsSess.firmCode;
@@ -8016,7 +8155,7 @@ export default {
           bringBackDays: _rsBringBackDays,
           updatedAt: new Date().toISOString()
         };
-        await kvPut(env, 'scout:leadprofile:' + _rsSess.firmCode, JSON.stringify(_rsProfile));
+        await saveLeadProfile(env, _rsSess.firmCode, _rsProfile);
       }
 
       return jsonResponse({ ok: true, code: _rsCode, offerText: _rsOfferText, bringBackDays: _rsBringBackDays });
@@ -8052,7 +8191,7 @@ export default {
       }
 
       /* Load config */
-      var _rlProfile = await env.G7_KV.get('scout:leadprofile:' + _rlSess.firmCode, 'json');
+      var _rlProfile = await getLeadProfile(env, _rlSess.firmCode);
       if (_rlProfile && _rlProfile.regularsConfig) _rlConfig = _rlProfile.regularsConfig;
 
       return jsonResponse({ regulars: _rlRegulars, config: _rlConfig });
@@ -8066,7 +8205,7 @@ export default {
       try { _rbBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
 
       var _rbName = String(_rbBody.name || 'friend').slice(0, 80);
-      var _rbProfile = await env.G7_KV.get('scout:leadprofile:' + _rbSess.firmCode, 'json');
+      var _rbProfile = await getLeadProfile(env, _rbSess.firmCode);
       var _rbBizName = (_rbProfile && _rbProfile.ownName) || '';
       var _rbOffer = (_rbProfile && _rbProfile.regularsConfig && _rbProfile.regularsConfig.offerText) || '';
 
@@ -8089,7 +8228,7 @@ export default {
       var _dpBody;
       try { _dpBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
 
-      var _dpProfile = await env.G7_KV.get('scout:leadprofile:' + _dpSess.firmCode, 'json');
+      var _dpProfile = await getLeadProfile(env, _dpSess.firmCode);
       if (!_dpProfile) return jsonResponse({ error: 'no profile' }, 400);
 
       _dpProfile.deliveryPlatforms = {
@@ -8102,7 +8241,7 @@ export default {
         updatedAt: new Date().toISOString()
       };
 
-      await kvPut(env, 'scout:leadprofile:' + _dpSess.firmCode, JSON.stringify(_dpProfile));
+      await saveLeadProfile(env, _dpSess.firmCode, _dpProfile);
       return jsonResponse({ ok: true });
     }
 
@@ -8118,13 +8257,13 @@ export default {
       var _glCost = newCostAccum();
 
       /* Generate profile if needed */
-      var _glProfile = await env.G7_KV.get('scout:leadprofile:' + _glFirm, 'json');
+      var _glProfile = await getLeadProfile(env, _glFirm);
       if (!_glProfile) {
         var _glSaved = await getMarketContext(env, _glFirm);
         if (!_glSaved || !_glSaved.context) return jsonResponse({ error: 'No analysis for this firm' }, 400);
         _glProfile = await generateLeadProfile(env, _glFirm, _glSaved.context, _glSaved.city || '', _glCost);
         _glProfile.confirmedAt = new Date().toISOString(); /* Admin auto-confirms */
-        await kvPut(env, 'scout:leadprofile:' + _glFirm, JSON.stringify(_glProfile));
+        await saveLeadProfile(env, _glFirm, _glProfile);
       }
 
       /* Force regenerate today's leads */
@@ -8263,18 +8402,15 @@ export default {
 
     // ─────────────────────────────────────────────────────────────
     // GET /scout/setup — read setup progress for firm
-    // KV key: scout:setup:{firmCode} — { steps: { groups, google, language, email, regulars }, completedAt, hiddenUntil }
+    // D1 firm_settings: setup:{step} rows + setup:meta row
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'GET' && path === '/scout/setup') {
       var _suSess = await validateSession(request, env);
       if (!_suSess) return jsonResponse({ error: 'unauthorized' }, 401);
-      var _suKey = 'scout:setup:' + _suSess.firmCode;
-      var _suData = await env.G7_KV.get(_suKey, 'json');
-      if (!_suData) _suData = { steps: {} };
+      var _suData = await getSetupState(env, _suSess.firmCode);
       /* Determine B2C eligibility for regulars step */
-      var _suProfile = await env.G7_KV.get('scout:leadprofile:' + _suSess.firmCode, 'json');
-      var _suCtx = await getMarketContext(env, _suSess.firmCode);
-      var _suIsB2C = _suProfile ? isCreatorEligible(_suProfile, _suCtx ? _suCtx.context : '') : false;
+      var _suProfile = await getLeadProfile(env, _suSess.firmCode);
+      var _suIsB2C = await isB2CFirm(env, _suSess.firmCode, _suProfile);
       /* Count total steps (B2B = 4, B2C = 5) */
       var _suStepNames = ['groups', 'google', 'language', 'email'];
       if (_suIsB2C) _suStepNames.push('regulars');
@@ -8294,6 +8430,7 @@ export default {
     // ─────────────────────────────────────────────────────────────
     // POST /scout/setup/step — mark a setup step as done or skipped
     // Body: { step: "groups"|"google"|"language"|"email"|"regulars", status: "done"|"skipped" }
+    // Each step is its own D1 row — concurrent saves cannot overwrite each other.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'POST' && path === '/scout/setup/step') {
       var _spSess = await validateSession(request, env);
@@ -8306,21 +8443,23 @@ export default {
       if (_spValid.indexOf(_spStep) === -1) return jsonResponse({ error: 'Invalid step: ' + _spStep }, 400);
       if (_spStatus !== 'done' && _spStatus !== 'skipped') return jsonResponse({ error: 'Status must be done or skipped' }, 400);
 
-      var _spKey = 'scout:setup:' + _spSess.firmCode;
-      var _spData = await env.G7_KV.get(_spKey, 'json') || { steps: {} };
-      _spData.steps[_spStep] = { status: _spStatus, at: new Date().toISOString() };
+      /* Save this step as its own row in D1 */
+      var _spStepVal = { status: _spStatus, at: new Date().toISOString() };
+      await saveFirmSetting(env, _spSess.firmCode, 'setup:' + _spStep, _spStepVal);
 
-      /* Check if all steps are complete */
-      var _spProfile = await env.G7_KV.get('scout:leadprofile:' + _spSess.firmCode, 'json');
-      var _spCtx = await getMarketContext(env, _spSess.firmCode);
-      var _spIsB2C = _spProfile ? isCreatorEligible(_spProfile, _spCtx ? _spCtx.context : '') : false;
+      /* Read back full state to check completion */
+      var _spData = await getSetupState(env, _spSess.firmCode);
+      var _spProfile = await getLeadProfile(env, _spSess.firmCode);
+      var _spIsB2C = await isB2CFirm(env, _spSess.firmCode, _spProfile);
       var _spStepNames = ['groups', 'google', 'language', 'email'];
       if (_spIsB2C) _spStepNames.push('regulars');
       var _spAllDone = true;
       _spStepNames.forEach(function(s) { if (!_spData.steps[s]) _spAllDone = false; });
-      if (_spAllDone && !_spData.completedAt) _spData.completedAt = new Date().toISOString();
+      if (_spAllDone && !_spData.completedAt) {
+        _spData.completedAt = new Date().toISOString();
+        await saveFirmSetting(env, _spSess.firmCode, 'setup:meta', { completedAt: _spData.completedAt, hiddenUntil: _spData.hiddenUntil || null });
+      }
 
-      await kvPut(env, _spKey, JSON.stringify(_spData));
       return jsonResponse({ ok: true, setup: _spData, isComplete: !!_spData.completedAt });
     }
 
@@ -8330,10 +8469,9 @@ export default {
     if (request.method === 'POST' && path === '/scout/setup/hide') {
       var _shSess = await validateSession(request, env);
       if (!_shSess) return jsonResponse({ error: 'unauthorized' }, 401);
-      var _shKey = 'scout:setup:' + _shSess.firmCode;
-      var _shData = await env.G7_KV.get(_shKey, 'json') || { steps: {} };
+      var _shData = await getSetupState(env, _shSess.firmCode);
       _shData.hiddenUntil = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-      await kvPut(env, _shKey, JSON.stringify(_shData));
+      await saveFirmSetting(env, _shSess.firmCode, 'setup:meta', { completedAt: _shData.completedAt || null, hiddenUntil: _shData.hiddenUntil });
       return jsonResponse({ ok: true, hiddenUntil: _shData.hiddenUntil });
     }
 
