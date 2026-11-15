@@ -145,6 +145,35 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 }
 @media(max-width:768px){.insight-card{padding:16px 24px}}
 
+/* ── SETUP CARD (shown after first analysis) ── */
+.setup-card{
+  background:var(--black2);border:1px solid var(--border);
+  padding:24px 64px;display:flex;align-items:center;
+  justify-content:space-between;gap:16px;flex-wrap:wrap
+}
+.setup-card-left{flex:1;min-width:200px}
+.setup-card-eyebrow{
+  font-size:8px;letter-spacing:.25em;text-transform:uppercase;
+  color:var(--amber);margin-bottom:8px
+}
+.setup-card-title{
+  font-family:'Cormorant Garamond',serif;font-size:20px;
+  font-weight:300;color:var(--white);margin-bottom:4px
+}
+.setup-card-sub{font-size:11px;color:var(--grey1);letter-spacing:.04em}
+.setup-card-btns{display:flex;gap:10px;flex-shrink:0}
+.setup-card-btn{
+  font-size:9px;letter-spacing:.18em;text-transform:uppercase;
+  padding:12px 24px;cursor:pointer;font-family:'Tenor Sans',sans-serif;
+  transition:all .2s;text-decoration:none;display:inline-block
+}
+.setup-card-btn.primary{background:var(--amber);border:1px solid var(--amber);color:var(--black);font-weight:600}
+.setup-card-btn.primary:hover{background:var(--amber-l);border-color:var(--amber-l)}
+.setup-card-btn.secondary{background:transparent;border:1px solid var(--border2);color:var(--grey1)}
+.setup-card-btn.secondary:hover{border-color:var(--amber);color:var(--amber)}
+@media(max-width:768px){.setup-card{padding:20px 24px}}
+@media(max-width:390px){.setup-card{padding:16px 16px}.setup-card-title{font-size:18px}.setup-card-sub{font-size:10px}}
+
 /* ── TAB NAV ── */
 .tab-nav{
   display:flex;border-bottom:1px solid var(--border2);
@@ -1085,6 +1114,19 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <div class="insight-body" id="insightBody"></div>
 </div>
 
+<!-- SETUP CARD (shown after first analysis, hidden once setup complete) -->
+<div class="setup-card" id="setupCard" style="display:none">
+  <div class="setup-card-left">
+    <div class="setup-card-eyebrow">GET STARTED</div>
+    <div class="setup-card-title" id="setupCardTitle">Set up Scout — 5 quick steps</div>
+    <div class="setup-card-sub">Takes about 2 minutes. Personalise your leads, messages, and emails.</div>
+  </div>
+  <div class="setup-card-btns">
+    <a href="setup.html" class="setup-card-btn primary">Start</a>
+    <button class="setup-card-btn secondary" onclick="hideSetupCard()">Later</button>
+  </div>
+</div>
+
 <!-- TAB NAV -->
 <div class="tab-nav">
   <button class="tab-btn active" onclick="switchTab(0)" id="tabBtn0">This Week</button>
@@ -1346,6 +1388,43 @@ window.addEventListener('DOMContentLoaded', async function() {
     document.getElementById('insightBody').textContent    = insightText;
     insightCard.style.display = 'block';
   }
+
+  /* Show setup card after first analysis (week 1) if setup not complete.
+     Fetch setup status from server; show card if incomplete and not hidden. */
+  (function() {
+    var weekNum = parseInt(localStorage.getItem(scoutKey('scout_week_number')) || '1', 10);
+    if (weekNum > 1) return; /* only show on first analysis */
+    var _tok = localStorage.getItem('g7_session_token') || '';
+    fetch(SCOUT_WORKER + '/scout/setup', {
+      headers: { 'Authorization': 'Bearer ' + _tok }
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.isComplete) return;
+      /* Check if hidden (user clicked "Later") */
+      if (d.hiddenUntil && new Date(d.hiddenUntil) > new Date()) return;
+      /* Update step count and deep-link in card */
+      var remaining = d.totalSteps - d.doneCount;
+      var card = document.getElementById('setupCard');
+      if (!card) return;
+      /* Find next incomplete step for deep link */
+      var nextStep = '';
+      if (d.stepNames) {
+        for (var i = 0; i < d.stepNames.length; i++) {
+          var st = d.setup && d.setup.steps && d.setup.steps[d.stepNames[i]];
+          if (!st || !st.status) { nextStep = d.stepNames[i]; break; }
+        }
+      }
+      var link = nextStep ? 'setup.html?step=' + nextStep : 'setup.html';
+      card.querySelector('.setup-card-btn.primary').href = link;
+      var titleEl = document.getElementById('setupCardTitle');
+      if (d.doneCount > 0) {
+        titleEl.textContent = 'Continue setup — ' + remaining + ' step' + (remaining !== 1 ? 's' : '') + ' left';
+        card.querySelector('.setup-card-btn.primary').textContent = 'Continue';
+      } else {
+        titleEl.textContent = 'Set up Scout — ' + d.totalSteps + ' quick steps';
+      }
+      card.style.display = '';
+    }).catch(function() {});
+  })();
 
   /* Fire-and-forget: trigger lead generation if today's leads are missing.
      After analysis completes, the user lands here — ensure leads are generated
@@ -4070,6 +4149,18 @@ async function rerunAnalysis() {
     overlay.classList.remove('active');
     alert('Re-run failed: ' + (err.message || 'Please try again.'));
   }
+}
+
+/* ═══════════════════════════════════════════
+   SETUP CARD — HIDE FOR 24 HOURS
+═══════════════════════════════════════════ */
+function hideSetupCard() {
+  document.getElementById('setupCard').style.display = 'none';
+  var _tok = localStorage.getItem('g7_session_token') || '';
+  fetch(SCOUT_WORKER + '/scout/setup/hide', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + _tok, 'Content-Type': 'application/json' }
+  }).catch(function() {});
 }
 
 /* ═══════════════════════════════════════════

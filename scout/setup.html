@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Set Up Scout — G7 Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/env.js?v=1"></script>
+<script src="../assets/auth.js?v=19"></script>
+<script src="../assets/scout.js?v=54"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;font-size:16px}
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;--black4:#1E1E1E;
+  --gold:#C9A84C;--gold-l:#E2C97E;--gold-m:#A8873A;
+  --white:#FAFAF8;--white2:#F0EFE9;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(201,168,76,0.15);--border2:rgba(250,250,248,0.08)
+}
+body{font-family:'Tenor Sans',sans-serif;background:var(--black);color:var(--white);overflow-x:hidden;min-height:100vh;visibility:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:.4}
+nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:center;justify-content:space-between;padding:0 64px;height:80px;background:rgba(8,8,8,.92);backdrop-filter:blur(24px);border-bottom:1px solid var(--border2)}
+.nav-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:300;letter-spacing:.25em;text-transform:uppercase;color:var(--white);text-decoration:none}
+.nav-logo em{font-style:normal;color:var(--gold)}
+.nav-right{display:flex;align-items:center;gap:32px}
+.nav-link{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .3s}
+.nav-link:hover{color:var(--white)}
+@media(max-width:768px){nav{padding:0 24px}.nav-link{display:none}}
+
+/* ── Setup layout ── */
+.setup-wrap{max-width:480px;margin:0 auto;padding:120px 24px 80px}
+
+/* Progress bar */
+.progress-wrap{margin-bottom:40px}
+.progress-label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--grey1);margin-bottom:10px;display:flex;justify-content:space-between}
+.progress-bar{height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden}
+.progress-fill{height:100%;background:var(--gold);transition:width .4s ease}
+
+/* Step container */
+.step{display:none}
+.step.active{display:block}
+.step-heading{font-family:'Cormorant Garamond',serif;font-size:clamp(24px,4vw,32px);font-weight:300;line-height:1.3;color:var(--white);margin-bottom:8px}
+.step-desc{font-size:13px;color:var(--grey1);line-height:1.7;margin-bottom:28px}
+
+/* Group toggle rows */
+.group-row{display:flex;justify-content:space-between;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--border2)}
+.group-info{flex:1;min-width:0}
+.group-name{font-size:14px;color:var(--white);margin-bottom:2px}
+.group-why{font-size:11px;color:var(--grey2);line-height:1.5}
+.group-toggle{background:transparent;border:0;padding:8px 0;font-family:inherit;font-size:10px;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:flex-end}
+.group-toggle.on{color:var(--gold)}
+.group-toggle.off{color:var(--grey2)}
+
+/* Area tags */
+.areas-section{margin-top:20px}
+.area-label{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
+.area-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.area-tag{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:var(--black2);border:1px solid var(--border2);font-size:12px;color:var(--white2)}
+.area-tag button{background:none;border:none;color:var(--grey2);cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+.area-add{display:flex;gap:8px;margin-top:8px}
+.area-add input{flex:1;padding:10px 12px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-size:13px;font-family:'Tenor Sans',sans-serif;min-height:44px}
+.area-add input:focus{border-color:var(--gold);outline:none}
+.area-msg{font-size:10px;color:var(--grey2);margin-top:4px;min-height:16px}
+
+/* Google listing */
+.listing-search{margin-top:16px}
+.listing-search input{width:100%;padding:12px 14px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-size:13px;font-family:'Tenor Sans',sans-serif;min-height:44px}
+.listing-search input:focus{border-color:var(--gold);outline:none}
+.listing-results{margin-top:8px}
+.listing-item{padding:12px;margin-bottom:4px;background:var(--black2);border-radius:6px;cursor:pointer;transition:background .2s}
+.listing-item:hover{background:var(--black3)}
+.listing-item .li-name{font-size:13px;color:var(--white)}
+.listing-item .li-meta{font-size:10px;color:var(--grey2);margin-top:2px}
+.listing-linked{display:flex;align-items:center;gap:10px;padding:14px;background:var(--black2);border:1px solid var(--border);border-radius:6px}
+.listing-linked .ll-name{font-size:14px;color:var(--white)}
+.listing-linked .ll-badge{font-size:9px;padding:2px 8px;background:rgba(201,168,76,0.15);color:var(--gold);letter-spacing:.1em;text-transform:uppercase}
+.listing-change{font-size:11px;color:var(--gold);background:none;border:none;cursor:pointer;margin-top:8px;padding:4px 0;font-family:inherit;text-decoration:underline;text-underline-offset:3px}
+.listing-external{display:inline-block;margin-top:12px;font-size:11px;color:var(--grey2);text-decoration:none;border-bottom:1px solid var(--grey2);padding-bottom:1px}
+.listing-external:hover{color:var(--white);border-color:var(--white)}
+
+/* Language picker */
+.lang-options{display:flex;gap:8px;margin-bottom:20px}
+.lang-btn{flex:1;padding:14px 8px;background:var(--black2);border:1px solid var(--border2);color:var(--grey1);font-family:'Tenor Sans',sans-serif;font-size:12px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;text-align:center;transition:all .2s;min-height:44px}
+.lang-btn.active{border-color:var(--gold);color:var(--gold);background:rgba(201,168,76,0.06)}
+.preview-box{background:var(--black2);border:1px solid var(--border2);border-radius:6px;padding:16px;margin-top:12px}
+.preview-label{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--grey2);margin-bottom:8px}
+.preview-msg{font-size:13px;color:var(--white2);line-height:1.7;white-space:pre-line}
+
+/* Email step */
+.email-toggle-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border2)}
+.email-toggle-label{font-size:13px;color:var(--white)}
+.email-toggle{background:transparent;border:0;padding:8px 0;font-family:inherit;font-size:10px;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:flex-end}
+.email-toggle.on{color:var(--gold)}
+.email-toggle.off{color:var(--grey2)}
+.email-time-row{display:flex;align-items:center;gap:12px;padding:14px 0}
+.email-time-label{font-size:13px;color:var(--grey1)}
+.email-time-input{padding:8px 12px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-family:'Tenor Sans',sans-serif;font-size:13px;min-height:44px}
+.email-time-input:focus{border-color:var(--gold);outline:none}
+.email-current{font-size:12px;color:var(--grey1);margin-top:12px;line-height:1.6}
+.email-edit-row{display:flex;gap:8px;margin-top:8px}
+.email-edit-row input{flex:1;padding:10px 12px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-size:13px;font-family:'Tenor Sans',sans-serif;min-height:44px}
+.email-edit-row input:focus{border-color:var(--gold);outline:none}
+
+/* Regulars step */
+.reg-offer-input{width:100%;padding:12px 14px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-size:13px;font-family:'Tenor Sans',sans-serif;min-height:44px;margin-bottom:12px}
+.reg-offer-input:focus{border-color:var(--gold);outline:none}
+
+/* Buttons */
+.step-btns{display:flex;gap:12px;margin-top:32px}
+.btn-back,.btn-skip{background:transparent;border:1px solid var(--border2);color:var(--grey1);font-family:'Tenor Sans',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:12px 24px;cursor:pointer;transition:all .3s;min-height:44px}
+.btn-back:hover,.btn-skip:hover{border-color:var(--gold);color:var(--white)}
+.btn-next{background:var(--gold);border:1px solid var(--gold);color:var(--black);font-family:'Tenor Sans',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:12px 32px;cursor:pointer;transition:all .3s;min-height:44px;margin-left:auto}
+.btn-next:hover{background:var(--gold-l)}
+.btn-next:disabled{opacity:.4;cursor:not-allowed}
+.btn-print{background:transparent;border:1px solid var(--gold);color:var(--gold);font-family:'Tenor Sans',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:12px 24px;cursor:pointer;transition:all .3s;min-height:44px}
+.btn-print:hover{background:rgba(201,168,76,0.08)}
+
+/* Status messages */
+.s-saved{font-size:11px;color:var(--gold);margin-top:8px;display:none}
+.s-err{font-size:11px;color:#C45A5A;margin-top:8px;display:none}
+
+@media(max-width:480px){
+  .setup-wrap{padding:100px 16px 80px}
+  .step-btns{flex-wrap:wrap}
+  .btn-next{margin-left:0;flex:1}
+  .lang-options{flex-direction:column;gap:6px}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo">G<em>7</em> Scout</a>
+  <div class="nav-right">
+    <a href="today.html" class="nav-link">Today</a>
+    <a href="pipeline.html" class="nav-link">Customers</a>
+    <a href="settings.html" class="nav-link">Settings</a>
+  </div>
+</nav>
+
+<div class="setup-wrap">
+  <!-- Progress bar -->
+  <div class="progress-wrap">
+    <div class="progress-label">
+      <span id="progressText">Step 1 of 5</span>
+      <span id="progressPct"></span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:20%"></div></div>
+  </div>
+
+  <!-- STEP 1: Who Scout looks for -->
+  <div class="step active" id="step-groups">
+    <h2 class="step-heading">Who Scout looks for</h2>
+    <p class="step-desc">These are the customer groups Scout finds for you every day. Toggle any group on or off.</p>
+    <div id="groupsList"></div>
+    <div class="areas-section">
+      <div class="area-label">Search areas</div>
+      <div class="area-tags" id="areaTags"></div>
+      <div class="area-add">
+        <input type="text" id="areaInput" placeholder="Add area (e.g. Koramangala)">
+        <button class="btn-skip" id="areaAddBtn" style="padding:10px 16px">Add</button>
+      </div>
+      <div class="area-msg" id="areaMsg"></div>
+    </div>
+    <div class="step-btns">
+      <button class="btn-skip" onclick="skipStep()">Skip</button>
+      <button class="btn-next" id="groupsNext" onclick="saveGroups()">Next</button>
+    </div>
+    <div class="s-saved" id="groupsSaved">Saved</div>
+  </div>
+
+  <!-- STEP 2: Your Google listing -->
+  <div class="step" id="step-google">
+    <h2 class="step-heading">Your Google listing</h2>
+    <p class="step-desc">Connect your Google Business listing so Scout can track your visibility and reviews.</p>
+    <div id="googleContent"></div>
+    <div class="step-btns">
+      <button class="btn-back" onclick="goBack()">Back</button>
+      <button class="btn-skip" onclick="skipStep()">Skip for now</button>
+      <button class="btn-next" id="googleNext" onclick="saveGoogle()">Next</button>
+    </div>
+    <div class="s-saved" id="googleSaved">Listing saved</div>
+  </div>
+
+  <!-- STEP 3: Message language -->
+  <div class="step" id="step-language">
+    <h2 class="step-heading">Message language</h2>
+    <p class="step-desc">Choose the language Scout uses for all outreach messages.</p>
+    <div class="lang-options" id="langOptions"></div>
+    <div class="preview-box" id="previewBox">
+      <div class="preview-label">Preview</div>
+      <div class="preview-msg" id="previewMsg">Loading...</div>
+    </div>
+    <div class="step-btns">
+      <button class="btn-back" onclick="goBack()">Back</button>
+      <button class="btn-skip" onclick="skipStep()">Skip</button>
+      <button class="btn-next" onclick="saveLanguage()">Next</button>
+    </div>
+  </div>
+
+  <!-- STEP 4: Morning email -->
+  <div class="step" id="step-email">
+    <h2 class="step-heading">Morning email</h2>
+    <p class="step-desc">Get today's leads delivered to your inbox every morning.</p>
+    <div class="email-toggle-row">
+      <span class="email-toggle-label">Email me today's leads every morning</span>
+      <button class="email-toggle on" id="emailToggle" onclick="toggleEmail()">On</button>
+    </div>
+    <div class="email-time-row" id="emailTimeRow">
+      <span class="email-time-label">Send at</span>
+      <input type="time" class="email-time-input" id="emailTime" value="08:00">
+      <span style="font-size:11px;color:var(--grey2)">IST</span>
+    </div>
+    <div class="email-current" id="emailCurrent"></div>
+    <div id="emailEditArea"></div>
+    <div class="s-err" id="emailErr"></div>
+    <p style="font-size:11px;color:var(--grey2);margin-top:16px;line-height:1.6">Email delivery ships in the next update. Your preference will be saved now.</p>
+    <div class="step-btns">
+      <button class="btn-back" onclick="goBack()">Back</button>
+      <button class="btn-skip" onclick="skipStep()">Skip</button>
+      <button class="btn-next" onclick="saveEmail()">Next</button>
+    </div>
+    <div class="s-saved" id="emailSaved">Saved</div>
+  </div>
+
+  <!-- STEP 5: Regulars (B2C only) -->
+  <div class="step" id="step-regulars">
+    <h2 class="step-heading">Regulars</h2>
+    <p class="step-desc">Bring back your repeat customers with a QR table card they scan on every visit.</p>
+    <label style="display:block;font-size:12px;color:var(--grey1);margin-bottom:6px">Offer line (shown on the card)</label>
+    <input type="text" class="reg-offer-input" id="regOffer" placeholder="e.g. 10% off your 5th visit">
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <button class="btn-print" id="regPrintBtn" onclick="window.open('regular-card.html','_blank')">Print table card</button>
+    </div>
+    <div class="step-btns">
+      <button class="btn-back" onclick="goBack()">Back</button>
+      <button class="btn-skip" onclick="skipStep()">Skip</button>
+      <button class="btn-next" onclick="saveRegulars()">Finish</button>
+    </div>
+    <div class="s-saved" id="regSaved">Saved</div>
+  </div>
+
+  <!-- DONE state -->
+  <div class="step" id="step-done">
+    <h2 class="step-heading">You're all set</h2>
+    <p class="step-desc">Scout is configured and finding leads for you. You can change any of these settings later.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px">
+      <a href="today.html" class="btn-next" style="text-decoration:none;text-align:center">See today's leads</a>
+      <a href="settings.html" class="btn-skip" style="text-decoration:none;text-align:center">Open settings</a>
+    </div>
+  </div>
+</div>
+
+<script>
+
+var _auth = {};
+var _setupData = null;
+var _profile = null;
+var _stepNames = ['groups','google','language','email','regulars'];
+var _isB2C = true;
+var _currentStep = 0;
+var _selectedLang = 'Hinglish';
+var _selectedPlaceId = null;
+var _emailOn = true;
+
+/* ── Helpers ── */
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function flashSaved(id){var el=document.getElementById(id);if(!el)return;el.style.display='';clearTimeout(el._t);el._t=setTimeout(function(){el.style.display='none'},2000)}
+function flashErr(id,msg){var el=document.getElementById(id);if(!el)return;el.textContent=msg;el.style.display='';clearTimeout(el._t);el._t=setTimeout(function(){el.style.display='none'},4000)}
+
+/* ── INIT ── */
+window.addEventListener('DOMContentLoaded', async function() {
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) { window.location.href = '../login.html?product=scout'; return; }
+  document.body.style.visibility = 'visible';
+  _auth = { 'Authorization': 'Bearer ' + token };
+
+  /* Load setup state + profile in parallel */
+  var setupP = fetch(SCOUT_WORKER + '/scout/setup', { headers: _auth }).then(function(r){return r.json()});
+  var profileP = fetch(SCOUT_WORKER + '/scout/lead-profile', { headers: _auth }).then(function(r){return r.json()});
+  var langP = fetch(SCOUT_WORKER + '/scout/message-lang', { headers: _auth }).then(function(r){return r.json()});
+  var emailP = fetch(SCOUT_WORKER + '/scout/brief-email', { headers: _auth }).then(function(r){return r.json()});
+
+  try {
+    var results = await Promise.all([setupP, profileP, langP, emailP]);
+    _setupData = results[0];
+    _profile = (results[1] && results[1].profile) ? results[1].profile : null;
+    _selectedLang = (results[2] && results[2].language) ? results[2].language : 'Hinglish';
+    var emailData = results[3] || {};
+    _emailOn = emailData.actions !== false;
+
+    _isB2C = _setupData.isB2C !== false;
+    _stepNames = _setupData.stepNames || ['groups','google','language','email'];
+    if (!_isB2C) _stepNames = _stepNames.filter(function(s){return s !== 'regulars'});
+  } catch(e) {
+    _setupData = { setup: { steps: {} }, stepNames: ['groups','google','language','email'], isB2C: false };
+    _stepNames = ['groups','google','language','email'];
+  }
+
+  /* URL param: ?step=google jumps to that step */
+  var urlStep = new URLSearchParams(window.location.search).get('step');
+  if (urlStep && _stepNames.indexOf(urlStep) !== -1) {
+    _currentStep = _stepNames.indexOf(urlStep);
+  } else {
+    /* Find first incomplete step */
+    var steps = (_setupData && _setupData.setup) ? _setupData.setup.steps || {} : {};
+    for (var i = 0; i < _stepNames.length; i++) {
+      if (!steps[_stepNames[i]]) { _currentStep = i; break; }
+      if (i === _stepNames.length - 1) _currentStep = _stepNames.length; /* all done */
+    }
+  }
+
+  renderStep();
+});
+
+/* ── Render current step ── */
+function renderStep() {
+  /* Hide all steps */
+  document.querySelectorAll('.step').forEach(function(s){s.classList.remove('active')});
+
+  /* If past last step, show done */
+  if (_currentStep >= _stepNames.length) {
+    document.getElementById('step-done').classList.add('active');
+    updateProgress(_stepNames.length, _stepNames.length);
+    return;
+  }
+
+  var stepName = _stepNames[_currentStep];
+  var stepEl = document.getElementById('step-' + stepName);
+  if (stepEl) stepEl.classList.add('active');
+  updateProgress(_currentStep, _stepNames.length);
+
+  /* Render step content */
+  if (stepName === 'groups') renderGroupsStep();
+  else if (stepName === 'google') renderGoogleStep();
+  else if (stepName === 'language') renderLanguageStep();
+  else if (stepName === 'email') renderEmailStep();
+  else if (stepName === 'regulars') renderRegularsStep();
+
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function updateProgress(current, total) {
+  var pct = total > 0 ? Math.round(((current + 1) / total) * 100) : 0;
+  if (current >= total) pct = 100;
+  document.getElementById('progressText').textContent = current >= total ? 'Complete' : 'Step ' + (current + 1) + ' of ' + total;
+  document.getElementById('progressPct').textContent = pct + '%';
+  document.getElementById('progressFill').style.width = pct + '%';
+}
+
+/* ── Navigation ── */
+function goBack() {
+  if (_currentStep > 0) { _currentStep--; renderStep(); }
+}
+
+async function skipStep() {
+  var stepName = _stepNames[_currentStep];
+  try {
+    await fetch(SCOUT_WORKER + '/scout/setup/step', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ step: stepName, status: 'skipped' })
+    });
+  } catch(e) {}
+  _currentStep++;
+  renderStep();
+}
+
+/* ═══════════════════════════════════════
+   STEP 1: Groups & Areas
+═══════════════════════════════════════ */
+function renderGroupsStep() {
+  var el = document.getElementById('groupsList');
+  if (!_profile || !_profile.groups) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--grey2)">No lead profile yet. Run a business analysis first.</div>';
+    return;
+  }
+  var html = '';
+  _profile.groups.forEach(function(g, i) {
+    var on = g.enabled !== false;
+    html += '<div class="group-row">';
+    html += '<div class="group-info"><div class="group-name">' + escHtml(g.name) + '</div>';
+    html += '<div class="group-why">' + escHtml(g.why || '') + '</div></div>';
+    html += '<button class="group-toggle ' + (on ? 'on' : 'off') + '" data-idx="' + i + '" data-on="' + on + '" onclick="toggleGroup(this)">' + (on ? 'On' : 'Off') + '</button>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+
+  renderAreaTags();
+}
+
+function toggleGroup(btn) {
+  var isOn = btn.getAttribute('data-on') === 'true';
+  btn.setAttribute('data-on', String(!isOn));
+  btn.textContent = !isOn ? 'On' : 'Off';
+  btn.className = 'group-toggle ' + (!isOn ? 'on' : 'off');
+}
+
+function renderAreaTags() {
+  var el = document.getElementById('areaTags');
+  if (!_profile || !_profile.areas) { el.innerHTML = ''; return; }
+  el.innerHTML = _profile.areas.map(function(a) {
+    return '<span class="area-tag">' + escHtml(a) +
+      '<button onclick="removeArea(\'' + escHtml(a.replace(/'/g,"\\'")) + '\')" title="Remove">&times;</button></span>';
+  }).join('');
+
+  /* Area add handler */
+  var addBtn = document.getElementById('areaAddBtn');
+  var addInput = document.getElementById('areaInput');
+  if (addBtn && !addBtn._bound) {
+    addBtn._bound = true;
+    addBtn.onclick = addArea;
+    addInput.onkeydown = function(e) { if (e.key === 'Enter') addArea(); };
+  }
+}
+
+async function removeArea(name) {
+  if (!_profile || !_profile.areas) return;
+  var newAreas = _profile.areas.filter(function(a){ return a !== name; });
+  if (newAreas.length < 1) { document.getElementById('areaMsg').textContent = 'Need at least 1 area'; return; }
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ action: 'confirm', areas: newAreas })
+    });
+    if (r.ok) { _profile.areas = newAreas; renderAreaTags(); }
+  } catch(e) {}
+}
+
+async function addArea() {
+  var input = document.getElementById('areaInput');
+  var msg = document.getElementById('areaMsg');
+  var name = (input.value || '').trim();
+  if (!name) return;
+  if (_profile.areas && _profile.areas.length >= 6) { msg.textContent = 'Maximum 6 areas'; return; }
+  if (_profile.areas && _profile.areas.some(function(a){ return a.toLowerCase() === name.toLowerCase(); })) { msg.textContent = 'Already added'; return; }
+
+  msg.textContent = 'Checking...';
+  try {
+    var vr = await fetch(SCOUT_WORKER + '/scout/leads/validate-area', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ area: name })
+    });
+    var vd = await vr.json();
+    if (!vd.valid) {
+      msg.textContent = vd.reason === 'too_far' ? 'Too far (' + vd.distKm + 'km, max ' + vd.maxKm + 'km)' : 'Could not find that area';
+      return;
+    }
+    var newAreas = (_profile.areas || []).concat([name]);
+    var sr = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ action: 'confirm', areas: newAreas })
+    });
+    if (sr.ok) { _profile.areas = newAreas; input.value = ''; msg.textContent = ''; renderAreaTags(); }
+    else { msg.textContent = 'Could not save'; }
+  } catch(e) { msg.textContent = 'Error'; }
+}
+
+async function saveGroups() {
+  var btn = document.getElementById('groupsNext');
+  btn.disabled = true; btn.textContent = 'Saving...';
+
+  /* Collect enabled groups */
+  var enabledNames = [];
+  var changed = false;
+  document.querySelectorAll('.group-toggle[data-idx]').forEach(function(b, i) {
+    var on = b.getAttribute('data-on') === 'true';
+    if (on) enabledNames.push(_profile.groups[i].name);
+    if (_profile.groups[i] && ((_profile.groups[i].enabled !== false) !== on)) changed = true;
+  });
+
+  if (enabledNames.length === 0) {
+    flashErr('groupsSaved', 'Enable at least one group');
+    btn.disabled = false; btn.textContent = 'Next';
+    return;
+  }
+
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/lead-profile', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ action: 'confirm', enabledGroups: enabledNames })
+    });
+    if (!r.ok) { flashErr('groupsSaved', 'Could not save'); btn.disabled = false; btn.textContent = 'Next'; return; }
+    /* Refresh profile */
+    var pj = await r.json();
+    if (pj.profile) _profile = pj.profile;
+  } catch(e) { flashErr('groupsSaved', 'Error'); btn.disabled = false; btn.textContent = 'Next'; return; }
+
+  /* Mark step done */
+  try {
+    await fetch(SCOUT_WORKER + '/scout/setup/step', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ step: 'groups', status: 'done' })
+    });
+  } catch(e) {}
+
+  btn.disabled = false; btn.textContent = 'Next';
+  _currentStep++;
+  renderStep();
+}
+
+/* ═══════════════════════════════════════
+   STEP 2: Google Listing
+═══════════════════════════════════════ */
+function renderGoogleStep() {
+  var el = document.getElementById('googleContent');
+  var html = '';
+
+  if (_profile && _profile.ownPlaceId) {
+    html += '<div class="listing-linked">';
+    html += '<div style="flex:1"><div class="ll-name">' + escHtml(_profile.ownName || _profile.ownPlaceId) + '</div></div>';
+    html += '<span class="ll-badge">Connected</span>';
+    html += '</div>';
+    html += '<button class="listing-change" id="googleChangeBtn">Change listing</button>';
+  } else {
+    html += '<div style="font-size:13px;color:var(--grey1);margin-bottom:12px">Find my business on Google</div>';
+  }
+
+  html += '<div class="listing-search" id="googleSearchBox" style="' + (_profile && _profile.ownPlaceId ? 'display:none' : '') + '">';
+  html += '<input type="text" id="googleSearchInput" placeholder="Search for your business name...">';
+  html += '<div class="listing-results" id="googleResults"></div>';
+  html += '</div>';
+
+  html += '<a href="https://business.google.com/create" target="_blank" rel="noopener" class="listing-external">No Google listing? Create one free &rarr;</a>';
+
+  el.innerHTML = html;
+
+  var changeBtn = document.getElementById('googleChangeBtn');
+  if (changeBtn) {
+    changeBtn.onclick = function() {
+      document.getElementById('googleSearchBox').style.display = '';
+      document.getElementById('googleSearchInput').focus();
+    };
+  }
+
+  /* Search handler */
+  var searchInput = document.getElementById('googleSearchInput');
+  var resultsEl = document.getElementById('googleResults');
+  if (searchInput) {
+    var _debounce = null;
+    searchInput.addEventListener('input', function() {
+      clearTimeout(_debounce);
+      var q = searchInput.value.trim();
+      if (q.length < 2) { resultsEl.innerHTML = ''; return; }
+      _debounce = setTimeout(async function() {
+        resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">Searching...</div>';
+        try {
+          var sr = await fetch(SCOUT_WORKER + '/scout/own-listing/search?q=' + encodeURIComponent(q), { headers: _auth });
+          if (!sr.ok) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Search failed</div>'; return; }
+          var sd = await sr.json();
+          if (!sd.results || sd.results.length === 0) { resultsEl.innerHTML = '<div style="font-size:11px;color:var(--grey2)">No results</div>'; return; }
+          resultsEl.innerHTML = sd.results.map(function(p) {
+            return '<div class="listing-item" data-place=\'' + escHtml(JSON.stringify({placeId:p.placeId,name:p.name,lat:p.lat,lng:p.lng,primaryType:p.primaryType||''})) + '\'>' +
+              '<div class="li-name">' + escHtml(p.name) + '</div>' +
+              '<div class="li-meta">' + (p.rating ? p.rating + '\u2605 (' + p.reviews + ') \u00b7 ' : '') + escHtml(p.primaryType || '') + '</div></div>';
+          }).join('');
+          resultsEl.querySelectorAll('.listing-item').forEach(function(item) {
+            item.onclick = function() { pickGoogleListing(JSON.parse(item.getAttribute('data-place'))); };
+          });
+        } catch(e) { resultsEl.innerHTML = '<div style="font-size:11px;color:#c44">Error</div>'; }
+      }, 400);
+    });
+  }
+}
+
+async function pickGoogleListing(place) {
+  _selectedPlaceId = place;
+  document.getElementById('googleResults').innerHTML = '<div style="font-size:11px;color:var(--grey2)">Saving...</div>';
+  try {
+    var sv = await fetch(SCOUT_WORKER + '/scout/own-listing', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify(place)
+    });
+    if (sv.ok) {
+      _profile.ownPlaceId = place.placeId;
+      _profile.ownName = place.name;
+      flashSaved('googleSaved');
+      renderGoogleStep();
+    } else { document.getElementById('googleResults').innerHTML = '<div style="font-size:11px;color:#c44">Could not save</div>'; }
+  } catch(e) { document.getElementById('googleResults').innerHTML = '<div style="font-size:11px;color:#c44">Error</div>'; }
+}
+
+async function saveGoogle() {
+  try {
+    await fetch(SCOUT_WORKER + '/scout/setup/step', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ step: 'google', status: 'done' })
+    });
+  } catch(e) {}
+  _currentStep++;
+  renderStep();
+}
+
+/* ═══════════════════════════════════════
+   STEP 3: Message Language
+═══════════════════════════════════════ */
+function renderLanguageStep() {
+  var langs = ['English','Hinglish','Hindi'];
+  var el = document.getElementById('langOptions');
+  el.innerHTML = langs.map(function(l) {
+    return '<button class="lang-btn ' + (l === _selectedLang ? 'active' : '') + '" data-lang="' + l + '">' + l + '</button>';
+  }).join('');
+
+  el.querySelectorAll('.lang-btn').forEach(function(b) {
+    b.onclick = function() {
+      _selectedLang = b.getAttribute('data-lang');
+      el.querySelectorAll('.lang-btn').forEach(function(x){x.classList.remove('active')});
+      b.classList.add('active');
+      loadPreview(_selectedLang);
+    };
+  });
+
+  loadPreview(_selectedLang);
+}
+
+async function loadPreview(lang) {
+  var el = document.getElementById('previewMsg');
+  el.textContent = 'Loading...';
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/setup/message-preview?lang=' + encodeURIComponent(lang), { headers: _auth });
+    if (r.ok) {
+      var d = await r.json();
+      el.textContent = d.preview || 'Preview unavailable';
+    } else { el.textContent = 'Preview unavailable'; }
+  } catch(e) { el.textContent = 'Preview unavailable'; }
+}
+
+async function saveLanguage() {
+  try {
+    await fetch(SCOUT_WORKER + '/scout/message-lang', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ language: _selectedLang })
+    });
+    await fetch(SCOUT_WORKER + '/scout/setup/step', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ step: 'language', status: 'done' })
+    });
+  } catch(e) {}
+  _currentStep++;
+  renderStep();
+}
+
+/* ═══════════════════════════════════════
+   STEP 4: Morning Email
+═══════════════════════════════════════ */
+async function renderEmailStep() {
+  var emailToggle = document.getElementById('emailToggle');
+  emailToggle.textContent = _emailOn ? 'On' : 'Off';
+  emailToggle.className = 'email-toggle ' + (_emailOn ? 'on' : 'off');
+  document.getElementById('emailTimeRow').style.display = _emailOn ? '' : 'none';
+
+  /* Show recovery email */
+  var curEl = document.getElementById('emailCurrent');
+  var editEl = document.getElementById('emailEditArea');
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/recovery-email', { headers: _auth });
+    if (r.ok) {
+      var d = await r.json();
+      if (d.email) {
+        curEl.innerHTML = 'Sending to: <strong style="color:var(--white)">' + escHtml(d.email) + '</strong>';
+        editEl.innerHTML = '<button class="listing-change" id="emailChangeBtn">Change email</button>' +
+          '<div id="emailEditForm" style="display:none;margin-top:10px">' +
+          '<div class="email-edit-row"><input type="email" id="newEmailInput" placeholder="new@email.com">' +
+          '<button class="btn-skip" style="padding:10px 16px" onclick="saveNewEmail()">Save</button></div></div>';
+        var changeBtn = document.getElementById('emailChangeBtn');
+        if (changeBtn) changeBtn.onclick = function() {
+          document.getElementById('emailEditForm').style.display = '';
+          changeBtn.style.display = 'none';
+          document.getElementById('newEmailInput').focus();
+        };
+      } else {
+        curEl.textContent = '';
+        editEl.innerHTML = '<div style="margin-top:8px"><label style="font-size:12px;color:var(--grey1);margin-bottom:6px;display:block">Your email address</label>' +
+          '<div class="email-edit-row"><input type="email" id="newEmailInput" placeholder="you@email.com">' +
+          '<button class="btn-skip" style="padding:10px 16px" onclick="saveNewEmail()">Save</button></div></div>';
+      }
+    }
+  } catch(e) { curEl.textContent = ''; }
+}
+
+function toggleEmail() {
+  _emailOn = !_emailOn;
+  var btn = document.getElementById('emailToggle');
+  btn.textContent = _emailOn ? 'On' : 'Off';
+  btn.className = 'email-toggle ' + (_emailOn ? 'on' : 'off');
+  document.getElementById('emailTimeRow').style.display = _emailOn ? '' : 'none';
+}
+
+async function saveNewEmail() {
+  var input = document.getElementById('newEmailInput');
+  var val = (input.value || '').trim();
+  if (!val || !val.match(/.+@.+\..+/)) { flashErr('emailErr', 'Enter a valid email'); input.focus(); return; }
+  try {
+    var r = await fetch(SCOUT_WORKER + '/scout/recovery-email', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ email: val })
+    });
+    if (r.ok) {
+      var rj = await r.json();
+      if (rj.token) { localStorage.setItem('g7_session_token', rj.token); _auth = { 'Authorization': 'Bearer ' + rj.token }; }
+      flashSaved('emailSaved');
+      renderEmailStep();
+    } else { var ej = await r.json().catch(function(){return {}}); flashErr('emailErr', ej.error || 'Could not save'); }
+  } catch(e) { flashErr('emailErr', 'Error saving'); }
+}
+
+async function saveEmail() {
+  try {
+    await fetch(SCOUT_WORKER + '/scout/brief-email', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ actions: _emailOn })
+    });
+    await fetch(SCOUT_WORKER + '/scout/setup/step', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ step: 'email', status: 'done' })
+    });
+  } catch(e) {}
+  _currentStep++;
+  renderStep();
+}
+
+/* ═══════════════════════════════════════
+   STEP 5: Regulars (B2C only)
+═══════════════════════════════════════ */
+function renderRegularsStep() {
+  if (_profile && _profile.regularsConfig && _profile.regularsConfig.offerText) {
+    document.getElementById('regOffer').value = _profile.regularsConfig.offerText;
+  }
+}
+
+async function saveRegulars() {
+  var offerText = (document.getElementById('regOffer').value || '').trim();
+  try {
+    if (offerText) {
+      await fetch(SCOUT_WORKER + '/scout/regulars/setup', {
+        method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+        body: JSON.stringify({ offerText: offerText, bringBackDays: 21 })
+      });
+    }
+    await fetch(SCOUT_WORKER + '/scout/setup/step', {
+      method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
+      body: JSON.stringify({ step: 'regulars', status: offerText ? 'done' : 'skipped' })
+    });
+  } catch(e) {}
+  _currentStep++;
+  renderStep();
+}
+
+</script>
+</body>
+</html>

@@ -8262,6 +8262,120 @@ export default {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // GET /scout/setup — read setup progress for firm
+    // KV key: scout:setup:{firmCode} — { steps: { groups, google, language, email, regulars }, completedAt, hiddenUntil }
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/setup') {
+      var _suSess = await validateSession(request, env);
+      if (!_suSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _suKey = 'scout:setup:' + _suSess.firmCode;
+      var _suData = await env.G7_KV.get(_suKey, 'json');
+      if (!_suData) _suData = { steps: {} };
+      /* Determine B2C eligibility for regulars step */
+      var _suProfile = await env.G7_KV.get('scout:leadprofile:' + _suSess.firmCode, 'json');
+      var _suCtx = await getMarketContext(env, _suSess.firmCode);
+      var _suIsB2C = _suProfile ? isCreatorEligible(_suProfile, _suCtx ? _suCtx.context : '') : false;
+      /* Count total steps (B2B = 4, B2C = 5) */
+      var _suStepNames = ['groups', 'google', 'language', 'email'];
+      if (_suIsB2C) _suStepNames.push('regulars');
+      var _suDoneCount = 0;
+      _suStepNames.forEach(function(s) { if (_suData.steps[s]) _suDoneCount++; });
+      return jsonResponse({
+        setup: _suData,
+        isB2C: _suIsB2C,
+        stepNames: _suStepNames,
+        totalSteps: _suStepNames.length,
+        doneCount: _suDoneCount,
+        isComplete: !!_suData.completedAt,
+        hiddenUntil: _suData.hiddenUntil || null
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/setup/step — mark a setup step as done or skipped
+    // Body: { step: "groups"|"google"|"language"|"email"|"regulars", status: "done"|"skipped" }
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/setup/step') {
+      var _spSess = await validateSession(request, env);
+      if (!_spSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _spBody;
+      try { _spBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _spStep = String(_spBody.step || '').trim();
+      var _spStatus = String(_spBody.status || 'done').trim();
+      var _spValid = ['groups', 'google', 'language', 'email', 'regulars'];
+      if (_spValid.indexOf(_spStep) === -1) return jsonResponse({ error: 'Invalid step: ' + _spStep }, 400);
+      if (_spStatus !== 'done' && _spStatus !== 'skipped') return jsonResponse({ error: 'Status must be done or skipped' }, 400);
+
+      var _spKey = 'scout:setup:' + _spSess.firmCode;
+      var _spData = await env.G7_KV.get(_spKey, 'json') || { steps: {} };
+      _spData.steps[_spStep] = { status: _spStatus, at: new Date().toISOString() };
+
+      /* Check if all steps are complete */
+      var _spProfile = await env.G7_KV.get('scout:leadprofile:' + _spSess.firmCode, 'json');
+      var _spCtx = await getMarketContext(env, _spSess.firmCode);
+      var _spIsB2C = _spProfile ? isCreatorEligible(_spProfile, _spCtx ? _spCtx.context : '') : false;
+      var _spStepNames = ['groups', 'google', 'language', 'email'];
+      if (_spIsB2C) _spStepNames.push('regulars');
+      var _spAllDone = true;
+      _spStepNames.forEach(function(s) { if (!_spData.steps[s]) _spAllDone = false; });
+      if (_spAllDone && !_spData.completedAt) _spData.completedAt = new Date().toISOString();
+
+      await kvPut(env, _spKey, JSON.stringify(_spData));
+      return jsonResponse({ ok: true, setup: _spData, isComplete: !!_spData.completedAt });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/setup/hide — hide the setup banner for 24 hours
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/setup/hide') {
+      var _shSess = await validateSession(request, env);
+      if (!_shSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _shKey = 'scout:setup:' + _shSess.firmCode;
+      var _shData = await env.G7_KV.get(_shKey, 'json') || { steps: {} };
+      _shData.hiddenUntil = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+      await kvPut(env, _shKey, JSON.stringify(_shData));
+      return jsonResponse({ ok: true, hiddenUntil: _shData.hiddenUntil });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /scout/setup/message-preview — preview a first message for setup step 3
+    // Returns a sample lead message in the given language
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/setup/message-preview') {
+      var _mpSess = await validateSession(request, env);
+      if (!_mpSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _mpLang = url.searchParams.get('lang') || 'Hinglish';
+      /* Try to get today's first lead */
+      var _mpDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _mpLeadKey = 'scout:leads:' + _mpSess.firmCode + ':' + _mpDay;
+      var _mpLeads = await env.G7_KV.get(_mpLeadKey, 'json');
+      var _mpSampleName = 'Priya';
+      var _mpSampleBiz = 'Sunrise Fitness';
+      if (_mpLeads && Array.isArray(_mpLeads.leads) && _mpLeads.leads.length > 0) {
+        var _mpL = _mpLeads.leads[0];
+        _mpSampleName = (_mpL.name || 'Priya').split(' ')[0];
+        _mpSampleBiz = _mpL.name || 'Sunrise Fitness';
+      } else if (env.DB) {
+        try {
+          var _mpRow = await env.DB.prepare(
+            "SELECT name FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1"
+          ).bind(_mpSess.firmCode).first();
+          if (_mpRow && _mpRow.name) { _mpSampleName = _mpRow.name.split(' ')[0]; _mpSampleBiz = _mpRow.name; }
+        } catch (e) {}
+      }
+      /* Build a simple preview message in the requested language */
+      var _mpMsg = '';
+      if (_mpLang === 'Hindi') {
+        _mpMsg = 'नमस्ते ' + _mpSampleName + ' जी 🙏\n\nमैं [आपका नाम] हूं [आपके बिज़नेस] से। हम ' + _mpSampleBiz + ' के पास हैं और सोचा आपसे बात करें।';
+      } else if (_mpLang === 'Hinglish') {
+        _mpMsg = 'Hi ' + _mpSampleName + ' 👋\n\nMain [your name] hoon [your business] se. Hum ' + _mpSampleBiz + ' ke paas hain — socha connect karte hain.';
+      } else {
+        _mpMsg = 'Hi ' + _mpSampleName + ' 👋\n\nI\'m [your name] from [your business]. We\'re nearby ' + _mpSampleBiz + ' and thought we should connect.';
+      }
+      return jsonResponse({ preview: _mpMsg, leadName: _mpSampleBiz, language: _mpLang });
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // GET /scout/brief-email — current setting for the dashboard toggle.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'GET' && path === '/scout/brief-email') {
