@@ -599,11 +599,12 @@ async function verifyPassword(password, stored) {
 /* Sends an email through Resend. Returns { ok, id } on success
    (id is the Resend message id), or { ok: false } on failure.
    Never throws — a failed send must not change the response the caller sees. */
-async function sendEmail(env, to, subject, text, html, headers) {
+async function sendEmail(env, to, subject, text, html, headers, opts) {
   if (!env.RESEND_API_KEY) return { ok: false };
   try {
+    var _fromName = (opts && opts.fromName) || 'G7 Capital';
     const payload = {
-      from: 'G7 Capital <no-reply@mail.gsevnservices.in>',
+      from: _fromName + ' <no-reply@mail.gsevnservices.in>',
       to: [to],
       subject: subject,
       text: text,
@@ -1285,12 +1286,13 @@ async function hmacVerify(secret, data, sig) {
 }
 
 /* Build a signed unsubscribe URL for morning leads email.
-   Requires UNSUBSCRIBE_SECRET. If not set, returns a settings-page link instead. */
+   Requires UNSUBSCRIBE_SECRET. If not set, records an error and returns null
+   so the caller can decide whether to abort the send. */
 function morningUnsubUrl(env, firmCode) {
   var secret = env.UNSUBSCRIBE_SECRET || '';
   if (!secret) {
-    var siteBase = (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '');
-    return Promise.resolve(siteBase + '/scout/settings.html');
+    recordError(env, { source: 'worker', route: 'morning-unsub', kind: 'missing_secret', message: 'UNSUBSCRIBE_SECRET not set — cannot build signed unsubscribe link' }).catch(function(){});
+    return Promise.resolve(null);
   }
   var baseUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev');
   /* Sign synchronously is not possible — caller must await this. */
@@ -1670,6 +1672,8 @@ function tapWord(n) { return n === 1 ? '1 tap' : n + ' taps'; }
 
 function emailShell(opts) {
   var appUrl = (opts.siteUrl || 'https://gsevnservices.in') + '/login.html?product=scout';
+  var btnUrl = (opts.mainButton && opts.mainButton.url) || appUrl;
+  var btnLabel = (opts.mainButton && opts.mainButton.label) || 'Open Scout';
   var html =
     '<div style="background:#f6f4ef;padding:24px 12px">' +
     '<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#fff;font-family:Arial,sans-serif" cellpadding="0" cellspacing="0">' +
@@ -1679,14 +1683,14 @@ function emailShell(opts) {
     '</td></tr>' +
     opts.htmlParts.join('') +
     '<tr><td style="padding:20px 28px 28px">' +
-    '<a href="' + appUrl + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;font-size:13px;letter-spacing:.08em">Open Scout</a>' +
+    '<a href="' + btnUrl + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:12px 22px;text-decoration:none;font-size:13px;letter-spacing:.08em">' + escEmail(btnLabel) + '</a>' +
     '</td></tr></table>' +
     '<div style="max-width:560px;margin:14px auto 0;font-family:Arial,sans-serif;font-size:11px;color:#999;text-align:center;line-height:1.6">' +
     escEmail(opts.footerLine) + ' ' +
     '<a href="' + opts.unsubUrl + '" style="color:#999">Stop these emails</a></div></div>';
   var text = (opts.textGreeting || '') +
     opts.textParts.join('\n\n') +
-    '\n\nOpen Scout: ' + appUrl + '\n\nStop these emails: ' + opts.unsubUrl;
+    '\n\n' + btnLabel + ': ' + btnUrl + '\n\nStop these emails: ' + opts.unsubUrl;
   return { html: html, text: text };
 }
 
@@ -1917,7 +1921,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
   var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-  });
+  }, { fromName: 'Scout by G7' });
   if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
   return _sendRes.ok ? 'sent' : 'send_failed';
 }
@@ -1946,16 +1950,20 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   /* ── Load today's leads (generate if missing, within cap) ── */
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
   var leadsData = await env.G7_KV.get(todayKey, 'json');
+  var _leadGenStatus = leadsData ? 'cached' : null;
   if (!leadsData) {
     /* Generate leads first — both admin dry-run and cron need them */
     var cost = newCostAccum();
+    var _costBucket = (opts && opts.adminCost) ? 'ADMIN' : firmCode;
     try {
       var genResult = await runLeadsForFirm(env, firmCode, day, cost);
-      await flushCost(env, day, firmCode, cost);
+      _leadGenStatus = genResult.status || 'unknown';
+      await flushCost(env, day, _costBucket, cost);
       if (genResult.status === 'success' || genResult.status === 'already_generated') {
         leadsData = await env.G7_KV.get(todayKey, 'json');
       }
     } catch (e) {
+      _leadGenStatus = 'error';
       try { await recordError(env, { source: 'worker', route: 'morning-email', firmCode: firmCode, kind: 'lead_gen', message: String(e.message || e) }); } catch(e2) {}
     }
   }
@@ -1971,20 +1979,17 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var _rsRaw = st ? st.pick('scout_review_skip') : null;
   var _reviewSkip = _rsRaw === true || _rsRaw === 'true';
 
-  /* Resolve message language before building follow-ups */
-  var msgLang = 'Hinglish';
-  try {
-    var mlVal = st ? st.pick('scout_message_lang') : null;
-    if (mlVal) msgLang = mlVal;
-  } catch (e) {}
+  /* Resolve message language — same source as lead messages (auth:users KV) */
+  var msgLang = (user && user.messageLanguage) || 'Hinglish';
 
   var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip, msgLang);
 
   /* ── Nothing to send? ── */
   if (leads.length === 0 && due.length === 0) return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0 };
 
-  /* ── Build unsubscribe URL ── */
+  /* ── Build unsubscribe URL (null = secret missing → abort send) ── */
   var unsubUrl = await morningUnsubUrl(env, firmCode);
+  if (!unsubUrl) return { status: 'missing_unsub_secret' };
 
   /* ── Build today URL ── */
   var _siteBase = (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '');
@@ -2028,9 +2033,8 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       var btns = '';
       if (lPhone && waMsg) {
         var waUrl = emailSafeUrl('https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg));
-        btns += '<a href="' + escEmail(waUrl) + '" style="display:inline-block;background:#25D366;color:#fff;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-right:8px;margin-top:6px">WhatsApp</a>';
+        btns += '<a href="' + escEmail(waUrl) + '" style="display:inline-block;background:#25D366;color:#fff;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:6px">WhatsApp</a>';
       }
-      btns += '<a href="' + escEmail(todayUrl) + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:6px">Open Today</a>';
 
       htmlParts.push(emailRow(leadHtml + '<br>' + btns));
 
@@ -2065,7 +2069,6 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       htmlParts.push(emailRow(dLine));
     }
     if (due.length > 5) htmlParts.push(emailGreyRow('+' + (due.length - 5) + ' more in your pipeline'));
-    htmlParts.push(emailRow('<a href="' + escEmail(customersUrl) + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:4px">Open Customers</a>'));
 
     var fuTexts = ['FOLLOW-UPS DUE TODAY (' + due.length + ')'];
     showDue.forEach(function(d) {
@@ -2076,33 +2079,37 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
     textParts.push(fuTexts.join('\n'));
   }
 
-  /* ── Assemble shell ── */
-  var name = displayName(user, firmCode);
+  /* ── Assemble shell — one main button: Open Today (leads) or Open Customers (follow-ups only) ── */
+  var _mainBtn = leads.length > 0
+    ? { url: todayUrl, label: 'Open Today' }
+    : { url: customersUrl, label: 'Open Customers' };
   var shell = emailShell({
     siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout',
-    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>',
-    textGreeting: 'Good morning, ' + name + '.\n\n',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(bizName) + '.</div>',
+    textGreeting: 'Good morning, ' + bizName + '.\n\n',
     htmlParts: htmlParts,
     textParts: textParts,
+    mainButton: _mainBtn,
     footerLine: 'You get this because morning email is on.',
     unsubUrl: unsubUrl
   });
 
   if (dryRun) {
     return { status: 'dry_run', subject: subject, html: shell.html, text: shell.text,
-             leadCount: leads.length, followUpCount: due.length, unsubUrl: unsubUrl };
+             leadCount: leads.length, followUpCount: due.length,
+             leadGenStatus: _leadGenStatus, unsubUrl: unsubUrl };
   }
 
   /* ── Send ── */
   var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-  });
+  }, { fromName: 'Scout by G7' });
   if (_sendRes.ok) await kvPut(env, sentKey, '1', { expirationTtl: 172800 });
   return { status: _sendRes.ok ? 'sent' : 'send_failed', subject: subject,
            leadCount: leads.length, followUpCount: due.length,
-           resendId: _sendRes.id || null };
+           leadGenStatus: _leadGenStatus, resendId: _sendRes.id || null };
 }
 
 /* Shared news email renderer — single data path for both the real morning
@@ -2256,7 +2263,7 @@ async function sendNewsEmail(env, firmCode, day) {
   var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-  });
+  }, { fromName: 'Scout by G7' });
   if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
   return _sendRes.ok ? 'sent' : 'send_failed';
 }
@@ -4082,12 +4089,13 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
 
 /* ── Regenerate messages for uncontacted leads (stage=found) in batches of 5.
      Shared by POST /admin/leads/regen-messages and POST /scout/message-lang. */
-async function regenFoundMessages(env, firmCode, lang, ctx) {
+async function regenFoundMessages(env, firmCode, lang, ctx, opts) {
   if (!env.DB) return { ok: false, error: 'no_db' };
 
-  /* Budget check */
+  /* Budget check — admin regen is exempt */
   var day = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
-  var bc = await budgetCheck(env, day, firmCode);
+  var _isAdmin = !!(opts && opts.adminCost);
+  var bc = _isAdmin ? { ok: true } : await budgetCheck(env, day, firmCode);
   if (!bc.ok) return { ok: false, error: 'budget_exceeded' };
 
   var rows = await env.DB.prepare(
@@ -4133,7 +4141,7 @@ async function regenFoundMessages(env, firmCode, lang, ctx) {
     await kvPut(env, 'scout:leads:' + firmCode + ':' + day, JSON.stringify(cached), { expirationTtl: 2 * 86400 });
   }
 
-  await flushCost(env, day, firmCode, totalCost);
+  await flushCost(env, day, _isAdmin ? 'ADMIN' : firmCode, totalCost);
   return { ok: true, count: updated, cost: totalCost.usd };
 }
 
@@ -6537,10 +6545,10 @@ export default {
         const news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectivePrefs, cost);
         const st = await loadScoutState(env, firmCode);
         const move = await generateScoutMove(env, firmCode, day, saved.context, news, st, true, cost);
-        ctx.waitUntil(flushCost(env, day, firmCode, cost));
+        ctx.waitUntil(flushCost(env, day, 'ADMIN', cost));
         return jsonResponse({ move: move });
       } catch (e) {
-        ctx.waitUntil(flushCost(env, day, firmCode, cost));
+        ctx.waitUntil(flushCost(env, day, 'ADMIN', cost));
         return jsonResponse({ error: 'regen_failed', detail: String((e && e.message) || e).slice(0, 300) }, 500);
       }
     }
@@ -6560,7 +6568,7 @@ export default {
       if (!_meFirm) return jsonResponse({ error: 'firmCode required' }, 400);
       var _meDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
       try {
-        var _meResult = await sendMorningLeadsEmail(env, _meFirm, _meDay, { dryRun: !!body.dryRun });
+        var _meResult = await sendMorningLeadsEmail(env, _meFirm, _meDay, { dryRun: !!body.dryRun, adminCost: true });
         return jsonResponse(_meResult);
       } catch (e) {
         return jsonResponse({ error: 'morning_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
@@ -6614,7 +6622,7 @@ export default {
         _arLang = (_arUser && _arUser.messageLanguage) || 'Hinglish';
       }
       try {
-        var _arResult = await regenFoundMessages(env, _arFirm, _arLang, ctx);
+        var _arResult = await regenFoundMessages(env, _arFirm, _arLang, ctx, { adminCost: true });
         _arResult.colo = _anthropicColo;
         return jsonResponse(_arResult);
       } catch (e) {
@@ -6680,8 +6688,8 @@ export default {
         var bizLog = (news && news._log) || null;
         if (news) { delete news._log; delete news._genError; }
 
-        /* Flush this run's cost first, then read spend so it includes this run. */
-        await flushCost(env, day, firmCode, cost);
+        /* Flush this run's cost to ADMIN bucket, then read firm spend for info. */
+        await flushCost(env, day, 'ADMIN', cost);
         var _bc = await budgetCheck(env, day, firmCode);
         var spendInfo = { firmSpent: _bc.firmSpent, firmCap: _bc.cap || 0 };
 
