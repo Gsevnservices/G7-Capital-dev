@@ -1264,6 +1264,33 @@ function escEmail(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/* ── HMAC helpers for signed links (morning email unsubscribe) ── */
+async function hmacSign(secret, data) {
+  var enc = new TextEncoder();
+  var key = await crypto.subtle.importKey('raw', enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  var sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
+  return Array.from(new Uint8Array(sig)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+async function hmacVerify(secret, data, sig) {
+  var expected = await hmacSign(secret, data);
+  if (expected.length !== sig.length) return false;
+  var diff = 0;
+  for (var i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0;
+}
+
+/* Build a signed unsubscribe URL for morning leads email.
+   Uses UNSUBSCRIBE_SECRET (or ADMIN_PASSWORD as fallback). */
+function morningUnsubUrl(env, firmCode) {
+  var secret = env.UNSUBSCRIBE_SECRET || env.ADMIN_PASSWORD || 'g7unsub';
+  var baseUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev');
+  /* Sign synchronously is not possible — caller must await this. */
+  return hmacSign(secret, 'unsub:morning:' + firmCode).then(function(sig) {
+    return baseUrl + '/email/unsubscribe?f=' + encodeURIComponent(firmCode) + '&t=' + sig;
+  });
+}
+
 /* Creates a permanent unsubscribe token for a firm, or returns its
    existing one. Stored both ways so the link never changes. */
 async function unsubToken(env, firmCode) {
@@ -1830,6 +1857,185 @@ async function sendActionsEmail(env, firmCode, day, move) {
   });
   if (ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
   return ok ? 'sent' : 'send_failed';
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Morning Leads Email — sends today's leads + follow-ups to the firm.
+   Returns { status, subject?, html?, text?, leadCount?, followUpCount? }.
+   When dryRun is true, builds the email but does not send it.
+   ══════════════════════════════════════════════════════════════════════════ */
+async function sendMorningLeadsEmail(env, firmCode, day, opts) {
+  var dryRun = !!(opts && opts.dryRun);
+
+  /* ── Guard: already sent today? ── */
+  var sentKey = 'email:morning:' + firmCode + ':' + day;
+  if (!dryRun && await env.G7_KV.get(sentKey)) return { status: 'already_sent' };
+
+  /* ── Guard: morningEmail preference on? ── */
+  var mePref = await getFirmSetting(env, firmCode, 'morningEmail');
+  if (!mePref) mePref = { on: true, time: '08:00' };
+  if (!mePref.on) return { status: 'email_off' };
+
+  /* ── Guard: has recovery email? ── */
+  var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+  if (!user || !user.recoveryEmail) return { status: 'no_email' };
+
+  /* ── Load today's leads (generate if missing, within cap) ── */
+  var todayKey = 'scout:leads:' + firmCode + ':' + day;
+  var leadsData = await env.G7_KV.get(todayKey, 'json');
+  if (!leadsData && !dryRun) {
+    /* Try generating leads */
+    var cost = newCostAccum();
+    try {
+      var genResult = await runLeadsForFirm(env, firmCode, day, cost);
+      await flushCost(env, day, firmCode, cost);
+      if (genResult.status === 'success') {
+        leadsData = await env.G7_KV.get(todayKey, 'json');
+      }
+    } catch (e) {
+      try { await recordError(env, { source: 'worker', route: 'morning-email', firmCode: firmCode, kind: 'lead_gen', message: String(e.message || e) }); } catch(e2) {}
+    }
+  }
+  var leads = (leadsData && Array.isArray(leadsData.leads)) ? leadsData.leads : [];
+
+  /* ── Load follow-ups due today ── */
+  var pipeline = await loadCustomersForFirm(env, firmCode);
+  var st = await loadScoutState(env, firmCode);
+  var pend = st ? (st.pick('scout_pending_result') || {}) : {};
+  var bizData = (pend && pend.businessData) || {};
+  var bizName = bizData.businessName || displayName(user, firmCode);
+  var _bucket = (st ? st.pick('scout_bucket') : null) || 'retail';
+  var _rsRaw = st ? st.pick('scout_review_skip') : null;
+  var _reviewSkip = _rsRaw === true || _rsRaw === 'true';
+  var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip);
+
+  /* ── Nothing to send? ── */
+  if (leads.length === 0 && due.length === 0) return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0 };
+
+  /* ── Resolve message language ── */
+  var msgLang = 'Hinglish';
+  try {
+    var mlVal = st ? st.pick('scout_message_lang') : null;
+    if (mlVal) msgLang = mlVal;
+  } catch (e) {}
+
+  /* ── Build unsubscribe URL ── */
+  var unsubUrl = await morningUnsubUrl(env, firmCode);
+
+  /* ── Build today URL ── */
+  var todayUrl = 'https://gsevnservices.in/scout/today.html';
+
+  /* ── Build customers URL ── */
+  var customersUrl = 'https://gsevnservices.in/scout/customers.html';
+
+  /* ── Subject (plain text header, no HTML escaping; strip newlines to prevent header injection) ── */
+  var subject = '';
+  if (leads.length > 0) {
+    subject = leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' for ' + bizName + ' today';
+  } else {
+    subject = due.length + ' follow-up' + (due.length === 1 ? '' : 's') + ' due for ' + bizName + ' today';
+  }
+  subject = subject.replace(/[\r\n]/g, '');
+
+  /* ── HTML parts ── */
+  var htmlParts = [];
+  var textParts = [];
+
+  /* ── NEW LEADS ── */
+  if (leads.length > 0) {
+    htmlParts.push(emailHeading(leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' today'));
+    var showLeads = leads.slice(0, 8);
+    for (var li = 0; li < showLeads.length; li++) {
+      var lead = showLeads[li];
+      var lName = escEmail(lead.name || 'New lead');
+      var lGroup = escEmail(lead.group || '');
+      var lReason = escEmail(lead.fitReason || '');
+      /* Truncate reason at 120 chars */
+      if (lReason.length > 120) { var wb = lReason.lastIndexOf(' ', 120); lReason = lReason.slice(0, wb > 60 ? wb : 120) + '\u2026'; }
+
+      var leadHtml = '<strong>' + lName + '</strong>';
+      if (lGroup) leadHtml += ' <span style="font-size:11px;color:#888;background:#f0eee8;padding:2px 8px;border-radius:10px;margin-left:4px">' + lGroup + '</span>';
+      if (lReason) leadHtml += '<br><span style="font-size:12px;color:#666;line-height:1.5">' + lReason + '</span>';
+
+      /* WhatsApp button */
+      var waMsg = (lead.messages && lead.messages.first) || '';
+      var lPhone = waPhone(lead.phone);
+      var btns = '';
+      if (lPhone && waMsg) {
+        var waUrl = emailSafeUrl('https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg));
+        btns += '<a href="' + escEmail(waUrl) + '" style="display:inline-block;background:#25D366;color:#fff;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-right:8px;margin-top:6px">WhatsApp</a>';
+      }
+      btns += '<a href="' + escEmail(todayUrl) + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:6px">Open Today</a>';
+
+      htmlParts.push(emailRow(leadHtml + '<br>' + btns));
+
+      /* Text version */
+      var leadText = '  ' + (lead.name || 'New lead') + ' (' + (lead.group || '') + ')';
+      if (lead.fitReason) leadText += '\n  ' + lead.fitReason;
+      if (lPhone && waMsg) leadText += '\n  WhatsApp: https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg);
+      textParts.push(leadText);
+    }
+    if (leads.length > 8) {
+      htmlParts.push(emailGreyRow('+' + (leads.length - 8) + ' more \u2014 open Today to see all'));
+      textParts.push('  +' + (leads.length - 8) + ' more — open Today to see all');
+    }
+    textParts.unshift('NEW CUSTOMERS TODAY (' + leads.length + ')');
+  }
+
+  /* ── FOLLOW-UPS ── */
+  if (due.length > 0) {
+    htmlParts.push(emailHeading(due.length + ' follow-up' + (due.length === 1 ? '' : 's') + ' due today'));
+    var showDue = due.slice(0, 5);
+    for (var di = 0; di < showDue.length; di++) {
+      var d = showDue[di];
+      var p = d.person || {};
+      var pName = escEmail(p.name || 'Someone');
+      var pReason = escEmail(d.reason || '');
+      var dPhone = waPhone(p.phone);
+      var dLine = '<strong>' + pName + '</strong> \u2014 ' + pReason;
+      if (dPhone && d.msg) {
+        var dWaUrl = emailSafeUrl('https://wa.me/' + dPhone + '?text=' + encodeURIComponent(d.msg));
+        dLine += ' <a href="' + escEmail(dWaUrl) + '" style="color:#25D366;text-decoration:none;font-weight:600">\u00a0WhatsApp</a>';
+      }
+      htmlParts.push(emailRow(dLine));
+    }
+    if (due.length > 5) htmlParts.push(emailGreyRow('+' + (due.length - 5) + ' more in your pipeline'));
+    htmlParts.push(emailRow('<a href="' + escEmail(customersUrl) + '" style="display:inline-block;background:#C9A84C;color:#080808;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:4px">Open Customers</a>'));
+
+    var fuTexts = ['FOLLOW-UPS DUE TODAY (' + due.length + ')'];
+    showDue.forEach(function(d) {
+      var p2 = d.person || {};
+      fuTexts.push('  ' + (p2.name || 'Someone') + ' — ' + (d.reason || ''));
+    });
+    if (due.length > 5) fuTexts.push('  +' + (due.length - 5) + ' more');
+    textParts.push(fuTexts.join('\n'));
+  }
+
+  /* ── Assemble shell ── */
+  var name = displayName(user, firmCode);
+  var shell = emailShell({
+    headerLabel: 'Scout',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>',
+    textGreeting: 'Good morning, ' + name + '.\n\n',
+    htmlParts: htmlParts,
+    textParts: textParts,
+    footerLine: 'You get this because morning email is on.',
+    unsubUrl: unsubUrl
+  });
+
+  if (dryRun) {
+    return { status: 'dry_run', subject: subject, html: shell.html, text: shell.text,
+             leadCount: leads.length, followUpCount: due.length, unsubUrl: unsubUrl };
+  }
+
+  /* ── Send ── */
+  var ok = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
+    'List-Unsubscribe': '<' + unsubUrl + '>',
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+  });
+  if (ok) await kvPut(env, sentKey, '1', { expirationTtl: 172800 });
+  return { status: ok ? 'sent' : 'send_failed', subject: subject,
+           leadCount: leads.length, followUpCount: due.length };
 }
 
 /* Shared news email renderer — single data path for both the real morning
@@ -6270,6 +6476,28 @@ export default {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // POST /admin/email/morning — { adminPassword, firmCode, dryRun? }
+    // Triggers morning leads email for one firm. Dry run returns HTML/text
+    // without sending. Otherwise sends once to the firm's recovery email.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/admin/email/morning') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var _meFirm = String(body.firmCode || '').toUpperCase().trim();
+      if (!_meFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+      var _meDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      try {
+        var _meResult = await sendMorningLeadsEmail(env, _meFirm, _meDay, { dryRun: !!body.dryRun });
+        return jsonResponse(_meResult);
+      } catch (e) {
+        return jsonResponse({ error: 'morning_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // POST /admin/test-session — { adminPassword, firmCode }
     // Creates a short-lived session token (1 hour) for automated testing.
     // ─────────────────────────────────────────────────────────────
@@ -8521,7 +8749,10 @@ export default {
       if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
       const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
       const ep = emailPrefs(user);
-      return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: !!user.recoveryEmail });
+      var _mePref = await getFirmSetting(env, session.firmCode, 'morningEmail');
+      if (!_mePref) _mePref = { on: true, time: '08:00' };
+      return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: !!user.recoveryEmail,
+        morningEmail: _mePref });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -8552,8 +8783,16 @@ export default {
       }
       user.briefEmail = !!(user.emailActions || user.emailNews);
       await kvPut(env,key, JSON.stringify(user));
+      /* Save morningEmail to D1 if provided */
+      if (body.morningEmail && typeof body.morningEmail === 'object') {
+        var _meNew = { on: body.morningEmail.on !== false, time: body.morningEmail.time || '08:00' };
+        await saveFirmSetting(env, session.firmCode, 'morningEmail', _meNew);
+      }
       const ep = emailPrefs(user);
-      return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: true });
+      var _mePref2 = await getFirmSetting(env, session.firmCode, 'morningEmail');
+      if (!_mePref2) _mePref2 = { on: true, time: '08:00' };
+      return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: true,
+        morningEmail: _mePref2 });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -9006,6 +9245,39 @@ export default {
       } catch (e) {
         return jsonResponse({ error: 'DB query failed', detail: String(e.message || e).slice(0, 300) }, 500);
       }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // GET /email/unsubscribe?f={firmCode}&t={HMAC} — HMAC-signed, no session needed.
+    // Turns morningEmail off in D1 firm_settings. Shows confirmation page.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/email/unsubscribe') {
+      var _ufirm = url.searchParams.get('f') || '';
+      var _usig = url.searchParams.get('t') || '';
+      var _uSecret = env.UNSUBSCRIBE_SECRET || env.ADMIN_PASSWORD || 'g7unsub';
+      var _uValid = false;
+      if (_ufirm && _usig) {
+        try { _uValid = await hmacVerify(_uSecret, 'unsub:morning:' + _ufirm, _usig); } catch(e) {}
+      }
+      if (!_uValid) {
+        return new Response(
+          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+          '<div style="font-family:Arial,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#222;line-height:1.6">' +
+          '<h2 style="font-weight:400">Invalid link.</h2>' +
+          '<p>This unsubscribe link is not valid. Open Settings in Scout to manage your email preferences.</p></div>',
+          { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
+      /* Turn off morningEmail in D1 */
+      var _uCur = await getFirmSetting(env, _ufirm, 'morningEmail');
+      if (!_uCur) _uCur = { on: true, time: '08:00' };
+      _uCur.on = false;
+      await saveFirmSetting(env, _ufirm, 'morningEmail', _uCur);
+      return new Response(
+        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<div style="font-family:Arial,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#222;line-height:1.6">' +
+        '<h2 style="font-weight:400">You\u2019re unsubscribed.</h2>' +
+        '<p>Scout won\u2019t send the morning leads email any more. You can switch it back on from Settings.</p></div>',
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -9531,6 +9803,40 @@ export default {
       leadCursor = leadPage.list_complete ? undefined : leadPage.cursor;
     } while (leadCursor);
     report.leads = _leadReport;
+
+    /* ── Morning leads email: send to firms whose time slot matches now ──
+       IST half-hour slots from 06:00 to 11:00. Each firm's morningEmail.time
+       is compared against the current IST HH:MM (rounded to the half hour). */
+    var _meReport = [];
+    var _meHour = ist.getHours();
+    var _meMin = ist.getMinutes() < 30 ? '00' : '30';
+    var _meSlot = String(_meHour).padStart(2, '0') + ':' + _meMin;
+    if (_meHour >= 6 && _meHour <= 11) {
+      /* Scan all firms with lead profiles (same cursor as leads above). */
+      var meCursor;
+      do {
+        var mePage = await env.G7_KV.list({ prefix: 'scout:leadprofile:', cursor: meCursor });
+        for (var _mk of mePage.keys) {
+          if (_mk.name.indexOf(':src:') !== -1) continue;
+          var _mFirm = _mk.name.slice('scout:leadprofile:'.length);
+          if (!_mFirm) continue;
+          try {
+            var _mePref3 = await getFirmSetting(env, _mFirm, 'morningEmail');
+            if (!_mePref3) _mePref3 = { on: true, time: '08:00' };
+            if (!_mePref3.on) { _meReport.push({ firm: _mFirm, status: 'email_off' }); continue; }
+            /* Check if this firm's time slot matches the current cron slot */
+            if (_mePref3.time !== _meSlot) { _meReport.push({ firm: _mFirm, status: 'not_this_slot', slot: _mePref3.time }); continue; }
+            var _meResult = await sendMorningLeadsEmail(env, _mFirm, day);
+            _meReport.push({ firm: _mFirm, status: _meResult.status, leadCount: _meResult.leadCount, followUpCount: _meResult.followUpCount });
+          } catch (e) {
+            _meReport.push({ firm: _mFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
+            try { await recordError(env, { source: 'worker', route: 'cron/morning-email', firmCode: _mFirm, kind: 'morning_email', message: String(e.message || e) }); } catch(e2) {}
+          }
+        }
+        meCursor = mePage.list_complete ? undefined : mePage.cursor;
+      } while (meCursor);
+    }
+    report.morningEmail = _meReport;
 
     /* ── Expire old leads: stage=found older than 7 IST days → stage=expired ── */
     var _expireCutoff = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
