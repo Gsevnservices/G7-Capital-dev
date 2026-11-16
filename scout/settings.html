@@ -651,6 +651,9 @@ async function renderEmails() {
     '<button class="s-toggle ' + (_emailState.actions ? 'on' : 'off') + '" id="emailActionsToggle">' + (_emailState.actions ? 'On' : 'Off') + '</button></div>';
   html += '<div class="s-row"><span class="s-row-label">News email</span>' +
     '<button class="s-toggle ' + (_emailState.news ? 'on' : 'off') + '" id="emailNewsToggle">' + (_emailState.news ? 'On' : 'Off') + '</button></div>';
+  var we = _emailState.weeklyEmail || { on: true };
+  html += '<div class="s-row"><span class="s-row-label">Weekly recap email</span>' +
+    '<button class="s-toggle ' + (we.on ? 'on' : 'off') + '" id="emailWeeklyToggle">' + (we.on ? 'On' : 'Off') + '</button></div>';
   html += '<div class="s-saved" id="emailSaved">Saved</div>';
   el.innerHTML = html;
 
@@ -663,6 +666,7 @@ async function renderEmails() {
   };
   document.getElementById('emailActionsToggle').onclick = function(){ saveEmailToggle({ actions: !_emailState.actions }); };
   document.getElementById('emailNewsToggle').onclick = function(){ saveEmailToggle({ news: !_emailState.news }); };
+  document.getElementById('emailWeeklyToggle').onclick = function(){ saveEmailToggle({ weeklyEmail: { on: !we.on } }); };
 }
 
 async function saveEmailToggle(body) {

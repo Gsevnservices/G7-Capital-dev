@@ -1,128 +1,127 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────
-# verify-leads.sh — Quick smoke test for the Customer Finder
-# pipeline against the dev worker.
+# verify-leads.sh — Smoke test for Customer Finder (dev worker).
 #
-# Usage:
-#   ./scripts/verify-leads.sh <session_token>
+# Logs in via POST /admin/test-session using ADMIN_PASSWORD from
+# .env.local. Never prints secrets, tokens, or raw records.
 #
-# The session_token is the value of g7_session_token from
-# localStorage in the browser (copy it from DevTools).
+# Usage:  ./scripts/verify-leads.sh
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
 DEV="https://g7-proxy-dev.gsevnservices.workers.dev"
-TOKEN="${1:-}"
-
-if [ -z "$TOKEN" ]; then
-  echo "Usage: $0 <session_token>"
-  echo "  Copy g7_session_token from browser DevTools → Application → Local Storage"
-  exit 1
-fi
-
-AUTH="Authorization: Bearer $TOKEN"
+FIRM="TEST18"
+ENV_FILE=".env.local"
 OK=0
 FAIL=0
 
-pass() { OK=$((OK+1)); echo "  ✓ $1"; }
-fail() { FAIL=$((FAIL+1)); echo "  ✗ $1"; }
+pass() { OK=$((OK+1)); echo "  PASS  $1"; }
+fail() { FAIL=$((FAIL+1)); echo "  FAIL  $1"; }
 
 echo ""
-echo "═══════════════════════════════════════"
+echo "======================================="
 echo "  Customer Finder — Verify (dev)"
-echo "═══════════════════════════════════════"
+echo "======================================="
 echo ""
 
-# ── 1. Lead profile exists ──
-echo "1. Lead profile"
-PROFILE=$(curl -s -H "$AUTH" "$DEV/scout/lead-profile")
-if echo "$PROFILE" | grep -q '"groups"'; then
-  GROUPS=$(echo "$PROFILE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('groups',[])))" 2>/dev/null || echo "?")
-  AREAS=$(echo "$PROFILE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('areas',[])))" 2>/dev/null || echo "?")
-  CONFIRMED=$(echo "$PROFILE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('confirmedAt','none'))" 2>/dev/null || echo "?")
-  pass "Profile exists — $GROUPS groups, $AREAS areas, confirmedAt=$CONFIRMED"
-else
-  fail "No lead profile found"
-  echo "     Response: ${PROFILE:0:200}"
+# ── Read admin password silently ──
+if [ ! -f "$ENV_FILE" ]; then
+  echo "ERROR: $ENV_FILE not found. Create it with ADMIN_PASSWORD=..."
+  exit 1
+fi
+ADMIN_PW=$(grep -E '^ADMIN_PASSWORD=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+if [ -z "$ADMIN_PW" ]; then
+  echo "ERROR: ADMIN_PASSWORD not found in $ENV_FILE"
+  exit 1
 fi
 
-# ── 2. Today's leads ──
+# ── Get session token silently ──
+echo "0. Login"
+SESSION_RAW=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d "{\"adminPassword\":\"$ADMIN_PW\",\"firmCode\":\"$FIRM\"}" \
+  "$DEV/admin/test-session")
+TOKEN=$(echo "$SESSION_RAW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+if [ -z "$TOKEN" ]; then
+  echo "  FAIL  Could not get test session"
+  exit 1
+fi
+pass "Got test session for $FIRM"
+AUTH="Authorization: Bearer $TOKEN"
+
+# ── 1. Today's leads ──
 echo ""
-echo "2. Today's leads"
+echo "1. Today's leads (GET /scout/leads/today)"
 TODAY=$(curl -s -H "$AUTH" "$DEV/scout/leads/today")
-if echo "$TODAY" | grep -q '"noProfile"'; then
-  fail "noProfile=true — need to run analysis first"
-elif echo "$TODAY" | grep -q '"generating"'; then
-  pass "Leads are being generated (generating=true)"
-elif echo "$TODAY" | grep -q '"leads"'; then
-  COUNT=$(echo "$TODAY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('leads',[])))" 2>/dev/null || echo "?")
-  REMINDERS=$(echo "$TODAY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('reminders',[])))" 2>/dev/null || echo "?")
-  pass "Today: $COUNT leads, $REMINDERS reminders"
+LEAD_COUNT=$(echo "$TODAY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('leads',[])))" 2>/dev/null || echo "0")
+if echo "$TODAY" | grep -q '"leads"'; then
+  pass "Today: $LEAD_COUNT leads"
 else
-  fail "Unexpected response"
-  echo "     Response: ${TODAY:0:200}"
+  fail "Unexpected response: ${TODAY:0:120}"
 fi
 
-# ── 3. Plan endpoint ──
+# ── 2. Lead dry run ──
 echo ""
-echo "3. Plan / usage"
-PLAN=$(curl -s -H "$AUTH" "$DEV/scout/plan")
-if echo "$PLAN" | grep -q '"features"'; then
-  LEADS_USED=$(echo "$PLAN" | python3 -c "import sys,json; f=json.load(sys.stdin)['features']; print(f['leads']['used'],'of',f['leads']['limit'])" 2>/dev/null || echo "?")
-  GS_USED=$(echo "$PLAN" | python3 -c "import sys,json; f=json.load(sys.stdin)['features']; print(f['groupsearch']['used'],'of',f['groupsearch']['limit'])" 2>/dev/null || echo "?")
-  pass "Leads today: $LEADS_USED — Group search: $GS_USED"
+echo "2. Lead dry run (POST /admin/leads/dry-run)"
+DRY=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d "{\"adminPassword\":\"$ADMIN_PW\",\"firmCode\":\"$FIRM\"}" \
+  "$DEV/admin/leads/dry-run")
+DRY_OK=$(echo "$DRY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ok', d.get('result',{}).get('status','?')))" 2>/dev/null || echo "?")
+DRY_STATUS=$(echo "$DRY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('status', d.get('status','?')))" 2>/dev/null || echo "?")
+if [ "$DRY_OK" = "True" ] || [ "$DRY_STATUS" = "ok" ] || [ "$DRY_STATUS" = "already_generated" ]; then
+  pass "Lead dry run: ok=$DRY_OK, status=$DRY_STATUS"
 else
-  fail "Could not load plan"
-  echo "     Response: ${PLAN:0:200}"
+  fail "Lead dry run: ok=$DRY_OK, status=$DRY_STATUS"
 fi
 
-# ── 4. Validate area ──
+# ── 3. Morning email dry run ──
 echo ""
-echo "4. Area validation"
-VA=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"area":"Koramangala"}' "$DEV/scout/leads/validate-area")
-if echo "$VA" | grep -q '"valid":true'; then
-  SUGG=$(echo "$VA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(d.get('suggestions',[])))" 2>/dev/null || echo "?")
-  pass "Koramangala is valid — suggestions: $SUGG"
-elif echo "$VA" | grep -q '"valid":false'; then
-  REASON=$(echo "$VA" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reason','?'))" 2>/dev/null || echo "?")
-  pass "Koramangala not valid (reason: $REASON) — validation working"
+echo "3. Morning email dry run (POST /admin/email/morning)"
+ME=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d "{\"adminPassword\":\"$ADMIN_PW\",\"firmCode\":\"$FIRM\",\"dryRun\":true}" \
+  "$DEV/admin/email/morning")
+ME_STATUS=$(echo "$ME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "?")
+ME_LEADS=$(echo "$ME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('leadCount','?'))" 2>/dev/null || echo "?")
+ME_SUBJ=$(echo "$ME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('subject','?')[:80])" 2>/dev/null || echo "?")
+if [ "$ME_STATUS" = "dry_run" ] || [ "$ME_STATUS" = "nothing_to_send" ] || [ "$ME_STATUS" = "email_off" ]; then
+  pass "Morning email: status=$ME_STATUS, leads=$ME_LEADS"
+  echo "         Subject: $ME_SUBJ"
 else
-  fail "Area validation unexpected response"
-  echo "     Response: ${VA:0:200}"
+  fail "Morning email: status=$ME_STATUS"
 fi
 
-# ── 5. Old findBusinesses route returns 410 ──
+# ── 4. Weekly email dry run ──
 echo ""
-echo "5. Old route removed"
-OLD=$(curl -s -o /dev/null -w "%{http_code}" -H "$AUTH" "$DEV/places/search?q=test")
-if [ "$OLD" = "410" ]; then
-  pass "GET /places/search returns 410 Gone"
-elif [ "$OLD" = "401" ]; then
-  pass "GET /places/search returns 401 (auth checked before 410, still fine)"
+echo "4. Weekly email dry run (POST /admin/email/weekly)"
+WE=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d "{\"adminPassword\":\"$ADMIN_PW\",\"firmCode\":\"$FIRM\",\"dryRun\":true}" \
+  "$DEV/admin/email/weekly")
+WE_STATUS=$(echo "$WE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "?")
+if [ "$WE_STATUS" = "dry_run" ] || [ "$WE_STATUS" = "nothing_to_report" ] || [ "$WE_STATUS" = "email_off" ]; then
+  pass "Weekly email: status=$WE_STATUS"
+  if [ "$WE_STATUS" = "dry_run" ]; then
+    WE_SUBJ=$(echo "$WE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('subject','')[:80])" 2>/dev/null || echo "")
+    echo "         Subject: $WE_SUBJ"
+  fi
 else
-  fail "GET /places/search returned $OLD (expected 410)"
+  fail "Weekly email: status=$WE_STATUS"
 fi
 
-# ── 6. Group search endpoint exists ──
+# ── 5. /go redirect ──
 echo ""
-echo "6. Group search endpoint"
-GS=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"group":"_test_nonexistent_"}' "$DEV/scout/leads/group-search")
-if echo "$GS" | grep -q '"error"'; then
-  pass "Group search endpoint responds (expected error for fake group)"
-elif echo "$GS" | grep -q 'limit_reached'; then
-  pass "Group search responds with limit_reached"
+echo "5. Link redirect (GET /go/nonexistent)"
+GO_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$DEV/go/nonexistent_test_code")
+if [ "$GO_STATUS" = "404" ]; then
+  pass "/go/nonexistent returns 404 as expected"
 else
-  fail "Group search unexpected response"
-  echo "     Response: ${GS:0:200}"
+  fail "/go/nonexistent returned $GO_STATUS (expected 404)"
 fi
 
 # ── Summary ──
 echo ""
-echo "═══════════════════════════════════════"
+echo "======================================="
 echo "  Results: $OK passed, $FAIL failed"
-echo "═══════════════════════════════════════"
+echo "======================================="
 echo ""
 
+# Clean up — token stays in shell variable only, never written to files
 if [ "$FAIL" -gt 0 ]; then exit 1; fi

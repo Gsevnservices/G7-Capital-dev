@@ -2112,6 +2112,234 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
            leadGenStatus: _leadGenStatus, resendId: _sendRes.id || null };
 }
 
+/* ── Weekly proof email — sent on Mondays with last week's stats.
+   Plain D1 numbers: found, contacted, replied, won.
+   No AI call. Skip if nothing was found or contacted. */
+async function sendWeeklyEmail(env, firmCode, opts) {
+  var dryRun = !!(opts && opts.dryRun);
+
+  /* IST now */
+  var now = new Date(Date.now() + 5.5 * 3600000);
+  var today = now.toISOString().slice(0, 10);
+
+  /* Dedupe: one weekly email per ISO week */
+  var isoWeek = getISOWeek();
+  var dedupeKey = 'email:weekly:' + firmCode + ':' + isoWeek;
+  if (!dryRun && await env.G7_KV.get(dedupeKey)) return { status: 'already_sent' };
+
+  /* Preference check */
+  var wePref = await getFirmSetting(env, firmCode, 'weeklyEmail');
+  if (!wePref) wePref = { on: true };
+  if (!wePref.on) return { status: 'email_off' };
+
+  /* User email */
+  var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+  if (!user || !user.recoveryEmail) return { status: 'no_email' };
+
+  if (!env.DB) return { status: 'no_db' };
+
+  /* Last week Mon–Sun IST boundaries.
+     Upper bound uses the next Monday (< exclusive) so no events are missed. */
+  var dayOfWeek = now.getUTCDay(); // 0=Sun
+  var mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  var lastMonday = new Date(now.getTime() - (mondayOffset + 7) * 86400000);
+  var thisMonday = new Date(lastMonday.getTime() + 7 * 86400000);
+  var weekStart = lastMonday.toISOString().slice(0, 10);
+  var weekEndExcl = thisMonday.toISOString().slice(0, 10); // exclusive upper bound
+  var weekEndDisplay = new Date(lastMonday.getTime() + 6 * 86400000).toISOString().slice(0, 10); // for display
+
+  /* Previous week boundaries (for comparison) */
+  var prevMonday = new Date(lastMonday.getTime() - 7 * 86400000);
+  var prevStart = prevMonday.toISOString().slice(0, 10);
+  var prevEndExcl = weekStart; // exclusive upper bound = this week's start
+
+  /* Query this week's stats from D1 */
+  var stats = { found: 0, contacted: 0, replied: 0, won: 0 };
+  var prevStats = { found: 0, contacted: 0, replied: 0, won: 0 };
+  var topWins = [];
+  try {
+    /* Found: customers created this week via places source */
+    var foundR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND created_at >= ? AND created_at < ?"
+    ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').first();
+    stats.found = (foundR && foundR.c) || 0;
+
+    /* Contacted: customer_events type='stage_change' to_stage='contacted' this week */
+    var contactedR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'contacted' AND at >= ? AND at < ?"
+    ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').first();
+    stats.contacted = (contactedR && contactedR.c) || 0;
+
+    /* Replied: customer_events type='stage_change' to_stage='replied' this week */
+    var repliedR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'replied' AND at >= ? AND at < ?"
+    ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').first();
+    stats.replied = (repliedR && repliedR.c) || 0;
+
+    /* Won: customer_events type='stage_change' to_stage='won' this week */
+    var wonR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'won' AND at >= ? AND at < ?"
+    ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').first();
+    stats.won = (wonR && wonR.c) || 0;
+
+    /* Previous week for comparison */
+    var prevFoundR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND created_at >= ? AND created_at < ?"
+    ).bind(firmCode, prevStart + 'T00:00:00Z', prevEndExcl + 'T00:00:00Z').first();
+    prevStats.found = (prevFoundR && prevFoundR.c) || 0;
+
+    var prevContactedR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'contacted' AND at >= ? AND at < ?"
+    ).bind(firmCode, prevStart + 'T00:00:00Z', prevEndExcl + 'T00:00:00Z').first();
+    prevStats.contacted = (prevContactedR && prevContactedR.c) || 0;
+
+    var prevRepliedR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'replied' AND at >= ? AND at < ?"
+    ).bind(firmCode, prevStart + 'T00:00:00Z', prevEndExcl + 'T00:00:00Z').first();
+    prevStats.replied = (prevRepliedR && prevRepliedR.c) || 0;
+
+    var prevWonR = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'won' AND at >= ? AND at < ?"
+    ).bind(firmCode, prevStart + 'T00:00:00Z', prevEndExcl + 'T00:00:00Z').first();
+    prevStats.won = (prevWonR && prevWonR.c) || 0;
+
+    /* Top wins/replies this week (up to 3) */
+    var winsR = await env.DB.prepare(
+      "SELECT c.name FROM customers c INNER JOIN customer_events e ON c.firm_code = e.firm_code AND c.id = e.customer_id " +
+      "WHERE c.firm_code = ? AND e.type = 'stage_change' AND (e.to_stage = 'won' OR e.to_stage = 'replied') " +
+      "AND e.at >= ? AND e.at < ? ORDER BY CASE WHEN e.to_stage = 'won' THEN 0 ELSE 1 END, e.at DESC LIMIT 3"
+    ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').all();
+    topWins = ((winsR && winsR.results) || []).map(function(r) { return r.name; });
+  } catch (e) {
+    try { await recordError(env, { source: 'worker', route: 'weekly-email', firmCode: firmCode, kind: 'db_query', message: String(e.message || e) }); } catch(e2) {}
+    return { status: 'db_error', error: String(e.message || e).slice(0, 200) };
+  }
+
+  /* Skip if nothing happened */
+  if (stats.found === 0 && stats.contacted === 0) return { status: 'nothing_to_report', stats: stats };
+
+  /* Rates */
+  var reachRate = stats.found > 0 ? Math.round(stats.contacted / stats.found * 100) : 0;
+  var replyRate = stats.contacted > 0 ? Math.round(stats.replied / stats.contacted * 100) : 0;
+
+  /* Change arrows */
+  function changeStr(curr, prev) {
+    var diff = curr - prev;
+    if (diff > 0) return ' (\u2191' + diff + ')';
+    if (diff < 0) return ' (\u2193' + Math.abs(diff) + ')';
+    return '';
+  }
+
+  /* Business name */
+  var st = await loadScoutState(env, firmCode);
+  var pend = st ? (st.pick('scout_pending_result') || {}) : {};
+  var bizData = (pend && pend.businessData) || {};
+  var bizName = bizData.businessName || displayName(user, firmCode);
+
+  /* Build unsub URL */
+  var unsubUrl = await weeklyUnsubUrl(env, firmCode);
+  if (!unsubUrl) return { status: 'missing_unsub_secret' };
+
+  /* Subject */
+  var subject = 'Your week: ' + stats.found + ' found, ' + stats.contacted + ' contacted';
+  subject = subject.replace(/[\r\n]/g, '');
+
+  /* HTML */
+  var htmlParts = [];
+  var textParts = [];
+
+  htmlParts.push(emailHeading('Last week (' + weekStart + ' \u2013 ' + weekEndDisplay + ')'));
+
+  /* Stat rows */
+  var statRows = [
+    { label: 'Found', value: stats.found, prev: prevStats.found },
+    { label: 'Contacted', value: stats.contacted, prev: prevStats.contacted },
+    { label: 'Replied', value: stats.replied, prev: prevStats.replied },
+    { label: 'Won', value: stats.won, prev: prevStats.won }
+  ];
+  var statHtml = '<table style="width:100%;border-collapse:collapse;font-size:14px">';
+  statRows.forEach(function(s) {
+    statHtml += '<tr><td style="padding:6px 0;color:#888">' + s.label + '</td>' +
+      '<td style="padding:6px 0;text-align:right"><strong>' + s.value + '</strong>' +
+      '<span style="font-size:12px;color:#888">' + changeStr(s.value, s.prev) + '</span></td></tr>';
+  });
+  statHtml += '</table>';
+  htmlParts.push(emailRow(statHtml));
+
+  /* Rates */
+  htmlParts.push(emailRow(
+    '<span style="font-size:13px;color:#888">Reach rate: <strong>' + reachRate + '%</strong> \u00b7 Reply rate: <strong>' + replyRate + '%</strong></span>'
+  ));
+
+  textParts.push('LAST WEEK (' + weekStart + ' – ' + weekEndDisplay + ')');
+  textParts.push('Found: ' + stats.found + changeStr(stats.found, prevStats.found));
+  textParts.push('Contacted: ' + stats.contacted + changeStr(stats.contacted, prevStats.contacted));
+  textParts.push('Replied: ' + stats.replied + changeStr(stats.replied, prevStats.replied));
+  textParts.push('Won: ' + stats.won + changeStr(stats.won, prevStats.won));
+  textParts.push('Reach rate: ' + reachRate + '% · Reply rate: ' + replyRate + '%');
+
+  /* Top wins */
+  if (topWins.length > 0) {
+    htmlParts.push(emailHeading('Highlights'));
+    topWins.forEach(function(n) {
+      htmlParts.push(emailRow('\u2714\ufe0f ' + escEmail(n)));
+    });
+    textParts.push('HIGHLIGHTS: ' + topWins.join(', '));
+  }
+
+  /* Plan line — estimate ~5 leads per day × 7 */
+  var planCount = Math.max(stats.found, 20);
+  htmlParts.push(emailRow(
+    '<div style="margin-top:12px;font-size:13px;color:#888;font-style:italic">Scout will find ~' + planCount + ' new leads this week.</div>'
+  ));
+  textParts.push('Scout will find ~' + planCount + ' new leads this week.');
+
+  /* Shell */
+  var _siteBase = (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '');
+  var appUrl = _siteBase + '/login.html?product=scout';
+
+  var shell = emailShell({
+    siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+    headerLabel: 'Scout',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Your week in review, ' + escEmail(bizName) + '.</div>',
+    textGreeting: 'Your week in review, ' + bizName + '.\n\n',
+    htmlParts: htmlParts,
+    textParts: textParts,
+    mainButton: { url: appUrl, label: 'Open Scout' },
+    footerLine: 'You get this every Monday.',
+    unsubUrl: unsubUrl
+  });
+
+  if (dryRun) {
+    return { status: 'dry_run', subject: subject, html: shell.html, text: shell.text,
+             stats: stats, prevStats: prevStats, reachRate: reachRate, replyRate: replyRate,
+             topWins: topWins, weekStart: weekStart, weekEnd: weekEndDisplay };
+  }
+
+  /* Send */
+  var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
+    'List-Unsubscribe': '<' + unsubUrl + '>',
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+  }, { fromName: 'Scout by G7' });
+  if (_sendRes.ok) await kvPut(env, dedupeKey, '1', { expirationTtl: 10 * 86400 });
+  return { status: _sendRes.ok ? 'sent' : 'send_failed', subject: subject,
+           stats: stats, reachRate: reachRate, replyRate: replyRate,
+           resendId: _sendRes.id || null };
+}
+
+/* Build a signed unsubscribe URL for weekly email. */
+function weeklyUnsubUrl(env, firmCode) {
+  var secret = env.UNSUBSCRIBE_SECRET || '';
+  if (!secret) {
+    recordError(env, { source: 'worker', route: 'weekly-unsub', kind: 'missing_secret', message: 'UNSUBSCRIBE_SECRET not set' }).catch(function(){});
+    return Promise.resolve(null);
+  }
+  var baseUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev');
+  return hmacSign(secret, 'unsub:weekly:' + firmCode).then(function(sig) {
+    return baseUrl + '/email/unsubscribe?f=' + encodeURIComponent(firmCode) + '&type=weekly&t=' + sig;
+  });
+}
+
 /* Shared news email renderer — single data path for both the real morning
    email and the admin test-email. Matches the shape of assembleNews output
    exactly: { business: { items: [] }, sections: [...] }. _marketLine items
@@ -2664,7 +2892,8 @@ async function runCreatorsForFirm(env, firmCode, day, cost) {
     'Draft a short, friendly DM and a short email for each creator below, inviting them for a free collab ' +
     '(e.g. "free tasting for an honest review/reel" or "complimentary session for a story"). ' +
     'Language: ' + (lang || 'English') + '. Keep each under 80 words. Be genuine, not salesy. ' +
-    'VOICE: Use "We at ' + businessName + '…" or "This is ' + businessName + '…". In Hindi/Hinglish use "hum" form. No gender slash. ' +
+    'VOICE: Introduce the business ONCE — either "Hi, this is ' + businessName + '…" or "We at ' + businessName + '…", never both in the same message. ' +
+    'Keep the business name exactly as written (accents, special characters). In Hindi/Hinglish use "hum" form. No gender slash. ' +
     'Never mention Scout, G7, or "getting customers".\n\n' +
     'CREATORS:\n' + newCreators.map(function(c, i) {
       return (i + 1) + '. ' + c.handle + ' (' + c.niche + ', ' + c.followers + ')';
@@ -4033,7 +4262,8 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
     'LANGUAGE: ' + (lang || 'Hinglish') + '\n\n' +
     'RECIPIENTS:\n' + leadDescs + '\n\n' +
     'RULES:\n' +
-    '- VOICE: Write as the sender\'s business. Use "We at ' + (bizName || 'our business') + '…" or "This is ' + (bizName || 'our business') + '…". ' +
+    '- VOICE: Introduce the business ONCE — either "Hi, this is ' + (bizName || 'our business') + '…" or "We at ' + (bizName || 'our business') + '…", never both in the same message. ' +
+    'Keep the business name exactly as written (accents, &, special characters). ' +
     'In Hindi or Hinglish use the "hum" form (हम). Never use "bol raha/rahi", no gender slash (he/she, uska/uski).\n' +
     '- Never mention Scout, G7, or "getting customers".\n' +
     '- For pricing: use ONLY prices from BUSINESS DETAILS. If none exist, ask what they need instead of inventing a price.\n' +
@@ -5780,6 +6010,71 @@ export default {
       return jsonResponse({ status: 'G7 Proxy is running' });
     }
 
+    // ── GET /go/{code} — tracked link redirect ────────────────────────────────
+    // Logs the tap in D1 and redirects (302). Filters bot/preview user agents.
+    if ((request.method === 'GET' || request.method === 'HEAD') && path.startsWith('/go/')) {
+      var _goCode = path.slice(4);
+      if (!_goCode || _goCode.length > 40) return new Response('Not found', { status: 404 });
+
+      /* Look up the link in D1 */
+      var _goLink = null;
+      if (env.DB) {
+        try {
+          _goLink = await env.DB.prepare(
+            "SELECT firm_code, kind, url, lead_id FROM tracked_links WHERE code = ?"
+          ).bind(_goCode).first();
+        } catch (e) {}
+      }
+      if (!_goLink || !_goLink.url) return new Response('Not found', { status: 404 });
+
+      /* Bot / link-preview filter */
+      var _goUa = request.headers.get('user-agent') || '';
+      var _goIsBot = /bot|crawl|spider|preview|facebookexternalhit|twitterbot|slackbot|telegrambot|googlebot|whatsapp|linkedinbot|bingbot|yandexbot|applebot|mj12bot|semrushbot|ahrefsbot|discordbot/i.test(_goUa);
+      var _goIsHead = request.method === 'HEAD';
+
+      if (!_goIsBot && !_goIsHead && env.DB) {
+        /* IP+day hash for unique counting — no raw IP stored */
+        var _goIp = request.headers.get('cf-connecting-ip') || '';
+        var _goDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+        var _goSaltKey = 'link:salt:' + _goDay;
+        var _goSalt = await env.G7_KV.get(_goSaltKey);
+        if (!_goSalt) {
+          _goSalt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+          await kvPut(env, _goSaltKey, _goSalt, { expirationTtl: 2 * 86400 });
+        }
+        var _goHashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(_goIp + _goSalt));
+        var _goHash = Array.from(new Uint8Array(_goHashBuf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+
+        /* Dedup: same hash within 10 minutes */
+        var _goDedup = 'link:tap:' + _goCode + ':' + _goHash;
+        var _goRecent = await env.G7_KV.get(_goDedup);
+        if (!_goRecent) {
+          await kvPut(env, _goDedup, '1', { expirationTtl: 600 });
+          /* Log the click */
+          try {
+            await env.DB.prepare(
+              "INSERT INTO link_clicks (firm_code, link_code, lead_id, kind, ip_day_hash, at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+            ).bind(_goLink.firm_code, _goCode, _goLink.lead_id || null, _goLink.kind, _goHash).run();
+          } catch (e) {}
+
+          /* Lead tap → customer_events */
+          if (_goLink.lead_id) {
+            try {
+              await env.DB.prepare(
+                "INSERT INTO customer_events (firm_code, customer_id, type, note, at) VALUES (?, ?, 'link_opened', 'Opened your link', datetime('now'))"
+              ).bind(_goLink.firm_code, _goLink.lead_id).run();
+            } catch (e) {}
+          }
+        }
+      }
+
+      /* 302 redirect */
+      return new Response(null, {
+        status: 302,
+        headers: { 'Location': _goLink.url, 'Cache-Control': 'no-store' }
+      });
+    }
+
     // =========================================================================
     // ROUTE 1 — POST /api/message
     // Anthropic API proxy. Adds API key server-side so it is never
@@ -6572,6 +6867,47 @@ export default {
         return jsonResponse(_meResult);
       } catch (e) {
         return jsonResponse({ error: 'morning_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
+      }
+    }
+
+    // POST /admin/email/weekly — { adminPassword, firmCode, dryRun? }
+    if (request.method === 'POST' && path === '/admin/email/weekly') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var _weFirm = String(body.firmCode || '').toUpperCase().trim();
+      if (!_weFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+      try {
+        var _weResult = await sendWeeklyEmail(env, _weFirm, { dryRun: !!body.dryRun });
+        return jsonResponse(_weResult);
+      } catch (e) {
+        return jsonResponse({ error: 'weekly_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
+      }
+    }
+
+    // POST /admin/links/create — { adminPassword, firmCode, kind, url, leadId? }
+    if (request.method === 'POST' && path === '/admin/links/create') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      if (!body.firmCode || !body.url) return jsonResponse({ error: 'firmCode and url required' }, 400);
+      var _lcFirm = String(body.firmCode).toUpperCase().trim();
+      var _lcKind = body.kind || 'general';
+      /* Generate opaque code */
+      var _lcCode = Array.from(crypto.getRandomValues(new Uint8Array(8))).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+      if (!env.DB) return jsonResponse({ error: 'no_db' }, 500);
+      try {
+        await env.DB.prepare(
+          "INSERT INTO tracked_links (firm_code, code, kind, url, lead_id) VALUES (?, ?, ?, ?, ?)"
+        ).bind(_lcFirm, _lcCode, _lcKind, body.url, body.leadId || null).run();
+        var _lcBaseUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev');
+        return jsonResponse({ ok: true, code: _lcCode, goUrl: _lcBaseUrl + '/go/' + _lcCode });
+      } catch (e) {
+        return jsonResponse({ error: 'db_error', detail: String(e.message || e).slice(0, 200) }, 500);
       }
     }
 
@@ -8016,7 +8352,8 @@ export default {
         'BUSINESS DETAILS: ' + (_rdContext || '').slice(0, 800) + '\n' +
         'LANGUAGE: ' + _rdLang + '\n\n' +
         'RULES:\n' +
-        '- VOICE: Write as the sender\'s business. Use "We at ' + (_rdBizName || 'our business') + '…" or "This is ' + (_rdBizName || 'our business') + '…". ' +
+        '- VOICE: Introduce the business ONCE — either "Hi, this is ' + (_rdBizName || 'our business') + '…" or "We at ' + (_rdBizName || 'our business') + '…", never both in the same message. ' +
+        'Keep the business name exactly as written (accents, &, special characters). ' +
         'In Hindi/Hinglish use "hum" form. No gender slash (he/she, uska/uski). No "bol raha/rahi".\n' +
         '- Never mention Scout, G7, or "getting customers".\n' +
         '- For pricing: use ONLY prices from BUSINESS DETAILS above. If no price exists, ask what they need and offer to share a quote.\n' +
@@ -8829,12 +9166,14 @@ export default {
       const ep = emailPrefs(user);
       var _mePref = await getFirmSetting(env, session.firmCode, 'morningEmail');
       if (!_mePref) _mePref = { on: true, time: '08:00' };
+      var _wePref = await getFirmSetting(env, session.firmCode, 'weeklyEmail');
+      if (!_wePref) _wePref = { on: true };
       return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: !!user.recoveryEmail,
-        morningEmail: _mePref });
+        morningEmail: _mePref, weeklyEmail: _wePref });
     }
 
     // ─────────────────────────────────────────────────────────────
-    // POST /scout/brief-email — { actions?, news?, on?, email? }
+    // POST /scout/brief-email — { actions?, news?, on?, email?, weeklyEmail? }
     // email is accepted ONLY when the account has no recovery email yet.
     // Changing an existing one needs the current password and is not done here.
     // ─────────────────────────────────────────────────────────────
@@ -8866,11 +9205,18 @@ export default {
         var _meNew = { on: body.morningEmail.on !== false, time: body.morningEmail.time || '08:00' };
         await saveFirmSetting(env, session.firmCode, 'morningEmail', _meNew);
       }
+      /* Save weeklyEmail to D1 if provided */
+      if (body.weeklyEmail && typeof body.weeklyEmail === 'object') {
+        var _weNew = { on: body.weeklyEmail.on !== false };
+        await saveFirmSetting(env, session.firmCode, 'weeklyEmail', _weNew);
+      }
       const ep = emailPrefs(user);
       var _mePref2 = await getFirmSetting(env, session.firmCode, 'morningEmail');
       if (!_mePref2) _mePref2 = { on: true, time: '08:00' };
+      var _wePref2 = await getFirmSetting(env, session.firmCode, 'weeklyEmail');
+      if (!_wePref2) _wePref2 = { on: true };
       return jsonResponse({ actions: ep.actions, news: ep.news, on: ep.actions || ep.news, hasEmail: true,
-        morningEmail: _mePref2 });
+        morningEmail: _mePref2, weeklyEmail: _wePref2 });
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -9325,17 +9671,39 @@ export default {
       }
     }
 
+    // GET /scout/links — link tap stats for the firm (7d and 30d)
+    if (request.method === 'GET' && path === '/scout/links') {
+      var _lkSess = await validateSession(request, env);
+      if (!_lkSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ links: [] });
+      var _lk7d = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
+      var _lk30d = new Date(Date.now() + 5.5 * 3600000 - 30 * 86400000).toISOString().slice(0, 10);
+      try {
+        var _lkAll = await env.DB.prepare(
+          "SELECT tl.code, tl.kind, tl.url, " +
+          "(SELECT COUNT(DISTINCT lc.ip_day_hash) FROM link_clicks lc WHERE lc.link_code = tl.code AND lc.at >= ?) as taps_7d, " +
+          "(SELECT COUNT(DISTINCT lc.ip_day_hash) FROM link_clicks lc WHERE lc.link_code = tl.code AND lc.at >= ?) as taps_30d " +
+          "FROM tracked_links tl WHERE tl.firm_code = ? ORDER BY tl.created_at DESC"
+        ).bind(_lk7d + 'T00:00:00Z', _lk30d + 'T00:00:00Z', _lkSess.firmCode).all();
+        return jsonResponse({ links: (_lkAll && _lkAll.results) || [] }, 200);
+      } catch (e) {
+        return jsonResponse({ links: [], error: String(e.message || e).slice(0, 200) }, 200);
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────
-    // GET /email/unsubscribe?f={firmCode}&t={HMAC} — HMAC-signed, no session needed.
-    // Turns morningEmail off in D1 firm_settings. Shows confirmation page.
+    // GET /email/unsubscribe?f={firmCode}&t={HMAC}&type={morning|weekly}
+    // HMAC-signed, no session needed. Turns the relevant email pref off.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'GET' && path === '/email/unsubscribe') {
       var _ufirm = url.searchParams.get('f') || '';
       var _usig = url.searchParams.get('t') || '';
+      var _utype = url.searchParams.get('type') || 'morning';
       var _uSecret = env.UNSUBSCRIBE_SECRET || '';
       var _uValid = false;
       if (_ufirm && _usig) {
-        try { _uValid = await hmacVerify(_uSecret, 'unsub:morning:' + _ufirm, _usig); } catch(e) {}
+        var _uPayload = _utype === 'weekly' ? 'unsub:weekly:' + _ufirm : 'unsub:morning:' + _ufirm;
+        try { _uValid = await hmacVerify(_uSecret, _uPayload, _usig); } catch(e) {}
       }
       if (!_uValid) {
         return new Response(
@@ -9345,7 +9713,20 @@ export default {
           '<p>This unsubscribe link is not valid. Open Settings in Scout to manage your email preferences.</p></div>',
           { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
       }
-      /* Turn off morningEmail in D1 */
+      if (_utype === 'weekly') {
+        /* Turn off weeklyEmail in D1 */
+        var _uWCur = await getFirmSetting(env, _ufirm, 'weeklyEmail');
+        if (!_uWCur) _uWCur = { on: true };
+        _uWCur.on = false;
+        await saveFirmSetting(env, _ufirm, 'weeklyEmail', _uWCur);
+        return new Response(
+          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
+          '<div style="font-family:Arial,sans-serif;max-width:420px;margin:80px auto;padding:0 20px;color:#222;line-height:1.6">' +
+          '<h2 style="font-weight:400">You\u2019re unsubscribed.</h2>' +
+          '<p>Scout won\u2019t send the weekly recap email any more. You can switch it back on from Settings.</p></div>',
+          { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
+      /* Turn off morningEmail in D1 (default) */
       var _uCur = await getFirmSetting(env, _ufirm, 'morningEmail');
       if (!_uCur) _uCur = { on: true, time: '08:00' };
       _uCur.on = false;
@@ -9915,6 +10296,33 @@ export default {
       } while (meCursor);
     }
     report.morningEmail = _meReport;
+
+    /* ── Weekly proof email: Mondays only, in the morning email time slot ── */
+    var _weReport = [];
+    if (ist.getDay() === 1 && _meHour >= 6 && _meHour <= 11) {
+      var weCursor;
+      do {
+        var wePage = await env.G7_KV.list({ prefix: 'scout:leadprofile:', cursor: weCursor });
+        for (var _wk of wePage.keys) {
+          if (_wk.name.indexOf(':src:') !== -1) continue;
+          var _wFirm = _wk.name.slice('scout:leadprofile:'.length);
+          if (!_wFirm) continue;
+          try {
+            /* Use morning email time slot — send weekly email at the same time */
+            var _wePref = await getFirmSetting(env, _wFirm, 'morningEmail');
+            if (!_wePref) _wePref = { on: true, time: '08:00' };
+            if (_wePref.time !== _meSlot) { _weReport.push({ firm: _wFirm, status: 'not_this_slot' }); continue; }
+            var _weResult = await sendWeeklyEmail(env, _wFirm, {});
+            _weReport.push({ firm: _wFirm, status: _weResult.status, stats: _weResult.stats });
+          } catch (e) {
+            _weReport.push({ firm: _wFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
+            try { await recordError(env, { source: 'worker', route: 'cron/weekly-email', firmCode: _wFirm, kind: 'weekly_email', message: String(e.message || e) }); } catch(e2) {}
+          }
+        }
+        weCursor = wePage.list_complete ? undefined : wePage.cursor;
+      } while (weCursor);
+    }
+    report.weeklyEmail = _weReport;
 
     /* ── Expire old leads: stage=found older than 7 IST days → stage=expired ── */
     var _expireCutoff = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
