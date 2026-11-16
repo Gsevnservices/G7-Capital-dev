@@ -1959,7 +1959,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       var genResult = await runLeadsForFirm(env, firmCode, day, cost);
       _leadGenStatus = genResult.status || 'unknown';
       await flushCost(env, day, _costBucket, cost);
-      if (genResult.status === 'success' || genResult.status === 'already_generated') {
+      if (genResult.status === 'ok' || genResult.status === 'already_generated') {
         leadsData = await env.G7_KV.get(todayKey, 'json');
       }
     } catch (e) {
