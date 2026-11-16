@@ -596,10 +596,11 @@ async function verifyPassword(password, stored) {
   return { ok: diff === 0, needsUpgrade: false };
 }
 
-/* Sends an email through Resend. Returns true on success. Never throws —
-   a failed send must not change the response the caller sees. */
+/* Sends an email through Resend. Returns { ok, id } on success
+   (id is the Resend message id), or { ok: false } on failure.
+   Never throws — a failed send must not change the response the caller sees. */
 async function sendEmail(env, to, subject, text, html, headers) {
-  if (!env.RESEND_API_KEY) return false;
+  if (!env.RESEND_API_KEY) return { ok: false };
   try {
     const payload = {
       from: 'G7 Capital <no-reply@mail.gsevnservices.in>',
@@ -619,9 +620,12 @@ async function sendEmail(env, to, subject, text, html, headers) {
     });
     if (!r.ok) {
       try { await recordError(env, { source: 'worker', route: 'resend', kind: 'api_' + r.status, message: 'Resend returned ' + r.status + ' for ' + subject.slice(0, 60) }); } catch(e2) {}
+      return { ok: false };
     }
-    return r.ok;
-  } catch (e) { return false; }
+    var resBody = {};
+    try { resBody = await r.json(); } catch(e2) {}
+    return { ok: true, id: resBody.id || null };
+  } catch (e) { return { ok: false }; }
 }
 
 /* ── ANALYSIS FAILURE RECORDER ──
@@ -1281,9 +1285,13 @@ async function hmacVerify(secret, data, sig) {
 }
 
 /* Build a signed unsubscribe URL for morning leads email.
-   Uses UNSUBSCRIBE_SECRET (or ADMIN_PASSWORD as fallback). */
+   Requires UNSUBSCRIBE_SECRET. If not set, returns a settings-page link instead. */
 function morningUnsubUrl(env, firmCode) {
-  var secret = env.UNSUBSCRIBE_SECRET || env.ADMIN_PASSWORD || 'g7unsub';
+  var secret = env.UNSUBSCRIBE_SECRET || '';
+  if (!secret) {
+    var siteBase = (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '');
+    return Promise.resolve(siteBase + '/scout/settings.html');
+  }
   var baseUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev');
   /* Sign synchronously is not possible — caller must await this. */
   return hmacSign(secret, 'unsub:morning:' + firmCode).then(function(sig) {
@@ -1486,15 +1494,67 @@ function wDisplayName(p) {
   return { first: firstWord, full: full, kind: 'person' };
 }
 
-function wGreeting(p) {
-  var dn = wDisplayName(p);
-  if (dn.kind === 'business') return 'Namaste ' + dn.full + ' team';
-  return 'Namaste ' + dn.first + ' ji';
+/* ── Follow-up templates (mirrors FOLLOW_UP_TEMPLATES in pipeline.js) ── */
+var W_FU = {
+  greet_business: { English: 'Hi {full} team', Hinglish: 'Namaste {full} team', Hindi: '\u0928\u092E\u0938\u094D\u0924\u0947 {full} team' },
+  greet_person:   { English: 'Hi {first}',     Hinglish: 'Namaste {first} ji', Hindi: '\u0928\u092E\u0938\u094D\u0924\u0947 {first} \u091C\u0940' },
+  chase_3:   { English: '{greet} \u2014 following up on our last message. Would any day this week work for a quick chat?',
+               Hinglish: '{greet} \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?',
+               Hindi: '{greet} \u2014 \u092A\u093F\u091B\u0932\u0947 message \u0915\u093E follow-up\u0964 \u0915\u094B\u0908 \u0926\u093F\u0928 \u0938\u0942\u091F \u0915\u0930\u0924\u093E \u0939\u0948 \u092C\u093E\u0924 \u0915\u0930\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F?' },
+  chase_7:   { English: '{greet} \u2014 just following up one more time. Is there a day that works for a quick chat?',
+               Hinglish: '{greet} \u2014 hum ek baar aur pooch rahe hain. Aapke liye koi din suit karta hai baat karne ke liye?',
+               Hindi: '{greet} \u2014 \u0939\u092E \u090F\u0915 \u092C\u093E\u0930 \u0914\u0930 \u092A\u0942\u091B \u0930\u0939\u0947 \u0939\u0948\u0902\u0964 \u0915\u094B\u0908 \u0926\u093F\u0928 \u0938\u0942\u091F \u0915\u0930\u0924\u093E \u0939\u0948 \u092C\u093E\u0924 \u0915\u0930\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F?' },
+  chase_14:  { English: '{greet} \u2014 this is our last follow-up. If you ever need anything, we are here.',
+               Hinglish: '{greet} \u2014 hum last time follow up kar rahe hain. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.',
+               Hindi: '{greet} \u2014 \u0939\u092E \u0906\u0916\u093F\u0930\u0940 \u092C\u093E\u0930 follow up \u0915\u0930 \u0930\u0939\u0947 \u0939\u0948\u0902\u0964 \u0915\u092D\u0940 \u091C\u093C\u0930\u0942\u0930\u0924 \u0939\u094B \u0924\u094B \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964' },
+  replied_stale: { English: '{greet} \u2014 you had shown interest. Shall we block a slot this week? Just let us know the day.',
+                   Hinglish: '{greet} \u2014 aapne interest dikhaya tha. Is week ek slot rakh dein? Bas din bata dijiye.',
+                   Hindi: '{greet} \u2014 \u0906\u092A\u0928\u0947 \u0930\u0941\u091A\u093F \u0926\u093F\u0916\u093E\u0908 \u0925\u0940\u0964 \u0907\u0938 \u0939\u092B\u093C\u094D\u0924\u0947 \u090F\u0915 slot \u0930\u0916 \u0926\u0947\u0902? \u092C\u0938 \u0926\u093F\u0928 \u092C\u0924\u093E \u0926\u0940\u091C\u093F\u090F\u0964' },
+  quote_3:   { English: 'Hi {name}, just checking \u2014 did you get a chance to look at the quote? Happy to explain anything.',
+               Hinglish: 'Namaste {name} ji, quote dekh liya? Koi sawaal ho toh bataiye, hum samjha denge.',
+               Hindi: '\u0928\u092E\u0938\u094D\u0924\u0947 {name} \u091C\u0940, \u0915\u094D\u092F\u093E \u0906\u092A\u0928\u0947 quote \u0926\u0947\u0916 \u0932\u093F\u092F\u093E? \u0915\u094B\u0908 \u0938\u0935\u093E\u0932 \u0939\u094B \u0924\u094B \u092C\u0924\u093E\u0907\u090F, \u0939\u092E \u0938\u092E\u091D\u093E \u0926\u0947\u0902\u0917\u0947\u0964' },
+  quote_7:   { English: 'Hi {name}, following up on last week\'s quote. Would you like any changes?',
+               Hinglish: 'Namaste {name} ji, pichle hafte ka quote \u2014 kuch badalna ho toh bataiye.',
+               Hindi: '\u0928\u092E\u0938\u094D\u0924\u0947 {name} \u091C\u0940, \u092A\u093F\u091B\u0932\u0947 \u0939\u092B\u093C\u094D\u0924\u0947 \u0915\u0947 quote \u0915\u0947 \u092C\u093E\u0930\u0947 \u092E\u0947\u0902 \u2014 \u0915\u0941\u091B \u092C\u0926\u0932\u0928\u093E \u0939\u094B \u0924\u094B \u092C\u0924\u093E\u0907\u090F\u0964' },
+  quote_15:  { English: 'Hi {name}, it\'s been a couple of weeks since our quote. Still interested? No rush at all.',
+               Hinglish: 'Namaste {name} ji, quote bheje kuch din ho gaye. Abhi bhi interest ho toh bataiye, koi jaldi nahi.',
+               Hindi: '\u0928\u092E\u0938\u094D\u0924\u0947 {name} \u091C\u0940, quote \u092D\u0947\u091C\u0947 \u0915\u0941\u091B \u0926\u093F\u0928 \u0939\u094B \u0917\u090F\u0964 \u0905\u092D\u0940 \u092D\u0940 \u0930\u0941\u091A\u093F \u0939\u094B \u0924\u094B \u092C\u0924\u093E\u0907\u090F, \u0915\u094B\u0908 \u091C\u0932\u094D\u0926\u0940 \u0928\u0939\u0940\u0902\u0964' },
+  trial_check: { English: '{greet} \u2014 how did it go? Let us know if there is anything we can help with.',
+                 Hinglish: '{greet} \u2014 kaisa raha? Koi baat ho toh bata dena.',
+                 Hindi: '{greet} \u2014 \u0915\u0948\u0938\u093E \u0930\u0939\u093E? \u0915\u094B\u0908 \u092C\u093E\u0924 \u0939\u094B \u0924\u094B \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964' },
+  gone_quiet: { English: '{greet} \u2014 it has been a while. Whenever you are ready, we are here.',
+                Hinglish: '{greet} \u2014 kaafi time ho gaya. Jab ready ho, bata dena.',
+                Hindi: '{greet} \u2014 \u0915\u093E\u092B\u093C\u0940 \u0938\u092E\u092F \u0939\u094B \u0917\u092F\u093E\u0964 \u091C\u092C \u0924\u0948\u092F\u093E\u0930 \u0939\u094B\u0902, \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964' },
+  found:     { English: '{greet} \u2014 ' + "I'm from {business}. Could we have a quick 2-minute chat?",
+               Hinglish: '{greet} \u2014 {business_intro}Aapke liye ek baat thi, 2 min baat kar sakte hain?',
+               Hindi: '{greet} \u2014 {business_intro}\u0906\u092A\u0915\u0947 \u0932\u093F\u090F \u090F\u0915 \u092C\u093E\u0924 \u0925\u0940, 2 \u092E\u093F\u0928\u091F \u092C\u093E\u0924 \u0915\u0930 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?' }
+};
+function wFuMsg(key, lang, vars) {
+  var tpl = W_FU[key];
+  if (!tpl) return '';
+  var msg = tpl[lang] || tpl.Hinglish || '';
+  if (vars) {
+    if (vars.greet) msg = msg.replace(/\{greet\}/g, vars.greet);
+    if (vars.name) msg = msg.replace(/\{name\}/g, vars.name);
+    if (vars.first) msg = msg.replace(/\{first\}/g, vars.first);
+    if (vars.full) msg = msg.replace(/\{full\}/g, vars.full);
+    if (vars.business) msg = msg.replace(/\{business\}/g, vars.business);
+    msg = msg.replace(/\{business_intro\}/g, vars.business ? (lang === 'English' ? "I'm from " + vars.business + '. ' : 'hum ' + vars.business + ' se hain. ') : '');
+  }
+  return msg;
 }
 
-function pipelineDueFromStore(store, now, bizName, bucket, reviewSkip) {
+function wGreeting(p, lang) {
+  var dn = wDisplayName(p);
+  var l = lang || 'Hinglish';
+  if (dn.kind === 'business') return wFuMsg('greet_business', l, { full: dn.full });
+  return wFuMsg('greet_person', l, { first: dn.first });
+}
+
+function pipelineDueFromStore(store, now, bizName, bucket, reviewSkip, lang) {
   if (!store || !Array.isArray(store.people)) return [];
   var bk = bucket || 'retail';
+  var L = lang || 'Hinglish';
   var out = [];
   store.people.forEach(function(p) {
     /* Review ask: joined, not yet asked. Shows day 0–7, then stops.
@@ -1528,42 +1588,43 @@ function pipelineDueFromStore(store, now, bizName, bucket, reviewSkip) {
     /* If we have no real date (999), skip chase entirely — can't pick a template */
     if (d >= 999) return;
     var dn = wDisplayName(p);
-    var greet = wGreeting(p);
+    var greet = wGreeting(p, L);
+    var vars = { greet: greet, name: dn.full, first: dn.first, full: dn.full, business: bizName };
     var item = null;
 
     if (p.status === 'contacted' && d >= 14) {
       item = { reason: 'No response in ' + d + ' days', urgency: 3,
-               msg: greet + ' \u2014 last try from my side. Agar kabhi zaroorat ho toh bata dena. Hum yahaan hain.' };
+               msg: wFuMsg('chase_14', L, vars) };
     } else if (p.status === 'contacted' && d >= 7) {
       item = { reason: 'No reply for ' + d + ' days \u2014 final follow-up', urgency: 2,
-               msg: greet + ' \u2014 ek baar aur pooch raha hoon. Aapke liye koi din suit karta hai baat karne ke liye?' };
+               msg: wFuMsg('chase_7', L, vars) };
     } else if (p.status === 'contacted' && d >= 3) {
       item = { reason: 'No reply for ' + d + ' days', urgency: 1,
-               msg: greet + ' \u2014 pichle message ka follow-up. Koi din suit karta hai baat karne ke liye?' };
+               msg: wFuMsg('chase_3', L, vars) };
     } else if (p.status === 'replied' && d >= 5) {
       item = { reason: 'Replied ' + d + ' days ago but has not booked', urgency: 3,
-               msg: greet + ' \u2014 aapne interest dikhaya tha. Is week ek slot rakh doon? Bas din bata dijiye.' };
+               msg: wFuMsg('replied_stale', L, vars) };
     } else if (p.status === 'trial_booked' && bk === 'trade') {
       /* Trade: quote follow-ups at 3, 7, 15 days */
       if (d >= 15) {
         item = { reason: 'Quote sent ' + d + ' days ago', urgency: 2,
-                 msg: greet + ', quote bheje kuch din ho gaye. Abhi bhi interest ho toh bataiye, koi jaldi nahi.' };
+                 msg: wFuMsg('quote_15', L, vars) };
       } else if (d >= 7) {
         item = { reason: 'Quote sent ' + d + ' days ago', urgency: 2,
-                 msg: greet + ', pichle hafte ka quote \u2014 kuch badalna ho toh bataiye.' };
+                 msg: wFuMsg('quote_7', L, vars) };
       } else if (d >= 3) {
         item = { reason: 'Quote sent ' + d + ' days ago', urgency: 1,
-                 msg: greet + ', quote dekh liya? Koi sawaal ho toh bataiye, hum samjha denge.' };
+                 msg: wFuMsg('quote_3', L, vars) };
       }
     } else if (p.status === 'trial_booked' && d >= 1) {
       item = { reason: wStageLabel('trial_booked', bk) + ' was ' + d + ' day(s) ago \u2014 did they show?', urgency: 3,
-               msg: greet + ' \u2014 kaisa raha? Koi baat ho toh bata dena.' };
+               msg: wFuMsg('trial_check', L, vars) };
     } else if (p.status === 'gone_quiet' && d >= 14) {
       item = { reason: 'Quiet for ' + d + ' days', urgency: 1,
-               msg: greet + ' \u2014 kaafi time ho gaya. Jab ready ho, bata dena.' };
+               msg: wFuMsg('gone_quiet', L, vars) };
     } else if (p.status === 'found' && d >= 1) {
       item = { reason: 'Found ' + d + ' day(s) ago \u2014 never messaged', urgency: 2,
-               msg: greet + ' \u2014 ' + (bizName ? 'main ' + bizName + ' se hoon. ' : '') + 'Aapke liye ek baat thi, 2 min baat kar sakte hain?' };
+               msg: wFuMsg('found', L, vars) };
     }
 
     if (item) {
@@ -1608,7 +1669,7 @@ function emailSafeUrl(u) { return /^https:\/\//i.test(u || '') ? u : ''; }
 function tapWord(n) { return n === 1 ? '1 tap' : n + ' taps'; }
 
 function emailShell(opts) {
-  var appUrl = 'https://gsevnservices.in/login.html?product=scout';
+  var appUrl = (opts.siteUrl || 'https://gsevnservices.in') + '/login.html?product=scout';
   var html =
     '<div style="background:#f6f4ef;padding:24px 12px">' +
     '<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;background:#fff;font-family:Arial,sans-serif" cellpadding="0" cellspacing="0">' +
@@ -1733,7 +1794,8 @@ async function sendActionsEmail(env, firmCode, day, move) {
   var _bucket = (st ? st.pick('scout_bucket') : null) || 'retail';
   var _rsRaw = st ? st.pick('scout_review_skip') : null;
   var _reviewSkip = _rsRaw === true || _rsRaw === 'true';
-  var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip);
+  var _actLang = (st ? st.pick('scout_message_lang') : null) || 'Hinglish';
+  var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip, _actLang);
   if (due.length > 0) {
     htmlParts.push(emailHeading('Follow up today'));
     var show = due.slice(0, 5);
@@ -1841,6 +1903,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
   }
 
   var shell = emailShell({
+    siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout',
     greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
               '<div style="font-size:13px;color:#888;margin-top:4px">Week ' + weekNum + ' of 12.</div>',
@@ -1851,12 +1914,12 @@ async function sendActionsEmail(env, firmCode, day, move) {
     unsubUrl: unsubUrl
   });
 
-  var ok = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
+  var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   });
-  if (ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
-  return ok ? 'sent' : 'send_failed';
+  if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
+  return _sendRes.ok ? 'sent' : 'send_failed';
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1883,13 +1946,13 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   /* ── Load today's leads (generate if missing, within cap) ── */
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
   var leadsData = await env.G7_KV.get(todayKey, 'json');
-  if (!leadsData && !dryRun) {
-    /* Try generating leads */
+  if (!leadsData) {
+    /* Generate leads first — both admin dry-run and cron need them */
     var cost = newCostAccum();
     try {
       var genResult = await runLeadsForFirm(env, firmCode, day, cost);
       await flushCost(env, day, firmCode, cost);
-      if (genResult.status === 'success') {
+      if (genResult.status === 'success' || genResult.status === 'already_generated') {
         leadsData = await env.G7_KV.get(todayKey, 'json');
       }
     } catch (e) {
@@ -1907,26 +1970,28 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var _bucket = (st ? st.pick('scout_bucket') : null) || 'retail';
   var _rsRaw = st ? st.pick('scout_review_skip') : null;
   var _reviewSkip = _rsRaw === true || _rsRaw === 'true';
-  var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip);
 
-  /* ── Nothing to send? ── */
-  if (leads.length === 0 && due.length === 0) return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0 };
-
-  /* ── Resolve message language ── */
+  /* Resolve message language before building follow-ups */
   var msgLang = 'Hinglish';
   try {
     var mlVal = st ? st.pick('scout_message_lang') : null;
     if (mlVal) msgLang = mlVal;
   } catch (e) {}
 
+  var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip, msgLang);
+
+  /* ── Nothing to send? ── */
+  if (leads.length === 0 && due.length === 0) return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0 };
+
   /* ── Build unsubscribe URL ── */
   var unsubUrl = await morningUnsubUrl(env, firmCode);
 
   /* ── Build today URL ── */
-  var todayUrl = 'https://gsevnservices.in/scout/today.html';
+  var _siteBase = (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '');
+  var todayUrl = _siteBase + '/scout/today.html';
 
   /* ── Build customers URL ── */
-  var customersUrl = 'https://gsevnservices.in/scout/customers.html';
+  var customersUrl = _siteBase + '/scout/pipeline.html';
 
   /* ── Subject (plain text header, no HTML escaping; strip newlines to prevent header injection) ── */
   var subject = '';
@@ -2014,6 +2079,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   /* ── Assemble shell ── */
   var name = displayName(user, firmCode);
   var shell = emailShell({
+    siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout',
     greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>',
     textGreeting: 'Good morning, ' + name + '.\n\n',
@@ -2029,13 +2095,14 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   }
 
   /* ── Send ── */
-  var ok = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
+  var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   });
-  if (ok) await kvPut(env, sentKey, '1', { expirationTtl: 172800 });
-  return { status: ok ? 'sent' : 'send_failed', subject: subject,
-           leadCount: leads.length, followUpCount: due.length };
+  if (_sendRes.ok) await kvPut(env, sentKey, '1', { expirationTtl: 172800 });
+  return { status: _sendRes.ok ? 'sent' : 'send_failed', subject: subject,
+           leadCount: leads.length, followUpCount: due.length,
+           resendId: _sendRes.id || null };
 }
 
 /* Shared news email renderer — single data path for both the real morning
@@ -2176,6 +2243,7 @@ async function sendNewsEmail(env, firmCode, day) {
   var subject = subjectTail ? 'Your news today \u00b7 ' + subjectTail : 'Your news today';
 
   var shell = emailShell({
+    siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout \u00b7 Your news today',
     greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>',
     textGreeting: 'Good morning, ' + name + '.\n\n',
@@ -2185,12 +2253,12 @@ async function sendNewsEmail(env, firmCode, day) {
     unsubUrl: unsubUrl
   });
 
-  var ok = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
+  var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
     'List-Unsubscribe': '<' + unsubUrl + '>',
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   });
-  if (ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
-  return ok ? 'sent' : 'send_failed';
+  if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
+  return _sendRes.ok ? 'sent' : 'send_failed';
 }
 
 /* Admin test email: renders today's cached news via assembleNews and sends
@@ -2216,6 +2284,7 @@ async function sendTestNewsEmail(env, firmCode) {
   var body = renderNewsBody(news);
   var name = newsGreetingName(user, saved && saved.context, firmCode);
   var shell = emailShell({
+    siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout \u00b7 TEST NEWS EMAIL',
     greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
               '<div style="font-size:11px;color:#B8862B;margin-top:4px">[TEST — sent to admin only]</div>',
@@ -2226,10 +2295,10 @@ async function sendTestNewsEmail(env, firmCode) {
     unsubUrl: '#'
   });
   var subject = '[TEST] ' + firmCode + ' news email';
-  var ok = await sendEmail(env, env.ADMIN_EMAIL, subject, shell.text, shell.html);
+  var _sendRes = await sendEmail(env, env.ADMIN_EMAIL, subject, shell.text, shell.html);
   var indCount = (news.sections || []).reduce(function(n,s){ return n + (s.category === 'industry' ? (s.items||[]).length : 0); }, 0);
   var alsoCount = (news.sections || []).reduce(function(n,s){ return n + (s.category !== 'industry' ? (s.items||[]).length : 0); }, 0);
-  return ok ? { sent: true, to: env.ADMIN_EMAIL, items: indCount + '+' + alsoCount } : { error: 'send_failed' };
+  return _sendRes.ok ? { sent: true, to: env.ADMIN_EMAIL, items: indCount + '+' + alsoCount, resendId: _sendRes.id || null } : { error: 'send_failed' };
 }
 
 /* The whole morning job for one firm: news → move → actions email → news email. */
@@ -5546,7 +5615,8 @@ async function generateScoutMove(env, firmCode, day, context, news, st, force, c
   const _bkt = (st ? st.pick('scout_bucket') : null) || 'retail';
   const _rsRaw2 = st ? st.pick('scout_review_skip') : null;
   const _rskip = _rsRaw2 === true || _rsRaw2 === 'true';
-  const due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bkt, _rskip).slice(0, 5)
+  const _dueLang = (st ? st.pick('scout_message_lang') : null) || 'Hinglish';
+  const due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bkt, _rskip, _dueLang).slice(0, 5)
     .map(function(d){ return { name: (d.person && d.person.name) || '', status: d.person && d.person.status, reason: d.reason }; });
 
   /* Today's plan step and the customer group names. */
@@ -9254,7 +9324,7 @@ export default {
     if (request.method === 'GET' && path === '/email/unsubscribe') {
       var _ufirm = url.searchParams.get('f') || '';
       var _usig = url.searchParams.get('t') || '';
-      var _uSecret = env.UNSUBSCRIBE_SECRET || env.ADMIN_PASSWORD || 'g7unsub';
+      var _uSecret = env.UNSUBSCRIBE_SECRET || '';
       var _uValid = false;
       if (_ufirm && _usig) {
         try { _uValid = await hmacVerify(_uSecret, 'unsub:morning:' + _ufirm, _usig); } catch(e) {}
