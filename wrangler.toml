@@ -35,6 +35,7 @@ id = "df5fd3fe75ef4e619c861237df4fc83b"
 
 [vars]
 WORKER_URL = "https://g7-proxy.gsevnservices.workers.dev"
+SITE_URL = "https://gsevnservices.in"
 
 # Cron: every 30 min — the worker itself decides whether it's 6 AM IST
 [triggers]
@@ -67,6 +68,7 @@ id = "25f358b17843460c9429d88dcaca569f"
 
 [env.dev.vars]
 WORKER_URL = "https://g7-proxy-dev.gsevnservices.workers.dev"
+SITE_URL = "https://gsevnservices.github.io/G7-Capital"
 ENVIRONMENT = "dev"
 
 # Dev D1 — customers table (prod stays on KV blob until tested)
