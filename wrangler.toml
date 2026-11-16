@@ -68,7 +68,7 @@ id = "25f358b17843460c9429d88dcaca569f"
 
 [env.dev.vars]
 WORKER_URL = "https://g7-proxy-dev.gsevnservices.workers.dev"
-SITE_URL = "https://gsevnservices.github.io/G7-Capital"
+SITE_URL = "https://gsevnservices.github.io/G7-Capital-dev"
 ENVIRONMENT = "dev"
 
 # Dev D1 — customers table (prod stays on KV blob until tested)
