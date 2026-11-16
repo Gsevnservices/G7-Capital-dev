@@ -96,7 +96,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 .email-toggle.off{color:var(--grey2)}
 .email-time-row{display:flex;align-items:center;gap:12px;padding:14px 0}
 .email-time-label{font-size:13px;color:var(--grey1)}
-.email-time-input{padding:8px 12px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-family:'Tenor Sans',sans-serif;font-size:13px;min-height:44px}
+.email-time-input{padding:8px 12px;background:var(--black2);border:1px solid var(--border2);color:var(--white);font-family:'Tenor Sans',sans-serif;font-size:13px;min-height:44px;border-radius:6px}
 .email-time-input:focus{border-color:var(--gold);outline:none}
 .email-current{font-size:12px;color:var(--grey1);margin-top:12px;line-height:1.6}
 .email-edit-row{display:flex;gap:8px;margin-top:8px}
@@ -210,13 +210,19 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
     <div class="email-time-row" id="emailTimeRow">
       <span class="email-time-label">Send at</span>
-      <input type="time" class="email-time-input" id="emailTime" value="08:00">
+      <select class="email-time-input" id="emailTime">
+        <option value="06:00">6:00 AM</option><option value="06:30">6:30 AM</option>
+        <option value="07:00">7:00 AM</option><option value="07:30">7:30 AM</option>
+        <option value="08:00" selected>8:00 AM</option><option value="08:30">8:30 AM</option>
+        <option value="09:00">9:00 AM</option><option value="09:30">9:30 AM</option>
+        <option value="10:00">10:00 AM</option><option value="10:30">10:30 AM</option>
+        <option value="11:00">11:00 AM</option>
+      </select>
       <span style="font-size:11px;color:var(--grey2)">IST</span>
     </div>
     <div class="email-current" id="emailCurrent"></div>
     <div id="emailEditArea"></div>
     <div class="s-err" id="emailErr"></div>
-    <p style="font-size:11px;color:var(--grey2);margin-top:16px;line-height:1.6">Email delivery ships in the next update. Your preference will be saved now.</p>
     <div class="step-btns">
       <button class="btn-back" onclick="goBack()">Back</button>
       <button class="btn-skip" onclick="skipStep()">Skip</button>
@@ -264,6 +270,7 @@ var _currentStep = 0;
 var _selectedLang = 'Hinglish';
 var _selectedPlaceId = null;
 var _emailOn = true;
+var _morningEmailTime = '08:00';
 
 /* ── Helpers ── */
 function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -290,6 +297,10 @@ window.addEventListener('DOMContentLoaded', async function() {
     _selectedLang = (results[2] && results[2].language) ? results[2].language : 'Hinglish';
     var emailData = results[3] || {};
     _emailOn = emailData.actions !== false;
+    if (emailData.morningEmail) {
+      _emailOn = emailData.morningEmail.on !== false;
+      _morningEmailTime = emailData.morningEmail.time || '08:00';
+    }
 
     _isB2C = _setupData.isB2C !== false;
     _stepNames = _setupData.stepNames || ['groups','google','language','email'];
@@ -650,6 +661,8 @@ async function renderEmailStep() {
   emailToggle.textContent = _emailOn ? 'On' : 'Off';
   emailToggle.className = 'email-toggle ' + (_emailOn ? 'on' : 'off');
   document.getElementById('emailTimeRow').style.display = _emailOn ? '' : 'none';
+  /* Set time from server if available */
+  if (_morningEmailTime) document.getElementById('emailTime').value = _morningEmailTime;
 
   /* Show recovery email */
   var curEl = document.getElementById('emailCurrent');
@@ -707,10 +720,11 @@ async function saveNewEmail() {
 }
 
 async function saveEmail() {
+  var timeVal = document.getElementById('emailTime').value || '08:00';
   try {
     await fetch(SCOUT_WORKER + '/scout/brief-email', {
       method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
-      body: JSON.stringify({ actions: _emailOn })
+      body: JSON.stringify({ actions: _emailOn, morningEmail: { on: _emailOn, time: timeVal } })
     });
     await fetch(SCOUT_WORKER + '/scout/setup/step', {
       method: 'POST', headers: Object.assign({'Content-Type':'application/json'}, _auth),
