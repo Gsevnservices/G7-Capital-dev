@@ -107,7 +107,21 @@ window.addEventListener('DOMContentLoaded', async function() {
     var placeId = profile.ownPlaceId;
     var bizName = profile.ownName || profile.businessName || 'Our Business';
     var lang = profile.lang || 'en';
-    var reviewUrl = 'https://search.google.com/local/writereview?placeid=' + placeId;
+    var directReviewUrl = 'https://search.google.com/local/writereview?placeid=' + placeId;
+
+    /* Get or create tracked link for the review QR */
+    var reviewUrl = directReviewUrl;
+    try {
+      var tlr = await fetch(G7_WORKER_URL + '/scout/tracked-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ kind: 'review_qr', url: directReviewUrl })
+      });
+      if (tlr.ok) {
+        var tld = await tlr.json();
+        if (tld.goUrl) reviewUrl = tld.goUrl;
+      }
+    } catch (e) {}
 
     /* ── Determine ask text by language ── */
     var askTexts = {
