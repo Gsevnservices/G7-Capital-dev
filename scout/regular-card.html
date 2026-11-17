@@ -96,9 +96,10 @@ window.addEventListener('DOMContentLoaded', async function() {
       return;
     }
 
-    /* Build the public join URL — use current directory as base to handle GitHub Pages subpath */
-    var pathPrefix = location.pathname.replace(/\/[^/]*$/, ''); /* e.g. /G7-Capital/scout or /scout */
-    var baseUrl = location.origin + pathPrefix + '/r.html?f=' + encodeURIComponent(config.code);
+    /* Build the public join URL — prefer tracked /go/ link, fall back to direct URL */
+    var pathPrefix = location.pathname.replace(/\/[^/]*$/, '');
+    var directUrl = location.origin + pathPrefix + '/r.html?f=' + encodeURIComponent(config.code);
+    var baseUrl = d.goUrl || directUrl;
     var bizName = config.businessName || '';
 
     /* If no businessName in config, try to get from profile */

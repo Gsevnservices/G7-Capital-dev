@@ -797,6 +797,31 @@ async function saveFirmSetting(env, firmCode, key, value) {
   ).bind(firmCode, key, json).run();
 }
 
+/* Get or create a tracked /go/ link for a specific lead.
+   Returns the full go-URL string, or '' if DB unavailable. */
+async function getOrCreateLeadLink(env, firmCode, leadId, destUrl) {
+  if (!env.DB || !destUrl) return '';
+  /* Check for existing link */
+  try {
+    var existing = await env.DB.prepare(
+      "SELECT code FROM tracked_links WHERE firm_code = ? AND lead_id = ? AND kind = 'lead_link'"
+    ).bind(firmCode, leadId).first();
+    if (existing) {
+      var base = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
+      return base + '/go/' + existing.code + '?l=' + encodeURIComponent(leadId);
+    }
+  } catch (e) {}
+  /* Create new tracked link */
+  var code = Array.from(crypto.getRandomValues(new Uint8Array(8))).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  try {
+    await env.DB.prepare(
+      "INSERT INTO tracked_links (firm_code, code, kind, url, lead_id) VALUES (?, ?, 'lead_link', ?, ?)"
+    ).bind(firmCode, code, destUrl, leadId).run();
+  } catch (e) { return ''; }
+  var base = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
+  return base + '/go/' + code + '?l=' + encodeURIComponent(leadId);
+}
+
 /* Read setup state from D1 (one row per step + meta row).
    Falls back to KV scout:setup:{firmCode} on first read and migrates. */
 async function getSetupState(env, firmCode) {
@@ -1440,6 +1465,15 @@ async function loadCustomersForFirm(env, firmCode) {
           // lastStatusAt and lastContactedAt live in data JSON — do NOT overwrite from columns
           return obj;
         });
+        /* Enrich with link_opened events */
+        try {
+          var _lcEvRows = await env.DB.prepare(
+            "SELECT customer_id, MAX(at) as opened_at FROM customer_events WHERE firm_code = ? AND type = 'link_opened' GROUP BY customer_id"
+          ).bind(firmCode).all();
+          var _lcEvMap = {};
+          (_lcEvRows.results || []).forEach(function(e) { _lcEvMap[e.customer_id] = e.opened_at; });
+          people.forEach(function(p) { if (_lcEvMap[p.id]) p.openedLinkAt = _lcEvMap[p.id]; });
+        } catch (e) {}
         return { people: people, anonymousContacts: [] };
       }
     } catch (e) { /* fall through to KV blob */ }
@@ -1529,7 +1563,10 @@ var W_FU = {
                 Hindi: '{greet} \u2014 \u0915\u093E\u092B\u093C\u0940 \u0938\u092E\u092F \u0939\u094B \u0917\u092F\u093E\u0964 \u091C\u092C \u0924\u0948\u092F\u093E\u0930 \u0939\u094B\u0902, \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964' },
   found:     { English: '{greet} \u2014 ' + "I'm from {business}. Could we have a quick 2-minute chat?",
                Hinglish: '{greet} \u2014 {business_intro}Aapke liye ek baat thi, 2 min baat kar sakte hain?',
-               Hindi: '{greet} \u2014 {business_intro}\u0906\u092A\u0915\u0947 \u0932\u093F\u090F \u090F\u0915 \u092C\u093E\u0924 \u0925\u0940, 2 \u092E\u093F\u0928\u091F \u092C\u093E\u0924 \u0915\u0930 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?' }
+               Hindi: '{greet} \u2014 {business_intro}\u0906\u092A\u0915\u0947 \u0932\u093F\u090F \u090F\u0915 \u092C\u093E\u0924 \u0925\u0940, 2 \u092E\u093F\u0928\u091F \u092C\u093E\u0924 \u0915\u0930 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?' },
+  link_opened: { English: '{greet} \u2014 saw you checked out our page! Would love to chat for 2 minutes if you have any questions.',
+                 Hinglish: '{greet} \u2014 dekha aapne humara page check kiya! Koi sawaal ho toh 2 min baat kar sakte hain.',
+                 Hindi: '{greet} \u2014 \u0926\u0947\u0916\u093E \u0906\u092A\u0928\u0947 \u0939\u092E\u093E\u0930\u093E page \u091A\u0947\u0915 \u0915\u093F\u092F\u093E! \u0915\u094B\u0908 \u0938\u0935\u093E\u0932 \u0939\u094B \u0924\u094B 2 \u092E\u093F\u0928\u091F \u092C\u093E\u0924 \u0915\u0930 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902\u0964' }
 };
 function wFuMsg(key, lang, vars) {
   var tpl = W_FU[key];
@@ -1627,6 +1664,20 @@ function pipelineDueFromStore(store, now, bizName, bucket, reviewSkip, lang) {
     } else if (p.status === 'found' && d >= 1) {
       item = { reason: 'Found ' + d + ' day(s) ago \u2014 never messaged', urgency: 2,
                msg: wFuMsg('found', L, vars) };
+    }
+
+    /* Link opened boost: if lead opened the tracked link, bump urgency and use link_opened template */
+    if (p.openedLinkAt) {
+      var _loD = daysSince(p.openedLinkAt, now);
+      if (_loD <= 3) {
+        if (!item) {
+          item = { reason: 'Opened your link', urgency: 4,
+                   msg: wFuMsg('link_opened', L, vars) };
+        } else {
+          item.urgency = Math.max(item.urgency, 4);
+          item.reason = 'Opened your link \u00B7 ' + item.reason;
+        }
+      }
     }
 
     if (item) {
@@ -2687,6 +2738,28 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
       address: lead.address || '', website: lead.website || '',
       channels: lead.channels || ['whatsapp'], messages: lead.messages || {}
     });
+  }
+
+  /* Append tracked links if myLink is on */
+  var _nlMyLink = await getFirmSetting(env, firmCode, 'myLink');
+  if (_nlMyLink && _nlMyLink.on && _nlMyLink.url && env.DB) {
+    for (var nli = 0; nli < newLeads.length; nli++) {
+      var nl = newLeads[nli];
+      if (nl.messages && nl.messages.first && nl.id) {
+        var _nlGoUrl = await getOrCreateLeadLink(env, firmCode, nl.id, _nlMyLink.url);
+        if (_nlGoUrl) {
+          nl.messages.first = nl.messages.first + '\n\n' + _nlGoUrl;
+          try {
+            var _nlRow = await env.DB.prepare("SELECT data FROM customers WHERE firm_code = ? AND id = ?").bind(firmCode, nl.id).first();
+            if (_nlRow && _nlRow.data) {
+              var _nlParsed = JSON.parse(_nlRow.data);
+              if (_nlParsed.messages) { _nlParsed.messages.first = nl.messages.first; }
+              await env.DB.prepare("UPDATE customers SET data = ?, updated_at = datetime('now') WHERE firm_code = ? AND id = ?").bind(JSON.stringify(_nlParsed), firmCode, nl.id).run();
+            }
+          } catch (e) {}
+        }
+      }
+    }
   }
 
   /* Merge into today's KV cache */
@@ -4346,6 +4419,7 @@ async function regenFoundMessages(env, firmCode, lang, ctx, opts) {
     return { name: r.name, _groupName: d.group || '', _groupOffer: d.offer || '', fitReason: (d.fit_reason || '').replace(/^[a-z_]+:\s*/i, ''), _rowId: r.id, _data: d };
   });
 
+  var _rfMyLink = await getFirmSetting(env, firmCode, 'myLink');
   for (var bi = 0; bi < allLeads.length; bi += 5) {
     var batch = allLeads.slice(bi, bi + 5);
     var withMsgs = await generateLeadMessages(env, batch, profile, context, lang, totalCost, city);
@@ -4353,6 +4427,11 @@ async function regenFoundMessages(env, firmCode, lang, ctx, opts) {
     for (var mi = 0; mi < withMsgs.length; mi++) {
       var lead = withMsgs[mi];
       if (lead.messages && lead._data) {
+        /* Append tracked link if myLink is on */
+        if (_rfMyLink && _rfMyLink.on && _rfMyLink.url && lead._rowId && lead.messages.first) {
+          var _rfGoUrl = await getOrCreateLeadLink(env, firmCode, lead._rowId, _rfMyLink.url);
+          if (_rfGoUrl) lead.messages.first = lead.messages.first + '\n\n' + _rfGoUrl;
+        }
         lead._data.messages = lead.messages;
         await env.DB.prepare(
           "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
@@ -4414,10 +4493,15 @@ async function regenBatch5(env, firmCode, lang, nonceKey, myNonce) {
   });
 
   var withMsgs = await generateLeadMessages(env, allLeads, profile, context, lang, totalCost, city);
+  var _rb5MyLink = await getFirmSetting(env, firmCode, 'myLink');
   var updated = 0;
   for (var mi = 0; mi < withMsgs.length; mi++) {
     var lead = withMsgs[mi];
     if (lead.messages && lead._data) {
+      if (_rb5MyLink && _rb5MyLink.on && _rb5MyLink.url && lead._rowId && lead.messages.first) {
+        var _rb5GoUrl = await getOrCreateLeadLink(env, firmCode, lead._rowId, _rb5MyLink.url);
+        if (_rb5GoUrl) lead.messages.first = lead.messages.first + '\n\n' + _rb5GoUrl;
+      }
       lead._data.messages = lead.messages;
       await env.DB.prepare(
         "UPDATE customers SET data = ?, updated_at = datetime('now'), synced_at = datetime('now') WHERE firm_code = ? AND id = ?"
@@ -5063,6 +5147,29 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
         });
       } catch (e) {
         await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'save_failed', message: String(e.message || e) });
+      }
+    }
+  }
+
+  /* Append tracked links to first_message when myLink is on */
+  var _mlSetting = await getFirmSetting(env, firmCode, 'myLink');
+  if (_mlSetting && _mlSetting.on && _mlSetting.url) {
+    for (var li = 0; li < savedLeads.length; li++) {
+      var sl = savedLeads[li];
+      if (sl.messages && sl.messages.first && sl.id) {
+        var goUrl = await getOrCreateLeadLink(env, firmCode, sl.id, _mlSetting.url);
+        if (goUrl) {
+          sl.messages.first = sl.messages.first + '\n\n' + goUrl;
+          /* Update D1 too */
+          try {
+            var _mld = await env.DB.prepare("SELECT data FROM customers WHERE firm_code = ? AND id = ?").bind(firmCode, sl.id).first();
+            if (_mld && _mld.data) {
+              var _mlParsed = JSON.parse(_mld.data);
+              if (_mlParsed.messages) { _mlParsed.messages.first = sl.messages.first; }
+              await env.DB.prepare("UPDATE customers SET data = ?, updated_at = datetime('now') WHERE firm_code = ? AND id = ?").bind(JSON.stringify(_mlParsed), firmCode, sl.id).run();
+            }
+          } catch (e) {}
+        }
       }
     }
   }
@@ -6014,7 +6121,12 @@ export default {
     // Logs the tap in D1 and redirects (302). Filters bot/preview user agents.
     if ((request.method === 'GET' || request.method === 'HEAD') && path.startsWith('/go/')) {
       var _goCode = path.slice(4);
+      /* Strip query string from code */
+      var _goQIdx = _goCode.indexOf('?');
+      if (_goQIdx !== -1) _goCode = _goCode.slice(0, _goQIdx);
       if (!_goCode || _goCode.length > 40) return new Response('Not found', { status: 404 });
+      /* ?l= param overrides lead_id from tracked_links */
+      var _goQLeadId = url.searchParams.get('l') || '';
 
       /* Look up the link in D1 */
       var _goLink = null;
@@ -6050,19 +6162,20 @@ export default {
         var _goRecent = await env.G7_KV.get(_goDedup);
         if (!_goRecent) {
           await kvPut(env, _goDedup, '1', { expirationTtl: 600 });
+          var _goLeadId = _goLink.lead_id || _goQLeadId || null;
           /* Log the click */
           try {
             await env.DB.prepare(
               "INSERT INTO link_clicks (firm_code, link_code, lead_id, kind, ip_day_hash, at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
-            ).bind(_goLink.firm_code, _goCode, _goLink.lead_id || null, _goLink.kind, _goHash).run();
+            ).bind(_goLink.firm_code, _goCode, _goLeadId, _goLink.kind, _goHash).run();
           } catch (e) {}
 
           /* Lead tap → customer_events */
-          if (_goLink.lead_id) {
+          if (_goLeadId) {
             try {
               await env.DB.prepare(
                 "INSERT INTO customer_events (firm_code, customer_id, type, note, at) VALUES (?, ?, 'link_opened', 'Opened your link', datetime('now'))"
-              ).bind(_goLink.firm_code, _goLink.lead_id).run();
+              ).bind(_goLink.firm_code, _goLeadId).run();
             } catch (e) {}
           }
         }
@@ -8096,6 +8209,18 @@ export default {
         } catch (e) {}
       }
 
+      /* ── Enrich with link_opened events ── */
+      if (env.DB && _ltFoundLeads.length > 0) {
+        try {
+          var _ltEvRows = await env.DB.prepare(
+            "SELECT customer_id, MAX(at) as opened_at FROM customer_events WHERE firm_code = ? AND type = 'link_opened' GROUP BY customer_id"
+          ).bind(_ltSess.firmCode).all();
+          var _ltEvMap = {};
+          (_ltEvRows.results || []).forEach(function(e) { _ltEvMap[e.customer_id] = e.opened_at; });
+          _ltFoundLeads.forEach(function(l) { if (_ltEvMap[l.id]) l.openedLinkAt = _ltEvMap[l.id]; });
+        } catch (e) {}
+      }
+
       /* ── Merge today's creators ── */
       var _ltCreators = await env.G7_KV.get('scout:creators:' + _ltSess.firmCode + ':' + _ltDay, 'json');
       if (_ltCreators && _ltCreators.length > 0) {
@@ -8837,7 +8962,28 @@ export default {
       var _rlProfile = await getLeadProfile(env, _rlSess.firmCode);
       if (_rlProfile && _rlProfile.regularsConfig) _rlConfig = _rlProfile.regularsConfig;
 
-      return jsonResponse({ regulars: _rlRegulars, config: _rlConfig });
+      /* Tracked link for regulars QR */
+      var _rlGoUrl = '';
+      if (_rlConfig && _rlConfig.code && env.DB) {
+        try {
+          var _rlExisting = await env.DB.prepare(
+            "SELECT code FROM tracked_links WHERE firm_code = ? AND kind = 'regulars_qr' LIMIT 1"
+          ).bind(_rlSess.firmCode).first();
+          if (_rlExisting) {
+            _rlGoUrl = (env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev') + '/go/' + _rlExisting.code;
+          } else {
+            /* Create one — destination is the r.html join page */
+            var _rlDest = 'https://gsevnservices.github.io/G7-Capital/scout/r.html?f=' + encodeURIComponent(_rlConfig.code);
+            var _rlNewCode = Array.from(crypto.getRandomValues(new Uint8Array(8))).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+            await env.DB.prepare(
+              "INSERT INTO tracked_links (firm_code, code, kind, url) VALUES (?, ?, 'regulars_qr', ?)"
+            ).bind(_rlSess.firmCode, _rlNewCode, _rlDest).run();
+            _rlGoUrl = (env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev') + '/go/' + _rlNewCode;
+          }
+        } catch (e) {}
+      }
+
+      return jsonResponse({ regulars: _rlRegulars, config: _rlConfig, goUrl: _rlGoUrl });
     }
 
     // ── POST /scout/regulars/bring-back — draft a bring-back message ──
@@ -9424,6 +9570,31 @@ export default {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // GET /scout/my-link — { url, on } — firm's tracked link setting.
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'GET' && path === '/scout/my-link') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _mlSetting = await getFirmSetting(env, session.firmCode, 'myLink') || { url: '', on: false };
+      return jsonResponse(_mlSetting);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POST /scout/my-link — { url?, on? }
+    // ─────────────────────────────────────────────────────────────
+    if (request.method === 'POST' && path === '/scout/my-link') {
+      const session = await validateSession(request, env);
+      if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      var _mlCur = await getFirmSetting(env, session.firmCode, 'myLink') || { url: '', on: false };
+      if (typeof body.url === 'string') _mlCur.url = body.url.trim().slice(0, 500);
+      if (typeof body.on === 'boolean') _mlCur.on = body.on;
+      await saveFirmSetting(env, session.firmCode, 'myLink', _mlCur);
+      return jsonResponse(_mlCur);
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // POST /scout/leads/regen-batch — regenerate messages for up to 5
     //   found leads whose messages.lang doesn't match the current setting.
     //   The frontend calls this in a loop until remaining === 0.
@@ -9564,6 +9735,26 @@ export default {
         }
         sql += ' ORDER BY updated_at DESC LIMIT 1000';
         const rows = await env.DB.prepare(sql).bind(...params).all();
+        /* Enrich with link_opened timestamps */
+        var _csEvRows = [];
+        try {
+          _csEvRows = (await env.DB.prepare(
+            "SELECT customer_id, MAX(at) as opened_at FROM customer_events WHERE firm_code = ? AND type = 'link_opened' GROUP BY customer_id"
+          ).bind(session.firmCode).all()).results || [];
+        } catch (e) {}
+        if (_csEvRows.length > 0) {
+          var _csEvMap = {};
+          _csEvRows.forEach(function(e) { _csEvMap[e.customer_id] = e.opened_at; });
+          (rows.results || []).forEach(function(r) {
+            if (_csEvMap[r.id]) {
+              try {
+                var _csd = JSON.parse(r.data || '{}');
+                _csd.openedLinkAt = _csEvMap[r.id];
+                r.data = JSON.stringify(_csd);
+              } catch (e) {}
+            }
+          });
+        }
         return jsonResponse({ customers: rows.results || [], serverTime: new Date().toISOString() });
       } catch (e) {
         return jsonResponse({ error: 'DB query failed', detail: String(e.message || e).slice(0, 300) }, 500);
@@ -9669,6 +9860,38 @@ export default {
       } catch (e) {
         return jsonResponse({ error: 'DB query failed', detail: String(e.message || e).slice(0, 300) }, 500);
       }
+    }
+
+    // POST /scout/tracked-link — { kind, url } → get or create a tracked /go/ link
+    if (request.method === 'POST' && path === '/scout/tracked-link') {
+      var _tlSess = await validateSession(request, env);
+      if (!_tlSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'no_db' }, 500);
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      var _tlKind = String(body.kind || 'general').slice(0, 40);
+      var _tlUrl = String(body.url || '').trim().slice(0, 1000);
+      if (!_tlUrl) return jsonResponse({ error: 'url required' }, 400);
+      /* Check for existing */
+      var _tlExisting = null;
+      try {
+        _tlExisting = await env.DB.prepare(
+          "SELECT code FROM tracked_links WHERE firm_code = ? AND kind = ? AND url = ? LIMIT 1"
+        ).bind(_tlSess.firmCode, _tlKind, _tlUrl).first();
+      } catch (e) {}
+      if (_tlExisting) {
+        var _tlBase = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
+        return jsonResponse({ goUrl: _tlBase + '/go/' + _tlExisting.code, code: _tlExisting.code });
+      }
+      /* Create new */
+      var _tlCode = Array.from(crypto.getRandomValues(new Uint8Array(8))).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+      try {
+        await env.DB.prepare(
+          "INSERT INTO tracked_links (firm_code, code, kind, url) VALUES (?, ?, ?, ?)"
+        ).bind(_tlSess.firmCode, _tlCode, _tlKind, _tlUrl).run();
+      } catch (e) { return jsonResponse({ error: 'db_error' }, 500); }
+      var _tlBase2 = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
+      return jsonResponse({ goUrl: _tlBase2 + '/go/' + _tlCode, code: _tlCode });
     }
 
     // GET /scout/links — link tap stats for the firm (7d and 30d)

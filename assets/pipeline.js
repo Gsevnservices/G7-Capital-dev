@@ -725,6 +725,11 @@ var FOLLOW_UP_TEMPLATES = {
     English:  '{greet} \u2014 it has been a while. Whenever you are ready, we are here.',
     Hinglish: '{greet} \u2014 kaafi time ho gaya. Jab ready ho, bata dena.',
     Hindi:    '{greet} \u2014 \u0915\u093E\u092B\u093C\u0940 \u0938\u092E\u092F \u0939\u094B \u0917\u092F\u093E\u0964 \u091C\u092C \u0924\u0948\u092F\u093E\u0930 \u0939\u094B\u0902, \u092C\u0924\u093E \u0926\u0947\u0928\u093E\u0964'
+  },
+  link_opened: {
+    English:  '{greet} \u2014 saw you checked out our page! Would love to chat for 2 minutes if you have any questions.',
+    Hinglish: '{greet} \u2014 dekha aapne humara page check kiya! Koi sawaal ho toh 2 min baat kar sakte hain.',
+    Hindi:    '{greet} \u2014 \u0926\u0947\u0916\u093E \u0906\u092A\u0928\u0947 \u0939\u092E\u093E\u0930\u093E page \u091A\u0947\u0915 \u0915\u093F\u092F\u093E! \u0915\u094B\u0908 \u0938\u0935\u093E\u0932 \u0939\u094B \u0924\u094B 2 \u092E\u093F\u0928\u091F \u092C\u093E\u0924 \u0915\u0930 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902\u0964'
   }
 };
 
@@ -873,6 +878,20 @@ function pipelineDue() {
                msg: templateMsg('gone_quiet', lang, { greet: greet }) };
     }
     /* stage=found (never contacted) is excluded from Chase — shown in "Not contacted yet" section instead */
+
+    /* Link opened boost */
+    if (p.openedLinkAt) {
+      var _loD = pipelineDaysSince(p.openedLinkAt);
+      if (_loD <= 3) {
+        if (!item) {
+          item = { reason: 'Opened your link', urgency: 4,
+                   msg: templateMsg('link_opened', lang, { greet: greet }) };
+        } else {
+          item.urgency = Math.max(item.urgency, 4);
+          item.reason = 'Opened your link \u00B7 ' + item.reason;
+        }
+      }
+    }
 
     if (item) {
       item.person = p;

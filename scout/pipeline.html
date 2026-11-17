@@ -303,6 +303,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div id="regularsSection"><!-- rendered by JS --></div>
   </div>
 
+  <!-- ══════════════════════════════════════
+       SECTION 4 — YOUR LINKS
+  ══════════════════════════════════════ -->
+  <div class="section-block" id="linksBlock" style="display:none">
+    <div class="section-label">Your Links</div>
+    <div id="linksSection"><!-- rendered by JS --></div>
+  </div>
+
 </div><!-- /page-wrap -->
 
 <!-- Reply modal overlay -->
@@ -350,6 +358,19 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
 ═══════════════════════════════════════════ */
 /* escHtml, stageLabel, scoutBucket are in scout.js */
 
+function timeAgo(iso) {
+  if (!iso) return '';
+  var ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) ms = 0;
+  var mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  var hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  var days = Math.floor(hrs / 24);
+  return days + 'd ago';
+}
+
 /* ═══════════════════════════════════════════
    RENDER STATE — chase items indexed for
    popup-safe WhatsApp sends
@@ -362,6 +383,7 @@ var _chaseItems = [];
 function render() {
   renderChase();
   renderEveryone();
+  renderLinks();
 }
 
 function renderChase() {
@@ -384,6 +406,9 @@ function renderChase() {
     if (p.icp) html += '<div class="chase-icp">' + escHtml(p.icp) + '</div>';
     html += '</div>';
     html += '<div class="chase-reason">' + escHtml(item.reason) + '</div>';
+    if (p.openedLinkAt) {
+      html += '<div style="font-size:11px;color:#4CAF50;margin:2px 0"><span style="margin-right:4px">\u2714</span>Opened your link \u00B7 ' + timeAgo(p.openedLinkAt) + '</div>';
+    }
 
     /* Review-ask card */
     if (item.isReview) {
@@ -471,6 +496,9 @@ function renderEveryone() {
     /* Status */
     html += '<div class="ev-cell" style="flex:0 0 auto">';
     html += '<span class="ev-status ' + escHtml(p.status) + '">' + escHtml(stageLabel(p.status)) + '</span>';
+    if (p.openedLinkAt) {
+      html += '<div style="font-size:10px;color:#4CAF50;margin-top:2px">\u2714 Opened link \u00B7 ' + timeAgo(p.openedLinkAt) + '</div>';
+    }
     html += '</div>';
     /* Days */
     html += '<div class="ev-cell" style="flex:0 0 auto">';
@@ -496,6 +524,35 @@ function renderEveryone() {
   el.innerHTML = html;
 }
 
+
+async function renderLinks() {
+  var block = document.getElementById('linksBlock');
+  var el = document.getElementById('linksSection');
+  if (!block || !el) return;
+  try {
+    var _lkToken = localStorage.getItem('g7_session_token') || '';
+    var r = await fetch(SCOUT_WORKER + '/scout/links', { headers: { 'Authorization': 'Bearer ' + _lkToken } });
+    if (!r.ok) return;
+    var data = await r.json();
+    var links = data.links || [];
+    if (links.length === 0) return;
+    block.style.display = '';
+    var html = '';
+    links.forEach(function(lk) {
+      var urlShort = (lk.url || '').replace(/^https?:\/\//, '').slice(0, 50);
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border2)">';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:13px;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escHtml(urlShort) + '</div>';
+      html += '<div style="font-size:11px;color:var(--grey2);margin-top:2px">' + escHtml(lk.kind || 'general') + '</div>';
+      html += '</div>';
+      html += '<div style="display:flex;gap:16px;font-size:12px;flex-shrink:0">';
+      html += '<div style="text-align:center"><div style="color:var(--amber);font-weight:600">' + (lk.taps_7d || 0) + '</div><div style="color:var(--grey2);font-size:10px">7d</div></div>';
+      html += '<div style="text-align:center"><div style="color:var(--amber);font-weight:600">' + (lk.taps_30d || 0) + '</div><div style="color:var(--grey2);font-size:10px">30d</div></div>';
+      html += '</div></div>';
+    });
+    el.innerHTML = html;
+  } catch (e) {}
+}
 
 /* ═══════════════════════════════════════════
    CHASE ACTIONS
