@@ -6163,6 +6163,15 @@ export default {
         if (!_goRecent) {
           await kvPut(env, _goDedup, '1', { expirationTtl: 600 });
           var _goLeadId = _goLink.lead_id || _goQLeadId || null;
+          /* Validate lead belongs to this firm before attributing */
+          if (_goLeadId) {
+            try {
+              var _goLeadRow = await env.DB.prepare(
+                "SELECT id FROM customers WHERE id = ? AND firm_code = ?"
+              ).bind(_goLeadId, _goLink.firm_code).first();
+              if (!_goLeadRow) _goLeadId = null;
+            } catch (e) { _goLeadId = null; }
+          }
           /* Log the click */
           try {
             await env.DB.prepare(
