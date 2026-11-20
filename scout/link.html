@@ -324,7 +324,7 @@ async function handleSubmit() {
 
   // Disable button while submitting
   submitBtn.disabled = true;
-  submitBtn.textContent = 'CONNECTING...';
+  submitBtn.textContent = 'Connecting...';
 
   try {
     var resp = await fetch(G7_WORKER_URL + '/go/join', {
@@ -343,7 +343,7 @@ async function handleSubmit() {
     if (!resp.ok) {
       showMsg(data.error || 'Something went wrong. Please try again.', 'error');
       submitBtn.disabled = false;
-      submitBtn.textContent = 'CONNECT ON WHATSAPP';
+      submitBtn.textContent = 'Connect on WhatsApp';
       return;
     }
 
@@ -359,13 +359,13 @@ async function handleSubmit() {
   } catch (e) {
     showMsg('Connection error. Please check your internet and try again.', 'error');
     submitBtn.disabled = false;
-    submitBtn.textContent = 'CONNECT ON WHATSAPP';
+    submitBtn.textContent = 'Connect on WhatsApp';
   }
 
   // Re-enable after 30s regardless
   setTimeout(function() {
     submitBtn.disabled = false;
-    submitBtn.textContent = 'CONNECT ON WHATSAPP';
+    submitBtn.textContent = 'Connect on WhatsApp';
   }, 30000);
 }
 </script>

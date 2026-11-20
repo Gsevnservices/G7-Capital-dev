@@ -6212,7 +6212,6 @@ export default {
       var _gjRateRaw = await env.G7_KV.get(_gjRateKey);
       var _gjRate = _gjRateRaw ? parseInt(_gjRateRaw, 10) : 0;
       if (_gjRate >= 5) return jsonResponse({ error: 'Too many requests today. Try again tomorrow.' }, 429);
-      await kvPut(env, _gjRateKey, String(_gjRate + 1), { expirationTtl: 86400 });
       var _gjLink = null;
       if (env.DB) {
         try {
@@ -6222,6 +6221,8 @@ export default {
         } catch (e) {}
       }
       if (!_gjLink) return jsonResponse({ error: 'Link not found' }, 404);
+      /* Increment rate counter only after link is confirmed valid */
+      ctx.waitUntil(kvPut(env, _gjRateKey, String(_gjRate + 1), { expirationTtl: 86400 }));
       var _gjFirm = _gjLink.firm_code;
       var _gjSource = 'link';
       try {
