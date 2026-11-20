@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connect — Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23080808'/%3E%3Ctext y='.9em' font-size='70' font-family='serif' fill='%23E0922F'%3EG%3C/text%3E%3C/svg%3E">
+<script src="../assets/env.js?v=1"></script>
+<style>
+/* --- Reset & variables --- */
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;--black4:#1E1E1E;
+  --amber:#E0922F;--amber-d:#D17B2E;--amber-l:#F0B968;
+  --gold:#C9A84C;--gold2:#E2C97E;
+  --white:#FAFAF8;--white2:#F0EFE9;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(224,146,47,0.18);--border2:rgba(250,250,248,0.08);
+  --serif:'Cormorant Garamond',Georgia,serif;
+  --sans:'Tenor Sans',sans-serif;
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans);background:var(--black);color:var(--white);
+  overflow-x:hidden;min-height:100vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:24px 20px;
+}
+::selection{background:rgba(224,146,47,.3);color:var(--white)}
+
+/* --- Page layout --- */
+.page{
+  width:100%;max-width:420px;display:flex;flex-direction:column;
+  align-items:center;text-align:center;opacity:0;
+  transition:opacity .5s ease;
+}
+.page.visible{opacity:1}
+
+/* --- Business name --- */
+.biz-name{
+  font-family:var(--serif);font-weight:300;font-size:clamp(28px,6vw,42px);
+  color:var(--white);line-height:1.15;margin-bottom:12px;letter-spacing:-.01em;
+}
+
+/* --- Offer text --- */
+.offer-text{
+  font-family:var(--sans);font-size:14px;line-height:1.8;
+  color:var(--amber);margin-bottom:40px;max-width:360px;
+}
+
+/* --- Form card --- */
+.card{
+  width:100%;background:var(--black2);border:1px solid var(--border2);
+  padding:32px 28px;display:flex;flex-direction:column;gap:20px;
+}
+
+/* --- Input fields --- */
+.field{display:flex;flex-direction:column;gap:6px;text-align:left}
+.field label{
+  font-size:9px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--grey1);
+}
+.field input{
+  font-family:var(--sans);font-size:14px;color:var(--white);
+  background:var(--black);border:1px solid var(--border2);
+  padding:14px 16px;outline:none;transition:border-color .3s;
+  width:100%;-webkit-appearance:none;border-radius:0;
+}
+.field input::placeholder{color:var(--grey2);font-size:13px}
+.field input:focus{border-color:rgba(224,146,47,0.4)}
+
+/* --- Honeypot (hidden from humans) --- */
+.hp-wrap{position:absolute;left:-9999px;height:0;overflow:hidden;opacity:0;pointer-events:none}
+
+/* --- Submit button --- */
+.btn-submit{
+  font-family:var(--sans);font-size:11px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--black);background:var(--amber);border:none;cursor:pointer;
+  padding:16px 28px;margin-top:4px;transition:all .3s;
+  min-height:48px;width:100%;
+}
+.btn-submit:hover:not(:disabled){background:var(--amber-l);transform:translateY(-1px);box-shadow:0 10px 30px rgba(224,146,47,.25)}
+.btn-submit:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+
+/* --- Messages --- */
+.msg{
+  font-size:12px;line-height:1.7;padding:12px 16px;margin-top:4px;
+  text-align:center;display:none;
+}
+.msg.error{color:#C45A5A;background:rgba(196,90,90,0.08);border:1px solid rgba(196,90,90,0.15);display:block}
+.msg.success{color:var(--amber);background:rgba(224,146,47,0.06);border:1px solid var(--border);display:block}
+
+/* --- Footer --- */
+.footer{
+  margin-top:48px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--grey2);
+}
+.footer span{color:var(--amber)}
+
+/* --- Error state (link inactive) --- */
+.error-state{
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  gap:16px;opacity:0;transition:opacity .5s ease;
+}
+.error-state.visible{opacity:1}
+.error-state h2{
+  font-family:var(--serif);font-weight:300;font-size:24px;color:var(--white);
+}
+.error-state p{font-size:13px;color:var(--grey1);line-height:1.8;max-width:320px}
+
+/* --- Loading state --- */
+.loading{
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+}
+.spinner{
+  width:28px;height:28px;border:2px solid var(--border2);
+  border-top-color:var(--amber);border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-size:11px;color:var(--grey2);letter-spacing:.12em;text-transform:uppercase}
+
+/* --- Responsive --- */
+@media(max-width:480px){
+  body{padding:20px 16px}
+  .card{padding:28px 20px}
+  .biz-name{font-size:28px}
+}
+</style>
+</head>
+<body>
+
+<!-- Loading state (shown while fetching link info) -->
+<div id="loadingState" class="loading">
+  <div class="spinner"></div>
+  <div class="loading-text">Loading</div>
+</div>
+
+<!-- Error state (link inactive or invalid) -->
+<div id="errorState" class="error-state" style="display:none">
+  <h2>This link is no longer active</h2>
+  <p>The business link you followed has expired or is no longer available.</p>
+</div>
+
+<!-- Main page (shown after successful fetch) -->
+<div id="mainPage" class="page" style="display:none">
+
+  <!-- Business name -->
+  <h1 class="biz-name" id="bizName"></h1>
+
+  <!-- Offer text -->
+  <p class="offer-text" id="offerText"></p>
+
+  <!-- Contact form card -->
+  <div class="card">
+    <div class="field">
+      <label for="userName">Your name</label>
+      <input type="text" id="userName" name="name" autocomplete="name"
+             placeholder="Your name" required>
+    </div>
+
+    <div class="field">
+      <label for="userPhone">WhatsApp number</label>
+      <input type="tel" id="userPhone" name="phone" autocomplete="tel"
+             placeholder="+91 98765 43210" required>
+    </div>
+
+    <!-- Honeypot — hidden from real users -->
+    <div class="hp-wrap" aria-hidden="true">
+      <label for="website">Website</label>
+      <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+    </div>
+
+    <button type="button" class="btn-submit" id="submitBtn" onclick="handleSubmit()">
+      Connect on WhatsApp
+    </button>
+
+    <div id="formMsg" class="msg"></div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">Powered by <span>Scout</span></div>
+</div>
+
+<script>
+/* ============================================================
+   Scout link.html — public inbound landing page
+   Fetches business info via /go/info, collects name + phone,
+   POSTs to /go/join, then redirects to WhatsApp.
+   ============================================================ */
+
+// --- Globals ---
+var linkCode = '';      // the ?g= param
+var linkInfo = null;    // response from /go/info
+
+// --- DOM refs ---
+var loadingEl  = document.getElementById('loadingState');
+var errorEl    = document.getElementById('errorState');
+var mainEl     = document.getElementById('mainPage');
+var bizNameEl  = document.getElementById('bizName');
+var offerEl    = document.getElementById('offerText');
+var nameInput  = document.getElementById('userName');
+var phoneInput = document.getElementById('userPhone');
+var hpInput    = document.getElementById('website');
+var submitBtn  = document.getElementById('submitBtn');
+var formMsg    = document.getElementById('formMsg');
+
+// --- On load: read ?g= and fetch link info ---
+(function init() {
+  var params = new URLSearchParams(window.location.search);
+  linkCode = (params.get('g') || '').trim();
+
+  if (!linkCode) {
+    showError();
+    return;
+  }
+
+  fetchLinkInfo();
+})();
+
+// --- Fetch business info from worker ---
+async function fetchLinkInfo() {
+  try {
+    var resp = await fetch(G7_WORKER_URL + '/go/info?g=' + encodeURIComponent(linkCode));
+    if (!resp.ok) { showError(); return; }
+
+    linkInfo = await resp.json();
+
+    // Populate the page
+    bizNameEl.textContent = linkInfo.businessName || 'Business';
+    offerEl.textContent   = linkInfo.offer || '';
+
+    // Update page title
+    document.title = (linkInfo.businessName || 'Connect') + ' — Scout';
+
+    // Hide offer line if empty
+    if (!linkInfo.offer) offerEl.style.display = 'none';
+
+    // Show main page
+    loadingEl.style.display = 'none';
+    mainEl.style.display = 'flex';
+    // Trigger fade-in on next frame
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() { mainEl.classList.add('visible'); });
+    });
+  } catch (e) {
+    showError();
+  }
+}
+
+// --- Show error state ---
+function showError() {
+  loadingEl.style.display = 'none';
+  errorEl.style.display = 'flex';
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() { errorEl.classList.add('visible'); });
+  });
+}
+
+// --- Phone validation: strip non-digits, check 10+ ---
+function cleanPhone(raw) {
+  return raw.replace(/[\s\-\(\)\.]/g, '');
+}
+function isValidPhone(phone) {
+  var digits = phone.replace(/[^0-9]/g, '');
+  return digits.length >= 10;
+}
+
+// --- Rate limit check (30s cooldown) ---
+function isRateLimited() {
+  var last = sessionStorage.getItem('scout_link_submit');
+  if (!last) return false;
+  return (Date.now() - parseInt(last, 10)) < 30000;
+}
+function markSubmitted() {
+  sessionStorage.setItem('scout_link_submit', String(Date.now()));
+}
+
+// --- Show form message ---
+function showMsg(text, type) {
+  formMsg.textContent = text;
+  formMsg.className = 'msg ' + type;
+}
+function clearMsg() {
+  formMsg.textContent = '';
+  formMsg.className = 'msg';
+  formMsg.style.display = '';
+}
+
+// --- Handle form submit ---
+async function handleSubmit() {
+  clearMsg();
+
+  // Honeypot check — bot filled the hidden field
+  if (hpInput.value) {
+    showMsg("Thanks! We'll be in touch.", 'success');
+    submitBtn.disabled = true;
+    return;
+  }
+
+  var name  = nameInput.value.trim();
+  var phone = cleanPhone(phoneInput.value.trim());
+
+  // Validate name
+  if (!name) {
+    showMsg('Please enter your name.', 'error');
+    nameInput.focus();
+    return;
+  }
+
+  // Validate phone
+  if (!phone || !isValidPhone(phone)) {
+    showMsg('Please enter a valid WhatsApp number (10+ digits).', 'error');
+    phoneInput.focus();
+    return;
+  }
+
+  // Rate limit
+  if (isRateLimited()) {
+    showMsg('Please wait a moment before trying again.', 'error');
+    return;
+  }
+
+  // Disable button while submitting
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'CONNECTING...';
+
+  try {
+    var resp = await fetch(G7_WORKER_URL + '/go/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: linkCode,
+        name: name,
+        phone: phone,
+        hp: hpInput.value
+      })
+    });
+
+    var data = await resp.json();
+
+    if (!resp.ok) {
+      showMsg(data.error || 'Something went wrong. Please try again.', 'error');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'CONNECT ON WHATSAPP';
+      return;
+    }
+
+    // Mark submitted for rate limiting
+    markSubmitted();
+
+    // Redirect to WhatsApp
+    if (data.waUrl) {
+      window.location.href = data.waUrl;
+    } else {
+      showMsg("Thanks! We'll be in touch.", 'success');
+    }
+  } catch (e) {
+    showMsg('Connection error. Please check your internet and try again.', 'error');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'CONNECT ON WHATSAPP';
+  }
+
+  // Re-enable after 30s regardless
+  setTimeout(function() {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'CONNECT ON WHATSAPP';
+  }, 30000);
+}
+</script>
+</body>
+</html>

@@ -9,8 +9,8 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=54"></script>
-<script src="../assets/pipeline.js?v=33"></script>
+<script src="../assets/scout.js?v=55"></script>
+<script src="../assets/pipeline.js?v=34"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23E0922F'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -1083,14 +1083,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <div class="headline-meta" id="headlineMeta">Scout Customer Acquisition System</div>
   <div class="metric-cards">
     <div class="metric-card">
-      <div class="metric-label">Revenue Velocity</div>
+      <div class="metric-label">Projected this month</div>
       <div class="metric-value" id="metricRevenue">—</div>
-      <div class="metric-sub">new revenue added per month at this pace</div>
+      <div class="metric-sub" id="metricRevenueSub">5 leads/day × 30 days × 20% conversion</div>
     </div>
     <div class="metric-card">
-      <div class="metric-label">Acquisition Efficiency</div>
+      <div class="metric-label">Lead Conversion</div>
       <div class="metric-value" id="metricAcq">—</div>
-      <div class="metric-sub">contacts needed per new customer</div>
+      <div class="metric-sub">5 leads → 1 customer (20%)</div>
     </div>
   </div>
   <div class="momentum-block" style="display:none">
@@ -1504,6 +1504,52 @@ function renderHealthBlock() {
 }
 
 /* ═══════════════════════════════════════════
+   CODE-COMPUTED REVENUE PROJECTION
+   Formula: 5 leads/day × 30 days × 20% conversion × avg sale value
+═══════════════════════════════════════════ */
+function parseAvgTransaction(bd) {
+  /* Extract numeric value from strings like "₹35,000 per membership" or "₹550 per visit"
+     Also handles plain numbers from economics.avgTransactionValue */
+  if (!bd) return 0;
+  /* Try economics avgTransactionValue first (already a number) */
+  if (typeof bd === 'number' && bd > 0) return bd;
+  var raw = String(bd.avgTransaction || bd || '');
+  /* Strip ₹, commas, spaces — keep digits and dots */
+  var m = raw.match(/([\d,]+(?:\.\d+)?)\s*(?:lakh|lac)/i);
+  if (m) return parseFloat(m[1].replace(/,/g, '')) * 100000;
+  m = raw.match(/([\d,]+(?:\.\d+)?)\s*(?:crore|cr)/i);
+  if (m) return parseFloat(m[1].replace(/,/g, '')) * 10000000;
+  m = raw.match(/[\d,]+(?:\.\d+)?/);
+  if (m) return parseFloat(m[0].replace(/,/g, '')) || 0;
+  return 0;
+}
+
+function computeProjectedRevenue(bd) {
+  var avg = parseAvgTransaction(bd);
+  if (avg <= 0) return null;
+  /* 5 leads/day × 30 days × 20% conversion × avg sale value */
+  return Math.round(5 * 30 * 0.20 * avg);
+}
+
+function formatINR(n) {
+  if (!n || n <= 0) return '—';
+  if (n >= 10000000) return '₹' + (n / 10000000).toFixed(1).replace(/\.0$/, '') + ' Cr';
+  if (n >= 100000) return '₹' + (n / 100000).toFixed(1).replace(/\.0$/, '') + ' lakh';
+  return '₹' + Math.round(n).toLocaleString('en-IN');
+}
+
+function setComputedMetrics() {
+  var projected = computeProjectedRevenue(businessData);
+  document.getElementById('metricRevenue').textContent = formatINR(projected);
+  document.getElementById('metricAcq').textContent = '5 → 1';
+  if (projected && businessData) {
+    var avg = parseAvgTransaction(businessData);
+    var sub = document.getElementById('metricRevenueSub');
+    if (sub) sub.textContent = '5 leads/day × 30d × 20% × ₹' + Math.round(avg).toLocaleString('en-IN');
+  }
+}
+
+/* ═══════════════════════════════════════════
    EXTRACT HEADLINE METRICS
 ═══════════════════════════════════════════ */
 function extractMetrics(text) {
@@ -1710,8 +1756,7 @@ function parseAndRender(rawOutput, biz) {
     try { localStorage.removeItem(scoutKey('scout_failure_reported')); } catch(_e) {}
     /* JSON path — direct field access, no regex */
     var h = data.headline || {};
-    document.getElementById('metricRevenue').textContent = h.revenueVelocity || '—';
-    document.getElementById('metricAcq').textContent     = h.acquisitionEfficiency || '—';
+    setComputedMetrics();
     renderHealthBlock();
     scoutData = data;
 
@@ -1868,8 +1913,7 @@ function parseAndRender(rawOutput, biz) {
   var metrics = extractMetrics(headerBlock);
   if (metrics.revenueVelocity === '—') metrics = extractMetrics(cleanText);
 
-  document.getElementById('metricRevenue').textContent = metrics.revenueVelocity;
-  document.getElementById('metricAcq').textContent     = metrics.acquisitionEff;
+  setComputedMetrics();
   renderHealthBlock();
 
   var sections = parseScoutOutput(cleanText);
@@ -2560,7 +2604,7 @@ function renderWeekTargets(tab4) {
   html += '<div class="target-row"><span class="target-key">Responses</span><span class="target-val">'      + escHtml(String(wt.responses || '—'))    + '</span></div>';
   html += '<div class="target-row"><span class="target-key">New Customers</span><span class="target-val">'  + escHtml(String(wt.newCustomers || '—')) + '</span></div>';
   if (wt.revenueVelocityTarget) {
-    html += '<div class="target-row"><span class="target-key">Revenue Velocity Target</span><span class="target-val">' + escHtml(wt.revenueVelocityTarget) + '</span></div>';
+    html += '<div class="target-row"><span class="target-key">Projected Monthly Revenue</span><span class="target-val">' + escHtml(wt.revenueVelocityTarget) + '</span></div>';
   }
   html += '</div>';
 
@@ -3219,7 +3263,7 @@ function renderTab4(content, biz) {
   html += '<div class="target-row"><span class="target-key">Contacts</span><span class="target-val">' + contactsTarget + '</span></div>';
   html += '<div class="target-row"><span class="target-key">Responses</span><span class="target-val">' + responsesTarget + '</span></div>';
   html += '<div class="target-row"><span class="target-key">New Customers</span><span class="target-val">' + customersTarget + '</span></div>';
-  html += '<div class="target-row"><span class="target-key">Revenue Velocity Target</span><span class="target-val">' + escHtml(velocityTarget) + '</span></div>';
+  html += '<div class="target-row"><span class="target-key">Projected Monthly Revenue</span><span class="target-val">' + escHtml(velocityTarget) + '</span></div>';
   html += '</div>';
 
   /* 90-day projection */
@@ -3919,13 +3963,13 @@ function preparePrint() {
     var _t2 = scoutData.tab2 || {};
     var _t3 = scoutData.tab3 || {};
     var _ms = _t2.messages || [];
-    rvDisplay = _h.revenueVelocity || '—';
+    rvDisplay = formatINR(computeProjectedRevenue(businessData));
     ptChannel = (_ms[0] && _ms[0].channel) || '—';
     ptSeasonal = _t3.weeklyFocus || '—';
   } else {
     var metrics = extractMetrics(scoutRaw);
     var rData   = parseReasoningData(scoutRaw);
-    rvDisplay  = metrics.revenueVelocity;
+    rvDisplay  = formatINR(computeProjectedRevenue(businessData));
     ptChannel  = rData.primaryChannel;
     ptSeasonal = rData.seasonalContext;
   }
@@ -3933,7 +3977,7 @@ function preparePrint() {
     ['Business',               bizName + (location ? ' · ' + location : '')],
     ['Analysis Date',          date],
     ['Primary ICP',            icpNames[0] || '—'],
-    ['Revenue Velocity Target', rvDisplay],
+    ['Projected monthly revenue', rvDisplay],
     ['Primary Channel',        ptChannel],
     ['Key Recommendation',     ptSeasonal]
   ];
