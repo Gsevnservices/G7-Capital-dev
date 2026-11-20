@@ -1346,7 +1346,7 @@ window.addEventListener('DOMContentLoaded', async function() {
     ['tab1Content','tab2Content','tab3Content','tab4Content','tab5Content','wacContent'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el && el.querySelector('.result-loading')) {
-        el.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">This section could not be rendered. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+        el.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Couldn\'t load this section. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
       }
     });
   }
@@ -1726,10 +1726,13 @@ function parseAndRender(rawOutput, biz) {
     /* ── Section renderers — each wrapped individually so one malformed section
        cannot prevent any other section from rendering or leave a spinner showing.
        The finally block below guarantees every tab panel clears its spinner. ── */
+    function _tabFail(elId, label) {
+      var el = document.getElementById(elId);
+      if (el) el.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Couldn\'t load this section. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+    }
     try { renderTab1JSON(data.tab1, data); } catch(_e1) {
       console.error('renderTab1JSON threw:', _e1.message, _e1.stack);
-      var _el1Err = document.getElementById('tab1Content');
-      if (_el1Err) _el1Err.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Your plan could not be rendered for this section. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+      _tabFail('tab1Content');
     }
 
     /* Append competitor watch into My Plan (tab1Content) */
@@ -1768,8 +1771,7 @@ function parseAndRender(rawOutput, biz) {
       })();
     } catch(_eWac) {
       console.error('renderWhatsAppCalendar threw:', _eWac);
-      var _wacErr = document.getElementById('wacContent');
-      if (_wacErr) _wacErr.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">WhatsApp calendar could not be rendered. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+      _tabFail('wacContent');
     }
 
     try { renderTab2JSON(data.tab2, data.tab1); } catch(_e2) {
@@ -1779,22 +1781,19 @@ function parseAndRender(rawOutput, biz) {
 
     try { renderTab3JSON(data.tab3, data); } catch(_e3) {
       console.error('renderTab3JSON threw:', _e3);
-      var _el3Err = document.getElementById('tab3Content');
-      if (_el3Err) _el3Err.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">This week\'s action plan could not be rendered. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+      _tabFail('tab3Content');
     }
 
     try { renderWeekTargets(data.tab4); } catch(_eWt) { console.error('renderWeekTargets threw:', _eWt); }
 
     try { renderTab4JSON(data.tab4, biz); } catch(_e4) {
       console.error('renderTab4JSON threw:', _e4);
-      var _el4Err = document.getElementById('tab4Content');
-      if (_el4Err) _el4Err.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Customer tools could not be rendered. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+      _tabFail('tab4Content');
     }
 
     try { renderWhatsNextTab(data.tab4, data.tab5); } catch(_e5) {
       console.error('renderWhatsNextTab threw:', _e5);
-      var _el5Err = document.getElementById('tab5Content');
-      if (_el5Err) _el5Err.innerHTML = '<div style="padding:24px;font-size:12px;color:var(--grey2)">Expansion plan could not be rendered. <button onclick="rerunAnalysis()" style="background:none;border:none;color:var(--amber);font-size:12px;font-family:inherit;cursor:pointer;text-decoration:underline;padding:0">Re-run my analysis</button></div>';
+      _tabFail('tab5Content');
     }
 
     try { updateReasoningPanel(data); } catch(_eRp) { console.error('updateReasoningPanel threw:', _eRp); }
@@ -3544,14 +3543,14 @@ function renderTab5(content) {
    TAB SWITCHING
 ═══════════════════════════════════════════ */
 function switchTab(n) {
-  /* Deactivate all */
-  for (var i = 0; i < 6; i++) {
-    document.getElementById('tabBtn' + i).classList.remove('active');
-    document.getElementById('panel' + i).classList.remove('active');
-  }
+  /* Deactivate all — use querySelectorAll so the count always matches the DOM */
+  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
   /* Activate target */
-  document.getElementById('tabBtn' + n).classList.add('active');
-  document.getElementById('panel' + n).classList.add('active');
+  var btn = document.getElementById('tabBtn' + n);
+  var pan = document.getElementById('panel' + n);
+  if (btn) btn.classList.add('active');
+  if (pan) pan.classList.add('active');
   currentTab = n;
   window.scrollTo({top: document.querySelector('.tab-nav').offsetTop - 81, behavior:'smooth'});
 }
