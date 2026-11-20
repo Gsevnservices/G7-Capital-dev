@@ -6190,7 +6190,7 @@ export default {
       } catch (e) {}
       return jsonResponse({
         businessName: _giBizName, offer: _giOffer, phone: _giPhone,
-        source: _giSource, firm: _giFirm
+        source: _giSource
       });
     }
 
@@ -10343,9 +10343,9 @@ export default {
         ctx.waitUntil(kvPut(env, _iClickKey, String(_iClicks + 1)));
       }
 
-      /* 301 permanent redirect to /go/ equivalent */
+      /* 302 temporary redirect to /go/ equivalent */
       return new Response(null, {
-        status:  301,
+        status:  302,
         headers: { 'Location': _iBase + '/go/' + _iCode, 'Cache-Control': 'no-store' }
       });
     }
