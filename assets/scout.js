@@ -2274,7 +2274,9 @@ async function scoutHandleLimit(res) {
 
   var label = (SCOUT_PLAN.featureLabels[body.feature] || body.feature);
   var usedText = '';
-  if (body.limit > 0) {
+  if (body.reason === 'budget') {
+    usedText = 'Daily budget reached';
+  } else if (body.limit > 0) {
     usedText = body.used + ' of ' + body.limit + ' used';
     if (body.period === 'day') usedText += ' today';
     else if (body.period === 'month') usedText += ' this month';

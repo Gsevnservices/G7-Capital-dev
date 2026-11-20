@@ -116,6 +116,30 @@ else
   fail "/go/nonexistent returned $GO_STATUS (expected 404)"
 fi
 
+# ── 6. Landing page /go/info ──
+echo ""
+echo "6. Landing page /go/info (TEST19 bio link)"
+GI=$(curl -s "$DEV/go/info?g=px326g")
+GI_BIZ=$(echo "$GI" | python3 -c "import sys,json; print(json.load(sys.stdin).get('businessName',''))" 2>/dev/null || echo "")
+if [ -n "$GI_BIZ" ]; then
+  pass "/go/info returned business: $GI_BIZ"
+else
+  fail "/go/info missing businessName"
+fi
+
+# ── 7. Landing page /go/join honeypot ──
+echo ""
+echo "7. Honeypot rejection (POST /go/join)"
+HP=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"code":"px326g","name":"Bot","phone":"1234567890","hp":"http://spam"}' \
+  "$DEV/go/join")
+HP_URL=$(echo "$HP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('waUrl',''))" 2>/dev/null || echo "FAIL")
+if [ "$HP_URL" = "" ]; then
+  pass "Honeypot: fake success, no waUrl"
+else
+  fail "Honeypot: waUrl was returned (should be empty)"
+fi
+
 # ── Summary ──
 echo ""
 echo "======================================="

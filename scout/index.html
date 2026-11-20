@@ -9,8 +9,8 @@
 <script src="../assets/env.js?v=1"></script>
 <script src="../assets/scout-master-v1.js?v=20"></script>
 <script src="../assets/auth.js?v=19"></script>
-<script src="../assets/scout.js?v=54"></script>
-<script src="../assets/pipeline.js?v=33"></script>
+<script src="../assets/scout.js?v=55"></script>
+<script src="../assets/pipeline.js?v=34"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -1633,20 +1633,30 @@ function ccRender() {
     var totalRev = 0;
     ckins.forEach(function(c) { totalRev += parseFloat(c.revenueAdded) || 0; });
 
-    /* In play — real on day one. Leads times what one customer is worth.
-       Dropped entirely when economics is absent or its confidence is low,
-       because a money figure we are unsure of is worse than none. */
-    var acv = (econ && typeof econ.annualCustomerValue === 'number' && econ.confidence !== 'low')
-      ? econ.annualCustomerValue : null;
-    var inPlay = acv ? acv * s.leadsFound : null;
+    /* Projected this month — code-computed: 5 leads/day × 30 × 20% × avg sale value */
+    var _avgRaw = String(bd.avgTransaction || '');
+    var _avgNum = 0;
+    var _lm = _avgRaw.match(/([\d,]+(?:\.\d+)?)\s*(?:lakh|lac)/i);
+    if (_lm) { _avgNum = parseFloat(_lm[1].replace(/,/g, '')) * 100000; }
+    else { _lm = _avgRaw.match(/([\d,]+(?:\.\d+)?)\s*(?:crore|cr)/i);
+      if (_lm) { _avgNum = parseFloat(_lm[1].replace(/,/g, '')) * 10000000; }
+      else { _lm = _avgRaw.match(/[\d,]+(?:\.\d+)?/); if (_lm) _avgNum = parseFloat(_lm[0].replace(/,/g, '')) || 0; }
+    }
+    var _projected = _avgNum > 0 ? Math.round(5 * 30 * 0.20 * _avgNum) : 0;
+    function _fmtINR(n) {
+      if (!n || n <= 0) return '\u2014';
+      if (n >= 10000000) return '\u20B9' + (n / 10000000).toFixed(1).replace(/\.0$/, '') + ' Cr';
+      if (n >= 100000)   return '\u20B9' + (n / 100000).toFixed(1).replace(/\.0$/, '') + ' lakh';
+      return '\u20B9' + Math.round(n).toLocaleString('en-IN');
+    }
 
     var cards = [
-      { label: 'In play',
-        value: acv ? '\u20B9' + Math.round(acv * s.leadsFound).toLocaleString('en-IN') : '\u2014',
-        cls:   (acv && s.leadsFound > 0) ? ' gold' : ' dim',
-        sub:   !acv ? 'once Scout knows your customer value'
-             : s.leadsFound === 0 ? 'add leads and this fills up'
-             : s.leadsFound + ' leads at \u20B9' + Math.round(acv).toLocaleString('en-IN') + ' each' },
+      { label: 'Projected this month',
+        value: _projected > 0 ? _fmtINR(_projected) : '\u2014',
+        cls:   _projected > 0 ? ' gold' : ' dim',
+        sub:   _projected > 0
+             ? '5 leads/day \u00D7 30d \u00D7 20% \u00D7 \u20B9' + Math.round(_avgNum).toLocaleString('en-IN')
+             : 'once Scout knows your avg sale value' },
       { label: 'Money in',
         value: totalRev > 0 ? '₹' + Math.round(totalRev).toLocaleString('en-IN') : '—',
         cls:   totalRev > 0 ? '' : ' dim',
@@ -1655,7 +1665,7 @@ function ccRender() {
         value: String(s.joined),
         cls:   s.joined > 0 ? '' : ' dim',
         sub:   s.joined > 0 ? 'since you started' : 'none yet' },
-      { label: '12-week goal',
+      { label: '12-month goal',
         value: (econ && econ.targetCustomerCount) ? String(econ.targetCustomerCount) : '—',
         cls:   (econ && econ.targetCustomerCount) ? '' : ' dim',
         sub:   (econ && econ.currentCustomerCount) ? 'from ' + econ.currentCustomerCount + ' today' : 'your target' }

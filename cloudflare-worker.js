@@ -808,10 +808,10 @@ async function getOrCreateLeadLink(env, firmCode, leadId, destUrl) {
     ).bind(firmCode, leadId).first();
     if (existing) {
       var base = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
-      return base + '/go/' + existing.code + '?l=' + encodeURIComponent(leadId);
+      return base + '/go/' + existing.code;
     }
   } catch (e) {}
-  /* Create new tracked link */
+  /* Create new tracked link — lead_id stored in the row for attribution */
   var code = Array.from(crypto.getRandomValues(new Uint8Array(8))).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
   try {
     await env.DB.prepare(
@@ -819,7 +819,17 @@ async function getOrCreateLeadLink(env, firmCode, leadId, destUrl) {
     ).bind(firmCode, code, destUrl, leadId).run();
   } catch (e) { return ''; }
   var base = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
-  return base + '/go/' + code + '?l=' + encodeURIComponent(leadId);
+  return base + '/go/' + code;
+}
+
+/* Build a short intro line for a tracked link in the firm's language.
+   industry: INDUSTRIES key (e.g. 'food_service','retail')
+   lang: 'English','Hinglish','Hindi' etc.  */
+function linkIntroLine(industry, lang) {
+  var isFood = /food/i.test(industry || '');
+  if (lang === 'Hindi') return isFood ? 'हमारा मेन्यू देखें:' : 'हमें यहाँ देखें:';
+  if (lang === 'Hinglish') return isFood ? 'Hamara menu dekho:' : 'Hume yahan dekho:';
+  return isFood ? 'Our menu:' : 'See us here:';
 }
 
 /* Read setup state from D1 (one row per step + meta row).
@@ -2743,12 +2753,16 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
   /* Append tracked links if myLink is on */
   var _nlMyLink = await getFirmSetting(env, firmCode, 'myLink');
   if (_nlMyLink && _nlMyLink.on && _nlMyLink.url && env.DB) {
+    var _nlInd = await resolveIndustryForFirm(env, firmCode);
+    var _nlUser = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+    var _nlLang = (_nlUser && _nlUser.messageLanguage) || 'English';
+    var _nlIntro = linkIntroLine(_nlInd, _nlLang);
     for (var nli = 0; nli < newLeads.length; nli++) {
       var nl = newLeads[nli];
       if (nl.messages && nl.messages.first && nl.id) {
         var _nlGoUrl = await getOrCreateLeadLink(env, firmCode, nl.id, _nlMyLink.url);
         if (_nlGoUrl) {
-          nl.messages.first = nl.messages.first + '\n\n' + _nlGoUrl;
+          nl.messages.first = nl.messages.first + '\n\n' + _nlIntro + '\n' + _nlGoUrl;
           try {
             var _nlRow = await env.DB.prepare("SELECT data FROM customers WHERE firm_code = ? AND id = ?").bind(firmCode, nl.id).first();
             if (_nlRow && _nlRow.data) {
@@ -4420,6 +4434,11 @@ async function regenFoundMessages(env, firmCode, lang, ctx, opts) {
   });
 
   var _rfMyLink = await getFirmSetting(env, firmCode, 'myLink');
+  var _rfIntro = '';
+  if (_rfMyLink && _rfMyLink.on && _rfMyLink.url) {
+    var _rfInd = await resolveIndustryForFirm(env, firmCode);
+    _rfIntro = linkIntroLine(_rfInd, lang);
+  }
   for (var bi = 0; bi < allLeads.length; bi += 5) {
     var batch = allLeads.slice(bi, bi + 5);
     var withMsgs = await generateLeadMessages(env, batch, profile, context, lang, totalCost, city);
@@ -4430,7 +4449,7 @@ async function regenFoundMessages(env, firmCode, lang, ctx, opts) {
         /* Append tracked link if myLink is on */
         if (_rfMyLink && _rfMyLink.on && _rfMyLink.url && lead._rowId && lead.messages.first) {
           var _rfGoUrl = await getOrCreateLeadLink(env, firmCode, lead._rowId, _rfMyLink.url);
-          if (_rfGoUrl) lead.messages.first = lead.messages.first + '\n\n' + _rfGoUrl;
+          if (_rfGoUrl) lead.messages.first = lead.messages.first + '\n\n' + _rfIntro + '\n' + _rfGoUrl;
         }
         lead._data.messages = lead.messages;
         await env.DB.prepare(
@@ -4494,13 +4513,18 @@ async function regenBatch5(env, firmCode, lang, nonceKey, myNonce) {
 
   var withMsgs = await generateLeadMessages(env, allLeads, profile, context, lang, totalCost, city);
   var _rb5MyLink = await getFirmSetting(env, firmCode, 'myLink');
+  var _rb5Intro = '';
+  if (_rb5MyLink && _rb5MyLink.on && _rb5MyLink.url) {
+    var _rb5Ind = await resolveIndustryForFirm(env, firmCode);
+    _rb5Intro = linkIntroLine(_rb5Ind, lang);
+  }
   var updated = 0;
   for (var mi = 0; mi < withMsgs.length; mi++) {
     var lead = withMsgs[mi];
     if (lead.messages && lead._data) {
       if (_rb5MyLink && _rb5MyLink.on && _rb5MyLink.url && lead._rowId && lead.messages.first) {
         var _rb5GoUrl = await getOrCreateLeadLink(env, firmCode, lead._rowId, _rb5MyLink.url);
-        if (_rb5GoUrl) lead.messages.first = lead.messages.first + '\n\n' + _rb5GoUrl;
+        if (_rb5GoUrl) lead.messages.first = lead.messages.first + '\n\n' + _rb5Intro + '\n' + _rb5GoUrl;
       }
       lead._data.messages = lead.messages;
       await env.DB.prepare(
@@ -5154,12 +5178,16 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   /* Append tracked links to first_message when myLink is on */
   var _mlSetting = await getFirmSetting(env, firmCode, 'myLink');
   if (_mlSetting && _mlSetting.on && _mlSetting.url) {
+    var _mlInd = await resolveIndustryForFirm(env, firmCode);
+    var _mlUser = await env.G7_KV.get('auth:users:' + firmCode, 'json');
+    var _mlLang = (_mlUser && _mlUser.messageLanguage) || 'English';
+    var _mlIntro = linkIntroLine(_mlInd, _mlLang);
     for (var li = 0; li < savedLeads.length; li++) {
       var sl = savedLeads[li];
       if (sl.messages && sl.messages.first && sl.id) {
         var goUrl = await getOrCreateLeadLink(env, firmCode, sl.id, _mlSetting.url);
         if (goUrl) {
-          sl.messages.first = sl.messages.first + '\n\n' + goUrl;
+          sl.messages.first = sl.messages.first + '\n\n' + _mlIntro + '\n' + goUrl;
           /* Update D1 too */
           try {
             var _mld = await env.DB.prepare("SELECT data FROM customers WHERE firm_code = ? AND id = ?").bind(firmCode, sl.id).first();
@@ -6117,6 +6145,124 @@ export default {
       return jsonResponse({ status: 'G7 Proxy is running' });
     }
 
+    // ── GET /go/info — public: get business info for a tracked link code ──
+    if (request.method === 'GET' && path === '/go/info') {
+      var _giCode = url.searchParams.get('g') || '';
+      if (!_giCode || _giCode.length > 40) return jsonResponse({ error: 'invalid code' }, 400);
+      var _giLink = null;
+      if (env.DB) {
+        try {
+          _giLink = await env.DB.prepare(
+            "SELECT firm_code, kind, url FROM tracked_links WHERE code = ?"
+          ).bind(_giCode).first();
+        } catch (e) {}
+      }
+      if (!_giLink) return jsonResponse({ error: 'not found' }, 404);
+      var _giFirm = _giLink.firm_code;
+      var _giBizName = '';
+      var _giOffer = '';
+      var _giPhone = '';
+      var _giSource = '';
+      var _giState = await loadScoutState(env, _giFirm);
+      if (_giState) {
+        var _giPend = _giState.pick('scout_pending_result') || {};
+        if (typeof _giPend === 'string') try { _giPend = JSON.parse(_giPend); } catch(e) { _giPend = {}; }
+        var _giBd = _giPend.businessData || {};
+        _giBizName = _giBd.businessName || '';
+        _giPhone = _giBd.businessPhone || '';
+      }
+      if (!_giBizName) {
+        try {
+          var _giProfile = await getFirmSetting(env, _giFirm, 'leadprofile');
+          if (_giProfile && _giProfile.ownName) _giBizName = _giProfile.ownName;
+        } catch (e) {}
+      }
+      try {
+        var _giRegCode = await env.G7_KV.get('regular:firm:' + _giFirm);
+        if (_giRegCode) {
+          var _giReg = await env.G7_KV.get('regular:code:' + _giRegCode, 'json');
+          if (_giReg && _giReg.offerText) _giOffer = _giReg.offerText;
+        }
+      } catch (e) {}
+      try {
+        var _giKvLink = await env.G7_KV.get('scout:inbound:link:' + _giCode, 'json');
+        if (_giKvLink) _giSource = _giKvLink.source || '';
+      } catch (e) {}
+      return jsonResponse({
+        businessName: _giBizName, offer: _giOffer, phone: _giPhone,
+        source: _giSource, firm: _giFirm
+      });
+    }
+
+    // ── POST /go/join — public: customer joins from landing page ──
+    if (request.method === 'POST' && path === '/go/join') {
+      var _gjBody;
+      try { _gjBody = await request.json(); } catch { return jsonResponse({ error: 'Invalid request' }, 400); }
+      var _gjCode = String(_gjBody.code || '').trim();
+      var _gjName = String(_gjBody.name || '').trim().slice(0, 100);
+      var _gjPhone = String(_gjBody.phone || '').replace(/[\s\-\(\)]/g, '').trim();
+      var _gjHp = String(_gjBody.hp || '');
+      if (_gjHp) return jsonResponse({ ok: true, waUrl: '' });
+      if (!_gjCode || _gjCode.length > 40) return jsonResponse({ error: 'Invalid link code' }, 400);
+      if (!_gjName) return jsonResponse({ error: 'Name is required' }, 400);
+      if (!_gjPhone || _gjPhone.replace(/\D/g, '').length < 10) return jsonResponse({ error: 'Valid phone number required' }, 400);
+      var _gjIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      var _gjDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      var _gjRateKey = 'link:join:' + _gjIp + ':' + _gjDay;
+      var _gjRateRaw = await env.G7_KV.get(_gjRateKey);
+      var _gjRate = _gjRateRaw ? parseInt(_gjRateRaw, 10) : 0;
+      if (_gjRate >= 5) return jsonResponse({ error: 'Too many requests today. Try again tomorrow.' }, 429);
+      await kvPut(env, _gjRateKey, String(_gjRate + 1), { expirationTtl: 86400 });
+      var _gjLink = null;
+      if (env.DB) {
+        try {
+          _gjLink = await env.DB.prepare(
+            "SELECT firm_code, kind, url FROM tracked_links WHERE code = ?"
+          ).bind(_gjCode).first();
+        } catch (e) {}
+      }
+      if (!_gjLink) return jsonResponse({ error: 'Link not found' }, 404);
+      var _gjFirm = _gjLink.firm_code;
+      var _gjSource = 'link';
+      try {
+        var _gjKvLink = await env.G7_KV.get('scout:inbound:link:' + _gjCode, 'json');
+        if (_gjKvLink && _gjKvLink.source) _gjSource = 'link:' + _gjKvLink.source;
+      } catch (e) {}
+      var _gjCleanPhone = _gjPhone.replace(/\D/g, '');
+      if (_gjCleanPhone.length === 10) _gjCleanPhone = '91' + _gjCleanPhone;
+      var _gjLeadId = 'link_' + _gjCode + '_' + Date.now().toString(36);
+      var _gjNow = new Date().toISOString();
+      try {
+        await env.DB.prepare(
+          "INSERT INTO customers (firm_code, id, name, phone, kind, stage, source, value, data, created_at, updated_at) VALUES (?, ?, ?, ?, 'lead', 'replied', ?, 0, ?, ?, ?)"
+        ).bind(_gjFirm, _gjLeadId, _gjName, _gjCleanPhone, _gjSource, '{}', _gjNow, _gjNow).run();
+      } catch (e) {
+        return jsonResponse({ error: 'Could not save. Please try again.' }, 500);
+      }
+      try {
+        await env.DB.prepare(
+          "INSERT INTO customer_events (firm_code, customer_id, type, note, at) VALUES (?, ?, 'link_joined', ?, datetime('now'))"
+        ).bind(_gjFirm, _gjLeadId, 'Joined via ' + _gjSource + ' link').run();
+      } catch (e) {}
+      var _gjWaUrl = '';
+      if (_gjLink.url && _gjLink.url.indexOf('wa.me') !== -1) {
+        _gjWaUrl = _gjLink.url;
+      } else {
+        try {
+          var _gjState = await loadScoutState(env, _gjFirm);
+          if (_gjState) {
+            var _gjPend = _gjState.pick('scout_pending_result') || {};
+            if (typeof _gjPend === 'string') try { _gjPend = JSON.parse(_gjPend); } catch(e) { _gjPend = {}; }
+            var _gjBd = _gjPend.businessData || {};
+            var _gjBizPhone = (_gjBd.businessPhone || '').replace(/\D/g, '');
+            if (_gjBizPhone.length === 10) _gjBizPhone = '91' + _gjBizPhone;
+            if (_gjBizPhone) _gjWaUrl = 'https://wa.me/' + _gjBizPhone;
+          }
+        } catch (e) {}
+      }
+      return jsonResponse({ ok: true, waUrl: _gjWaUrl, leadId: _gjLeadId });
+    }
+
     // ── GET /go/{code} — tracked link redirect ────────────────────────────────
     // Logs the tap in D1 and redirects (302). Filters bot/preview user agents.
     if ((request.method === 'GET' || request.method === 'HEAD') && path.startsWith('/go/')) {
@@ -6188,6 +6334,16 @@ export default {
             } catch (e) {}
           }
         }
+      }
+
+      /* Inbound links (bio/google/status) → landing page instead of direct redirect */
+      if (_goLink.kind === 'inbound') {
+        var _goLandingUrl = (env.SITE_URL || 'https://gsevnservices.github.io/G7-Capital') +
+          '/scout/link.html?g=' + encodeURIComponent(_goCode);
+        return new Response(null, {
+          status: 302,
+          headers: { 'Location': _goLandingUrl, 'Cache-Control': 'no-store' }
+        });
       }
 
       /* 302 redirect */
@@ -7435,9 +7591,11 @@ export default {
             output_tokens: _logData.output_tokens
           }));
 
-          /* Record cost from the stream's final usage. */
+          /* Record cost from the stream's final usage.
+             Analysis is exempt from the firm daily budget — flush to ANALYSIS bucket
+             so it doesn't eat into Ask Scout / other daily limits. */
           recordCost(cost, 'claude-sonnet-5-5', { usage: { input_tokens: _logData.input_tokens || 0, output_tokens: _logData.output_tokens || 0 } });
-          ctx.waitUntil(flushCost(env, new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10), session.firmCode, cost));
+          ctx.waitUntil(flushCost(env, new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10), 'ANALYSIS', cost));
 
           /* Detect incomplete streams — alert admin */
           if (_logData.stop_reason !== 'end_turn') {
@@ -7528,8 +7686,11 @@ export default {
       var _bcB = await budgetCheck(env, _istBrief, session.firmCode);
       if (!_bcB.ok) {
         ctx.waitUntil(sendBudgetEmail(env, _istBrief, session.firmCode, _bcB.firmSpent, _bcB.cap));
-        return limitResponse('ask', _fgB.plan, _fgB.used, _fgB.limit, 'day',
-          "You\u2019ve reached today\u2019s limit \u2014 back tomorrow.", 'budget');
+        return jsonResponse({
+          error: 'limit', reason: 'budget', message: "Scout\u2019s daily budget is used up \u2014 resets at midnight.",
+          feature: 'ask', plan: _fgB.plan, period: 'day', resetsAt: _istMidnight(),
+          used: _fgB.used, limit: _fgB.limit, paidLimit: (PAID_LIMITS.ask || {}).limit || null
+        }, 402);
       }
       await featureIncrement(env, _fgB);
       var cost = newCostAccum();
@@ -10063,6 +10224,20 @@ export default {
             clicks[source] = raw ? parseInt(raw, 10) : 0;
           }));
 
+          /* Ensure D1 tracked_links rows exist for existing links */
+          if (env.DB) {
+            try {
+              var _waUrl = 'https://wa.me/' + waNumber + '?text=' + encodeURIComponent(message);
+              await Promise.all(sources.map(function(source) {
+                var c = existing[source];
+                if (!c) return;
+                return env.DB.prepare(
+                  "INSERT OR IGNORE INTO tracked_links (firm_code, code, kind, url) VALUES (?, ?, 'inbound', ?)"
+                ).bind(firmCode, c, _waUrl).run();
+              }));
+            } catch (e) {}
+          }
+
           return jsonResponse({ links: existing, clicks });
         }
 
@@ -10081,7 +10256,8 @@ export default {
           codes[source] = code;
         }
 
-        // Write all link records + the index in parallel
+        // Write all link records + the index in parallel (KV)
+        var _waUrl = 'https://wa.me/' + waNumber + '?text=' + encodeURIComponent(message);
         await Promise.all([
           ...sources.map(source =>
             kvPut(env,
@@ -10091,6 +10267,17 @@ export default {
           ),
           kvPut(env,linksKey, JSON.stringify(codes))
         ]);
+
+        // Also create D1 tracked_links rows (kind='inbound')
+        if (env.DB) {
+          try {
+            await Promise.all(sources.map(function(source) {
+              return env.DB.prepare(
+                "INSERT OR IGNORE INTO tracked_links (firm_code, code, kind, url) VALUES (?, ?, 'inbound', ?)"
+              ).bind(firmCode, codes[source], _waUrl).run();
+            }));
+          } catch (e) {}
+        }
 
         return jsonResponse({
           links:  codes,
@@ -10139,45 +10326,27 @@ export default {
 
     // =========================================================================
     // ROUTE B — GET /i/{CODE}
-    // Public inbound link redirect. No session required — a real customer taps
-    // this link on their phone.
-    //
-    // Flow:
-    //   1. Look up scout:inbound:link:{CODE}
-    //   2. If not found: return 404 as plain text (not JSON — a human may see it)
-    //   3. Increment the per-source click counter (fire-and-forget)
-    //   4. 302-redirect to https://wa.me/{waNumber}?text={encodedMessage}
-    //
-    // CORS: intentionally NOT applied. This is a browser navigation (not a JS
-    // fetch from another origin), so CORS headers are irrelevant. The global
-    // OPTIONS handler above is harmless but will never be triggered by a tap.
+    // Legacy inbound link — redirects to /go/{code} which now handles
+    // the landing page flow for inbound links.
+    // Kept for backward compatibility with links already in bio/status.
     // =========================================================================
     if (request.method === 'GET' && path.startsWith('/i/') && path.length > 3) {
-      const code = path.slice(3); // strip '/i/' prefix
+      var _iCode = path.slice(3);
+      var _iBase = env.WORKER_URL || 'https://g7-proxy-dev.gsevnservices.workers.dev';
 
-      const link = await env.G7_KV.get('scout:inbound:link:' + code, 'json');
-      if (!link) {
-        return new Response('Link not found.', {
-          status:  404,
-          headers: { 'Content-Type': 'text/plain' }
-        });
+      /* Increment legacy KV click counter for existing stats continuity */
+      var _iLink = await env.G7_KV.get('scout:inbound:link:' + _iCode, 'json');
+      if (_iLink) {
+        var _iClickKey = 'scout:inbound:' + _iLink.firmCode + ':' + _iLink.source + ':clicks';
+        var _iClickRaw = await env.G7_KV.get(_iClickKey);
+        var _iClicks = _iClickRaw ? parseInt(_iClickRaw, 10) : 0;
+        ctx.waitUntil(kvPut(env, _iClickKey, String(_iClicks + 1)));
       }
 
-      // Increment click counter after the redirect is sent.
-      // ctx.waitUntil() keeps the KV write alive after the 302 response is returned —
-      // without it the Worker is terminated immediately on redirect and the write is lost.
-      const clickKey = 'scout:inbound:' + link.firmCode + ':' + link.source + ':clicks';
-      const clickRaw = await env.G7_KV.get(clickKey);
-      const clicks   = clickRaw ? parseInt(clickRaw, 10) : 0;
-      ctx.waitUntil(kvPut(env,clickKey, String(clicks + 1)));
-
-      // Build wa.me URL and redirect
-      const waUrl = 'https://wa.me/' + link.waNumber +
-                    '?text=' + encodeURIComponent(link.message);
-
+      /* 301 permanent redirect to /go/ equivalent */
       return new Response(null, {
-        status:  302,
-        headers: { 'Location': waUrl }
+        status:  301,
+        headers: { 'Location': _iBase + '/go/' + _iCode, 'Cache-Control': 'no-store' }
       });
     }
 
