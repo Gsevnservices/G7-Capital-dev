@@ -382,7 +382,9 @@ const COST_TABLE = {
    each request or cron firm-run; pass it explicitly through every function
    that calls Anthropic; flush it once at the end. */
 function newCostAccum() {
-  return { calls: 0, usd: 0, web_search_requests: 0, input_tokens: 0, output_tokens: 0, log: [] };
+  return { calls: 0, usd: 0, web_search_requests: 0, input_tokens: 0, output_tokens: 0, log: [],
+    /* per-source breakdown (USD) */
+    src: { haiku: 0, sonnet: 0, places_text: 0, places_details: 0 } };
 }
 
 /* Record one Anthropic call's usage into the given accumulator. */
@@ -399,6 +401,11 @@ function recordCost(cost, model, data) {
   var t = COST_TABLE[model] || COST_TABLE['claude-sonnet-5-5'];
   var callUsd = (inp / 1e6) * t.input + (out / 1e6) * t.output + srch * t.search;
   cost.usd += callUsd;
+  /* Bucket into per-source breakdown */
+  if (cost.src) {
+    if (/haiku/i.test(model)) cost.src.haiku += callUsd;
+    else cost.src.sonnet += callUsd;
+  }
   if (cost.log) cost.log.push({ model: model, input: inp, output: out, search: srch, usd: callUsd });
 }
 
@@ -411,9 +418,20 @@ async function flushCost(env, day, firmCode, cost) {
   var totalKey = 'cost:' + day + ':total';
   var prev = parseFloat(await env.G7_KV.get(firmKey) || '0');
   var prevTotal = parseFloat(await env.G7_KV.get(totalKey) || '0');
+  /* Store per-source breakdown alongside the total */
+  var breakdownKey = 'cost:' + day + ':' + firmCode + ':src';
+  var prevSrc = (await env.G7_KV.get(breakdownKey, 'json')) || { haiku: 0, sonnet: 0, places_text: 0, places_details: 0 };
+  var src = cost.src || { haiku: 0, sonnet: 0, places_text: 0, places_details: 0 };
+  var mergedSrc = {
+    haiku: (prevSrc.haiku || 0) + src.haiku,
+    sonnet: (prevSrc.sonnet || 0) + src.sonnet,
+    places_text: (prevSrc.places_text || 0) + src.places_text,
+    places_details: (prevSrc.places_details || 0) + src.places_details
+  };
   await Promise.all([
     kvPut(env, firmKey, String(prev + amt), { expirationTtl: 259200 }),
-    kvPut(env, totalKey, String(prevTotal + amt), { expirationTtl: 259200 })
+    kvPut(env, totalKey, String(prevTotal + amt), { expirationTtl: 259200 }),
+    kvPut(env, breakdownKey, JSON.stringify(mergedSrc), { expirationTtl: 259200 })
   ]);
   return amt;
 }
@@ -2835,7 +2853,7 @@ function isCreatorEligible(profile, context) {
 /* Find up to 3 local creators via Anthropic web search.
    Only returns creators with a public contact (business email or contact link). */
 async function findLocalCreators(env, firmCode, profile, city, lang, cost) {
-  var businessName = profile.ownName || profile.businessName || '';
+  var businessName = cleanBusinessName(profile.ownName) || profile.businessName || '';
   var businessType = profile.ownPrimaryType || '';
 
   /* Build a niche keyword from the business type */
@@ -3555,7 +3573,7 @@ async function runCompetitorSnapshot(env, firmCode, profile, searchResults, cost
     /* Haiku: find common complaint → your angle */
     if (allCompReviews.length > 20) {
       try {
-        var cPrompt = 'These are recent customer reviews for competing businesses near ' + (profile.ownName || 'the owner\'s business') + ':\n\n' +
+        var cPrompt = 'These are recent customer reviews for competing businesses near ' + (cleanBusinessName(profile.ownName) || 'the owner\'s business') + ':\n\n' +
           allCompReviews.slice(0, 4000) + '\n\n' +
           'What is the single most common customer complaint across these competitors? ' +
           'Then turn it into a one-line competitive angle for the owner, e.g. "Competitors get complaints about slow service — highlight your fast turnaround."\n\n' +
@@ -4019,13 +4037,32 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   return profile;
 }
 
+/* ── Strip Google SEO filler from a business name.
+     Cuts at the first |, – (en-dash), or - (hyphen) when followed by
+     location or superlative filler (Best …, Top …, No.1 …, #1 …,
+     city names, "near me", etc.).  Also trims trailing commas/whitespace.
+     "Brew & Bloom Café"                       → "Brew & Bloom Café"
+     "Reset Life Gym Koramangala| Best gym …"  → "Reset Life Gym Koramangala"
+     "Alpha Fitness - Top Gym in HSR Layout"   → "Alpha Fitness"              */
+function cleanBusinessName(raw) {
+  if (!raw) return '';
+  /* Split on |, – (en-dash), or - surrounded by space */
+  var s = String(raw).split(/\s*[|–]\s*|\s+-\s+/)[0].trim();
+  /* Remove trailing comma + city-style suffix: ", Koramangala" */
+  s = s.replace(/,\s*(Best|Top|No\.\s*1|#1|Near|Premium)\b.*$/i, '').trim();
+  return s || raw;
+}
+
 /* ── Extract the business display name from profile + context.
-     Fallback chain: profile.ownName → first line of context → 'our business'. */
+     Fallback chain: manual override → profile.ownName → first line of context → ''.
+     Always cleaned of SEO filler. */
 function resolveBusinessName(profile, context) {
-  if (profile && profile.ownName) return profile.ownName;
+  /* Manual override stored in profile.shortName */
+  if (profile && profile.shortName) return profile.shortName;
+  if (profile && profile.ownName) return cleanBusinessName(profile.ownName);
   if (context) {
     var m = context.match(/^BUSINESS:\s*(.+?)(?:\s*\||\n)/);
-    if (m) return m[1].trim();
+    if (m) return cleanBusinessName(m[1].trim());
   }
   return '';
 }
@@ -5292,6 +5329,11 @@ function recordPlacesCost(cost, textSearchCalls, detailsCalls) {
   var ts = textSearchCalls || 0, dc = detailsCalls || 0;
   var placesUsd = ts * PLACES_TEXT_SEARCH_COST + dc * PLACES_DETAILS_COST;
   cost.usd += placesUsd;
+  /* Per-source breakdown */
+  if (cost.src) {
+    cost.src.places_text += ts * PLACES_TEXT_SEARCH_COST;
+    cost.src.places_details += dc * PLACES_DETAILS_COST;
+  }
   if (cost.log) {
     if (ts > 0) cost.log.push({ model: 'places-text-search', calls: ts, usd: ts * PLACES_TEXT_SEARCH_COST });
     if (dc > 0) cost.log.push({ model: 'places-details', calls: dc, usd: dc * PLACES_DETAILS_COST });
@@ -6211,7 +6253,7 @@ export default {
       if (!_giBizName) {
         try {
           var _giProfile = await getFirmSetting(env, _giFirm, 'leadprofile');
-          if (_giProfile && _giProfile.ownName) _giBizName = _giProfile.ownName;
+          if (_giProfile && _giProfile.ownName) _giBizName = cleanBusinessName(_giProfile.ownName);
         } catch (e) {}
       }
       try {
@@ -9148,7 +9190,7 @@ export default {
 
       /* Load or create opaque code */
       var _rsProfile = await getLeadProfile(env, _rsSess.firmCode);
-      var _rsBizName = (_rsProfile && _rsProfile.ownName) || _rsSess.firmCode;
+      var _rsBizName = (_rsProfile && cleanBusinessName(_rsProfile.ownName)) || _rsSess.firmCode;
 
       var _rsCodeKey = 'scout:regulars:code:' + _rsSess.firmCode;
       var _rsExistingCode = await env.G7_KV.get(_rsCodeKey);
@@ -9247,7 +9289,7 @@ export default {
 
       var _rbName = String(_rbBody.name || 'friend').slice(0, 80);
       var _rbProfile = await getLeadProfile(env, _rbSess.firmCode);
-      var _rbBizName = (_rbProfile && _rbProfile.ownName) || '';
+      var _rbBizName = (_rbProfile && cleanBusinessName(_rbProfile.ownName)) || '';
       var _rbOffer = (_rbProfile && _rbProfile.regularsConfig && _rbProfile.regularsConfig.offerText) || '';
 
       var _rbLang = 'Hinglish';
