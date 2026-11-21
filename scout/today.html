@@ -660,8 +660,12 @@ function renderLeads(leads, containerId) {
     if (_ptLabel) html += '<span class="lead-pt">' + esc(_ptLabel) + '</span> ';
     html += '\u201C' + esc(_fr) + '\u201D</div>';
 
-    /* Editable message */
-    html += '<div class="lead-msg" contenteditable="true" id="msg-' + esc(l.id) + '">' + esc(msg) + '</div>';
+    /* Editable message — show placeholder when empty */
+    if (msg) {
+      html += '<div class="lead-msg" contenteditable="true" id="msg-' + esc(l.id) + '">' + esc(msg) + '</div>';
+    } else {
+      html += '<div class="lead-msg lead-msg-pending" id="msg-' + esc(l.id) + '"><span style="color:var(--grey2);font-style:italic">Writing message\u2026</span></div>';
+    }
 
     /* Channel buttons */
     html += '<div class="ch-btns">';
