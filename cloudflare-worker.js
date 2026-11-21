@@ -294,9 +294,11 @@ function resolveIndustry(businessType, sells) {
    Cached in its own KV key scout:industry:{FIRM} (no TTL) so it's computed once.
    Uses loadScoutState + st.pick() like the rest of the worker. */
 async function resolveIndustryForFirm(env, firmCode) {
-  /* Check dedicated KV key first. */
+  /* Check dedicated KV key first.
+     Skip cache if the value is the default fallback 'services_trade' —
+     it may have been set before the analysis ran and filled businessType. */
   var cached = await env.G7_KV.get('scout:industry:' + firmCode);
-  if (cached && INDUSTRIES[cached]) return cached;
+  if (cached && INDUSTRIES[cached] && cached !== 'services_trade') return cached;
   /* Resolve from businessType / businessTypeInput / sells. */
   var st = await loadScoutState(env, firmCode);
   if (!st) return 'services_trade';
@@ -449,7 +451,7 @@ async function budgetCheck(env, day, firmCode, opts) {
   var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
   var plan = (user && user.plan) ? user.plan : 'free';
   var firmCap = plan === 'free'
-    ? parseFloat(env.COST_CAP_FIRM_FREE || '0.20')
+    ? parseFloat(env.COST_CAP_FIRM_FREE || '0.35')
     : parseFloat(env.COST_CAP_FIRM || '0.50');
   var firmSpent = parseFloat(await env.G7_KV.get('cost:' + day + ':' + firmCode) || '0');
   if (firmSpent >= firmCap) {
@@ -1464,7 +1466,7 @@ async function loadCustomersForFirm(env, firmCode) {
       var flag = await env.G7_KV.get('cust:migrated:' + firmCode);
       if (flag) {
         var rows = await env.DB.prepare(
-          'SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL ORDER BY updated_at DESC'
+          "SELECT * FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) ORDER BY updated_at DESC"
         ).bind(firmCode).all();
         var people = (rows.results || []).map(function(r) {
           var obj = {};
@@ -2221,7 +2223,7 @@ async function sendWeeklyEmail(env, firmCode, opts) {
   try {
     /* Found: customers created this week via places source */
     var foundR = await env.DB.prepare(
-      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND created_at >= ? AND created_at < ?"
+      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) AND created_at >= ? AND created_at < ?"
     ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').first();
     stats.found = (foundR && foundR.c) || 0;
 
@@ -2245,7 +2247,7 @@ async function sendWeeklyEmail(env, firmCode, opts) {
 
     /* Previous week for comparison */
     var prevFoundR = await env.DB.prepare(
-      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND created_at >= ? AND created_at < ?"
+      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) AND created_at >= ? AND created_at < ?"
     ).bind(firmCode, prevStart + 'T00:00:00Z', prevEndExcl + 'T00:00:00Z').first();
     prevStats.found = (prevFoundR && prevFoundR.c) || 0;
 
@@ -2267,7 +2269,8 @@ async function sendWeeklyEmail(env, firmCode, opts) {
     /* Top wins/replies this week (up to 3) */
     var winsR = await env.DB.prepare(
       "SELECT c.name FROM customers c INNER JOIN customer_events e ON c.firm_code = e.firm_code AND c.id = e.customer_id " +
-      "WHERE c.firm_code = ? AND e.type = 'stage_change' AND (e.to_stage = 'won' OR e.to_stage = 'replied') " +
+      "WHERE c.firm_code = ? AND c.deleted_at IS NULL AND (json_extract(c.data, '$.test') IS NULL OR json_extract(c.data, '$.test') != 1) " +
+      "AND e.type = 'stage_change' AND (e.to_stage = 'won' OR e.to_stage = 'replied') " +
       "AND e.at >= ? AND e.at < ? ORDER BY CASE WHEN e.to_stage = 'won' THEN 0 ELSE 1 END, e.at DESC LIMIT 3"
     ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').all();
     topWins = ((winsR && winsR.results) || []).map(function(r) { return r.name; });
@@ -4391,6 +4394,12 @@ async function generateLeadMessages(env, leads, profile, businessContext, lang, 
   var msgMap = {};
   (Array.isArray(msgs) ? msgs : []).forEach(function(m) { if (m && typeof m.idx === 'number') msgMap[m.idx] = m; });
 
+  /* If parse produced nothing usable, throw so the caller can handle the
+     failure instead of silently saving leads with blank messages. */
+  if (Object.keys(msgMap).length === 0) {
+    throw new Error('generateLeadMessages: Haiku returned no parseable messages');
+  }
+
   for (var i = 0; i < leads.length; i++) {
     var m = msgMap[i + 1] || {};
     leads[i].messages = {
@@ -4492,7 +4501,7 @@ async function regenBatch5(env, firmCode, lang, nonceKey, myNonce) {
 
   /* Find leads whose messages.lang != target lang (or have no messages at all) */
   var rows = await env.DB.prepare(
-    "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.messages.lang') IS NULL OR json_extract(data, '$.messages.lang') != ?) LIMIT 40"
+    "SELECT id, name, phone, data FROM customers WHERE firm_code = ? AND stage = 'found' AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.messages.lang') IS NULL OR json_extract(data, '$.messages.lang') != ? OR json_extract(data, '$.messages.first') IS NULL OR json_extract(data, '$.messages.first') = '') LIMIT 40"
   ).bind(firmCode, lang).all();
   if (!rows.results || rows.results.length === 0) return { ok: true, updated: 0, remaining: 0 };
 
@@ -7696,6 +7705,50 @@ export default {
       await featureIncrement(env, _fgB);
       var cost = newCostAccum();
 
+      /* ── Inject verified D1 counts into the conversation ──
+         Query real pipeline numbers so the AI never hallucinates stats. */
+      var _bfMsgs = body.messages || [];
+      if (env.DB) {
+        try {
+          var _bfDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+          var _bfWeekAgo = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
+          var _bfCounts = await env.DB.prepare(
+            "SELECT stage, COUNT(*) as c FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) GROUP BY stage"
+          ).bind(session.firmCode).all();
+          var _bfByStage = {};
+          ((_bfCounts && _bfCounts.results) || []).forEach(function(r) { _bfByStage[r.stage] = r.c; });
+
+          var _bfNewToday = await env.DB.prepare(
+            "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND json_extract(data, '$.lead_day') = ? AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1)"
+          ).bind(session.firmCode, _bfDay).first();
+
+          var _bfLinkOpened = await env.DB.prepare(
+            "SELECT COUNT(DISTINCT customer_id) as c FROM customer_events WHERE firm_code = ? AND type = 'link_opened' AND at >= ?"
+          ).bind(session.firmCode, _bfWeekAgo + 'T00:00:00Z').first();
+
+          var _bfRecentNames = await env.DB.prepare(
+            "SELECT name, stage FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND stage IN ('contacted','replied','won') AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) ORDER BY updated_at DESC LIMIT 10"
+          ).bind(session.firmCode).all();
+          var _bfNames = ((_bfRecentNames && _bfRecentNames.results) || []).map(function(r) { return r.name + ' (' + r.stage + ')'; });
+
+          var _bfData = 'VERIFIED DATA FROM DATABASE (use ONLY these numbers, never invent others):\n' +
+            'New leads today: ' + ((_bfNewToday && _bfNewToday.c) || 0) + '\n' +
+            'Total found (uncontacted): ' + (_bfByStage.found || 0) + '\n' +
+            'Contacted (message sent): ' + (_bfByStage.contacted || 0) + '\n' +
+            'Replied: ' + (_bfByStage.replied || 0) + '\n' +
+            'Won (converted): ' + (_bfByStage.won || 0) + '\n' +
+            'Expired: ' + (_bfByStage.expired || 0) + '\n' +
+            'Opened your link (last 7 days): ' + ((_bfLinkOpened && _bfLinkOpened.c) || 0) + '\n' +
+            'Recent names: ' + (_bfNames.length > 0 ? _bfNames.join(', ') : 'none') + '\n' +
+            'RULE: State only these numbers. If a count is 0, do not mention that category.';
+
+          /* Prepend as a system-role context block before the user messages */
+          _bfMsgs = [{ role: 'user', content: _bfData }, { role: 'assistant', content: 'Understood. I will only use the verified database numbers above.' }].concat(_bfMsgs);
+        } catch (e) {
+          /* If D1 fails, proceed without injected data — the frontend state is still present */
+        }
+      }
+
       const anthropicResponse = await anthropicFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -7708,7 +7761,7 @@ export default {
           max_tokens: 6000,
           thinking:   { type: 'between_tools' },
           stream:     false,
-          messages:   body.messages || []
+          messages:   _bfMsgs
         })
       }, 'briefing');
 
