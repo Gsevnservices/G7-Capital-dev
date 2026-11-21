@@ -10545,6 +10545,68 @@ export default {
     report.state = 'running';
     await kvPut(env,'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
 
+    /* ── DEV-ONLY: email-only cron ──
+       On dev, skip news, digest, creators, rank, expire, error digest.
+       Only run: lead generation + morning email + weekly email
+       for firms whose morningEmail is on. No time-of-day gate. */
+    if (env.ENVIRONMENT === 'dev') {
+      var _devMeSlot = String(ist.getHours()).padStart(2, '0') + ':' + (ist.getMinutes() < 30 ? '00' : '30');
+      var _devLeadReport = [];
+      var _devMeReport = [];
+      var _devWeReport = [];
+      var _devCursor;
+      do {
+        var _devPage = await env.G7_KV.list({ prefix: 'scout:leadprofile:', cursor: _devCursor });
+        for (var _dk of _devPage.keys) {
+          if (_dk.name.indexOf(':src:') !== -1) continue;
+          var _dFirm = _dk.name.slice('scout:leadprofile:'.length);
+          if (!_dFirm) continue;
+          /* Check morningEmail is on and slot matches */
+          var _dMePref = await getFirmSetting(env, _dFirm, 'morningEmail');
+          if (!_dMePref) _dMePref = { on: true, time: '08:00' };
+          if (!_dMePref.on) { _devMeReport.push({ firm: _dFirm, status: 'email_off' }); continue; }
+          if (_dMePref.time !== _devMeSlot) { _devMeReport.push({ firm: _dFirm, status: 'not_this_slot', slot: _dMePref.time, cronSlot: _devMeSlot }); continue; }
+          /* Lead generation (needed for morning email content) */
+          var _dlt0 = Date.now();
+          var _dlCost = newCostAccum();
+          try {
+            var _dlResult = await runLeadsForFirm(env, _dFirm, day, _dlCost);
+            await flushCost(env, day, _dFirm, _dlCost);
+            _devLeadReport.push({ firm: _dFirm, status: _dlResult.status, found: _dlResult.found || 0, ms: Date.now() - _dlt0 });
+          } catch (e) {
+            await flushCost(env, day, _dFirm, _dlCost);
+            _devLeadReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200), ms: Date.now() - _dlt0 });
+          }
+          /* Morning email */
+          try {
+            var _dMeResult = await sendMorningLeadsEmail(env, _dFirm, day);
+            _devMeReport.push({ firm: _dFirm, status: _dMeResult.status, leadCount: _dMeResult.leadCount, followUpCount: _dMeResult.followUpCount, resendId: _dMeResult.resendId || null });
+          } catch (e) {
+            _devMeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
+          }
+          /* Weekly email (every day on dev, not just Monday) */
+          try {
+            var _dWeResult = await sendWeeklyEmail(env, _dFirm, {});
+            _devWeReport.push({ firm: _dFirm, status: _dWeResult.status, resendId: _dWeResult.resendId || null });
+          } catch (e) {
+            _devWeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
+          }
+        }
+        _devCursor = _devPage.list_complete ? undefined : _devPage.cursor;
+      } while (_devCursor);
+      report.leads = _devLeadReport;
+      report.morningEmail = _devMeReport;
+      report.weeklyEmail = _devWeReport;
+      report.devOnly = true;
+      report.slot = _devMeSlot;
+      report.state = 'done';
+      delete report.current;
+      report.finishedAt = new Date().toISOString();
+      console.log(JSON.stringify({ cron: report }));
+      await kvPut(env, 'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
+      return;
+    }
+
     /* B6: Pre-generate shared categories + industry news.
        Scan active firms to collect needed categories and industries. */
     var _neededCats = new Set();

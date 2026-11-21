@@ -43,15 +43,15 @@ crons = ["*/30 * * * *"]
 
 
 # ═══════════════════════════════════════════════════════════════
-# Dev environment — completely isolated KV, no cron
+# Dev environment — isolated KV, email-only cron
 # ═══════════════════════════════════════════════════════════════
 [env.dev]
 name = "g7-proxy-dev"
 minify = true
 
-# No cron on dev — trigger manually via admin
+# Dev cron: every 30 min — email-only (no news, digest, creators, rank)
 [env.dev.triggers]
-crons = []
+crons = ["*/30 * * * *"]
 
 [env.dev.placement]
 mode = "smart"
