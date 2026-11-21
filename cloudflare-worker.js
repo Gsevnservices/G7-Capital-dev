@@ -5114,8 +5114,36 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
              shortfall: shortfallReasons };
   }
 
-  /* Generate messages */
-  picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost, city);
+  /* Generate messages — retry once on total failure, never discard paid leads */
+  try {
+    picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost, city);
+  } catch (_msgErr1) {
+    /* First attempt failed — retry once */
+    try {
+      picked = await generateLeadMessages(env, picked, profileJson, context, lang, cost, city);
+    } catch (_msgErr2) {
+      /* Both attempts failed — save leads with empty messages.
+         The regen batch will fill them in later; "Writing message…" shows on Today. */
+      console.log(JSON.stringify({ leads_msg_fail: firmCode, error: String(_msgErr2.message || _msgErr2).slice(0, 200) }));
+      for (var _ei = 0; _ei < picked.length; _ei++) {
+        if (!picked[_ei].messages) {
+          picked[_ei].messages = { first: '', reminder1: '', reminder2: '', visitPitch: '', lang: lang || 'Hinglish' };
+        }
+      }
+    }
+  }
+
+  /* If messages came back for only some leads, regen just the missing ones */
+  var _emptyLeads = picked.filter(function(p) { return !p.messages || !p.messages.first; });
+  if (_emptyLeads.length > 0 && _emptyLeads.length < picked.length) {
+    try {
+      _emptyLeads = await generateLeadMessages(env, _emptyLeads, profileJson, context, lang, cost, city);
+      /* Merge back into picked — _emptyLeads are the same objects, so messages are set in-place */
+    } catch (_msgPartialErr) {
+      /* Partial regen failed — leave them empty for regen batch */
+      console.log(JSON.stringify({ leads_partial_fail: firmCode, missing: _emptyLeads.length }));
+    }
+  }
 
   /* ── STEP 7: Remove promoted leads from pool ── */
   var promotedIds = picked.map(function(p) { return p.placeId; }).filter(Boolean);
