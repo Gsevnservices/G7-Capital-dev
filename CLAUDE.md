@@ -206,6 +206,7 @@ g7_view_deal_id         — Temp: dealId set by history.html before navigating t
 - **Wrangler commands:** `wrangler d1` needs `--remote --env dev`. `wrangler kv` (Wrangler 3) is remote by default and takes `--namespace-id 25f358b17843460c9429d88dcaca569f --env dev` — no `--remote` flag.
 - **Raw records:** When reading KV records (`auth:users:*`, sessions, etc.) via wrangler or curl, print only the fields needed (e.g. `messageLanguage`, `plan`). Never print `passwordHash`, tokens, `recoveryEmail`, or other PII in output.
 - **Prod is read-only:** Never read, write or list prod KV (namespace `df5fd3fe75ef4e619c861237df4fc83b`), prod D1 or prod secrets. Dev KV namespace is `25f358b17843460c9429d88dcaca569f`. Dev D1 is `g7-scout-dev` (`2fa58257-43cb-4d7b-b69c-24743e857439`). All wrangler commands must use `--env dev` unless Pallav explicitly says otherwise.
+- **Env sourcing:** Every wrangler or Cloudflare API command must start with `source .env.local &&` in the same command; never echo the token.
 
 ---
 
