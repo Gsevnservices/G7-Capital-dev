@@ -82,9 +82,11 @@ ME=$(curl -s -X POST -H "Content-Type: application/json" \
 ME_STATUS=$(echo "$ME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "?")
 ME_LEADS=$(echo "$ME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('leadCount','?'))" 2>/dev/null || echo "?")
 ME_SUBJ=$(echo "$ME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('subject','?')[:80])" 2>/dev/null || echo "?")
+ME_SECTIONS=$(echo "$ME" | python3 -c "import sys,json; print(','.join(json.load(sys.stdin).get('sections',[])))" 2>/dev/null || echo "?")
 if [ "$ME_STATUS" = "dry_run" ] || [ "$ME_STATUS" = "nothing_to_send" ] || [ "$ME_STATUS" = "email_off" ]; then
   pass "Morning email: status=$ME_STATUS, leads=$ME_LEADS"
   echo "         Subject: $ME_SUBJ"
+  echo "         Sections: $ME_SECTIONS"
 else
   fail "Morning email: status=$ME_STATUS"
 fi

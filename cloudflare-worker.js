@@ -1784,245 +1784,17 @@ function emailShell(opts) {
   return { html: html, text: text };
 }
 
-/* Actions email: today's step, follow-ups, WhatsApp sends, link taps. */
-async function sendActionsEmail(env, firmCode, day, move) {
-  const sentKey = 'actions:emailed:' + firmCode + ':' + day;
-  if (await env.G7_KV.get(sentKey)) return { status: 'already_sent', resendId: null };
-  const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
-  if (!emailPrefs(user).actions) return { status: 'not_opted_in', resendId: null };
-  if (!user || !user.recoveryEmail) return { status: 'no_email', resendId: null };
-
-  const st = await loadScoutState(env, firmCode);
-  const pend = st ? (st.pick('scout_pending_result') || {}) : {};
-  let analysis = {};
-  try {
-    analysis = typeof pend.scoutOutput === 'string'
-      ? JSON.parse(pend.scoutOutput.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim())
-      : (pend.scoutOutput || {});
-  } catch (e) {}
-  const hasAnalysis = analysis && analysis.tab3;
-  if (!hasAnalysis) return { status: 'nothing_to_send', resendId: null };
-
-  const weekNum = parseInt((st && st.pick('scout_week_number')) || '1', 10) || 1;
-  const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
-  const name = displayName(user, firmCode);
-  const token = await unsubToken(env, firmCode);
-  const unsubUrl = (env.WORKER_URL || 'https://g7-proxy.gsevnservices.workers.dev') + '/unsub?t=' + token + '&type=actions';
-
-  /* Resolve messageToUse against tab2.messages */
-  function resolveMessage(raw) {
-    if (!raw) return '';
-    if (!/^The /i.test(raw) && raw.indexOf('message written for') === -1) return raw;
-    var msgs = (analysis && analysis.tab2 && Array.isArray(analysis.tab2.messages)) ? analysis.tab2.messages : [];
-    if (!msgs.length) return '';
-    var words = raw.toLowerCase().split(/\s+/);
-    var best = null; var bestScore = -1;
-    for (var mi = 0; mi < msgs.length; mi++) {
-      var m = msgs[mi];
-      var icp = ((m.icp || '') + ' ' + (m.type || '')).toLowerCase();
-      var score = 0;
-      for (var wi = 0; wi < words.length; wi++) {
-        if (words[wi].length > 2 && icp.indexOf(words[wi]) !== -1) score++;
-      }
-      if (m.type === 'primary') score += 0.5;
-      if (score > bestScore) { bestScore = score; best = m; }
-    }
-    if (best && bestScore > 0) return best.versionA || best.text || '';
-    return '';
-  }
-
-  var htmlParts = [];
-  var textParts = [];
-  var subjectParts = [];
-
-  /* ── SCOUT'S MOVE TODAY ── */
-  if (move && move.headline) {
-    htmlParts.push(emailHeading('Scout\u2019s move today'));
-    htmlParts.push(emailRow('<strong>' + escEmail(move.headline) + '</strong>'));
-    if (move.reason) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">Why: ' + escEmail(move.reason) + '</span>'));
-    if (move.sourceUrl) htmlParts.push(emailRow('<a href="' + escEmail(emailSafeUrl(move.sourceUrl)) + '" style="font-size:12px;color:#888">' + escEmail(move.sourceTitle || 'Source') + '</a>'));
-    htmlParts.push(emailRow(escEmail(move.action || '')));
-    if (move.message) {
-      htmlParts.push(emailRow(emailQuote(move.message)));
-      var waUrl = emailSafeUrl('https://wa.me/?text=' + encodeURIComponent(move.message));
-      htmlParts.push(emailRow('<a href="' + escEmail(waUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">Share on WhatsApp</a>'));
-    }
-    htmlParts.push(emailGreyRow('A suggestion from Scout \u2014 you know your business best.'));
-
-    textParts.push('SCOUT\'S MOVE TODAY');
-    textParts.push('  ' + move.headline);
-    if (move.reason) textParts.push('  Why: ' + move.reason);
-    if (move.sourceUrl) textParts.push('  Source: ' + (move.sourceTitle || move.sourceUrl));
-    textParts.push('  ' + (move.action || ''));
-    if (move.message) {
-      textParts.push('  > ' + move.message);
-      textParts.push('  Share on WhatsApp: https://wa.me/?text=' + encodeURIComponent(move.message));
-    }
-    textParts.push('  A suggestion from Scout — you know your business best.');
-  }
-
-  /* ── TODAY'S STEP ── */
-  var tab3 = (analysis && analysis.tab3) || {};
-  var days = Array.isArray(tab3.days) ? tab3.days : [];
-  var todayStep = null;
-  for (var di = 0; di < days.length; di++) {
-    if (days[di].day && days[di].day.toLowerCase() === weekday.toLowerCase()) { todayStep = days[di]; break; }
-  }
-  if (todayStep) {
-    htmlParts.push(emailHeading('Today\u2019s step'));
-    var stepHtml = '<strong>' + escEmail(todayStep.action || '') + '</strong>';
-    if (todayStep.timeRequired) stepHtml += ' \u00b7 ' + escEmail(todayStep.timeRequired);
-    if (todayStep.target) stepHtml += ' \u00b7 Target: ' + escEmail(todayStep.target);
-    htmlParts.push(emailRow(stepHtml));
-    var resolvedMsg = resolveMessage(todayStep.messageToUse);
-    if (resolvedMsg) htmlParts.push(emailRow(emailQuote(resolvedMsg)));
-    textParts.push('TODAY\'S STEP\n' + (todayStep.action || '') +
-      (todayStep.timeRequired ? ' · ' + todayStep.timeRequired : '') +
-      (todayStep.target ? ' · Target: ' + todayStep.target : '') +
-      (resolvedMsg ? '\n> ' + resolvedMsg : ''));
-  }
-
-  /* ── FOLLOW UP TODAY ── */
-  var pipeline = await loadCustomersForFirm(env, firmCode);
-  var bizName = (pend && pend.businessData && pend.businessData.businessName) || '';
-  var _bucket = (st ? st.pick('scout_bucket') : null) || 'retail';
-  var _rsRaw = st ? st.pick('scout_review_skip') : null;
-  var _reviewSkip = _rsRaw === true || _rsRaw === 'true';
-  var _actLang = (st ? st.pick('scout_message_lang') : null) || 'Hinglish';
-  var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip, _actLang);
-  if (due.length > 0) {
-    htmlParts.push(emailHeading('Follow up today'));
-    var show = due.slice(0, 5);
-    show.forEach(function(d) {
-      var p = d.person || {};
-      var pName = escEmail(p.name || 'Someone');
-      var pReason = escEmail(d.reason || '');
-      var ph = waPhone(p.phone);
-      var waUrl = ph ? emailSafeUrl('https://wa.me/' + ph + '?text=' + encodeURIComponent(d.msg || '')) : '';
-      var line = '<strong>' + pName + '</strong> \u2014 ' + pReason;
-      if (waUrl) line += ' <a href="' + escEmail(waUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">\u00a0WhatsApp</a>';
-      htmlParts.push(emailRow(line));
-    });
-    if (due.length > 5) htmlParts.push(emailGreyRow('+' + (due.length - 5) + ' more in your pipeline'));
-    subjectParts.push(due.length + ' follow-up' + (due.length === 1 ? '' : 's'));
-
-    textParts.push('FOLLOW UP TODAY');
-    show.forEach(function(d) {
-      var p = d.person || {};
-      var ph = waPhone(p.phone);
-      textParts.push('  ' + (p.name || 'Someone') + ' — ' + (d.reason || '') +
-        (ph ? '\n  WhatsApp: https://wa.me/' + ph + '?text=' + encodeURIComponent(d.msg || '') : ''));
-    });
-    if (due.length > 5) textParts.push('  +' + (due.length - 5) + ' more in your pipeline');
-  }
-
-  /* ── SEND ON WHATSAPP TODAY ── */
-  var waCal = (tab3 && tab3.whatsappCalendar) || {};
-  var calWeek = ((weekNum - 1) % 4) + 1;
-  var weekKey = 'week' + calWeek;
-  var waEntries = Array.isArray(waCal[weekKey]) ? waCal[weekKey] : [];
-  var todayWa = waEntries.filter(function(e) { return e.day && e.day.toLowerCase() === weekday.toLowerCase(); });
-  if (todayWa.length > 0) {
-    htmlParts.push(emailHeading('Send on WhatsApp today'));
-    todayWa.forEach(function(e) {
-      var sendLabel = escEmail(e.listName || e.sendTo || '');
-      var timeLabel = escEmail(e.time || '');
-      htmlParts.push(emailRow((timeLabel ? timeLabel + ' \u00b7 ' : '') + 'Send to <strong>' + sendLabel + '</strong>'));
-      if (e.message) {
-        htmlParts.push(emailRow(emailQuote(e.message)));
-        var calWaUrl = emailSafeUrl('https://wa.me/?text=' + encodeURIComponent(e.message));
-        htmlParts.push(emailRow('<a href="' + escEmail(calWaUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">Send on WhatsApp</a>'));
-      }
-      if (e.purpose) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">' + escEmail(e.purpose) + '</span>'));
-    });
-    subjectParts.push(todayWa.length + ' WhatsApp send' + (todayWa.length === 1 ? '' : 's'));
-
-    textParts.push('SEND ON WHATSAPP TODAY');
-    todayWa.forEach(function(e) {
-      textParts.push('  ' + (e.time || '') + ' · Send to ' + (e.listName || e.sendTo || '') +
-        (e.message ? '\n  > ' + e.message +
-          '\n  Send: https://wa.me/?text=' + encodeURIComponent(e.message) : '') +
-        (e.purpose ? '\n  ' + e.purpose : ''));
-    });
-  }
-
-  /* ── YOUR LINKS ── */
-  var links = await env.G7_KV.get('scout:inbound:' + firmCode + ':links', 'json');
-  if (links) {
-    var taps = await tapReport(env, firmCode, day);
-    var totalNow = (taps.now.bio || 0) + (taps.now.google || 0) + (taps.now.status || 0);
-    if (totalNow > 0) {
-      htmlParts.push(emailHeading('Your links'));
-      ['bio', 'google', 'status'].forEach(function(s) {
-        if (!taps.now[s] && !links[s]) return;
-        var line = escEmail(s.charAt(0).toUpperCase() + s.slice(1)) + ': <strong>' + tapWord(taps.now[s] || 0) + '</strong>';
-        if (taps.prev && typeof taps.prev[s] === 'number') {
-          var change = (taps.now[s] || 0) - taps.prev[s];
-          if (change > 0) line += ' <span style="color:#2a7a2a">(+' + change + ' since yesterday)</span>';
-        }
-        htmlParts.push(emailRow(line));
-      });
-      textParts.push('YOUR LINKS');
-      ['bio', 'google', 'status'].forEach(function(s) {
-        if (!taps.now[s] && !links[s]) return;
-        var line = '  ' + s.charAt(0).toUpperCase() + s.slice(1) + ': ' + tapWord(taps.now[s] || 0);
-        if (taps.prev && typeof taps.prev[s] === 'number') {
-          var change = (taps.now[s] || 0) - taps.prev[s];
-          if (change > 0) line += ' (+' + change + ' since yesterday)';
-        }
-        textParts.push(line);
-      });
-    } else {
-      htmlParts.push(emailHeading('Your links'));
-      htmlParts.push(emailGreyRow('No taps yet \u2014 share your bio link today.'));
-      textParts.push('YOUR LINKS\n  No taps yet — share your bio link today.');
-    }
-  }
-
-  /* ── Subject ── */
-  var subject;
-  if (move && move.headline) {
-    var moveTail = weekday + ' with Scout \u00b7 ' + move.headline;
-    if (moveTail.length > 70) {
-      var cut = moveTail.slice(0, 70);
-      var ls = cut.lastIndexOf(' ');
-      if (ls > 30) cut = cut.slice(0, ls);
-      moveTail = cut + '\u2026';
-    }
-    subject = moveTail;
-  } else if (subjectParts.length > 0) {
-    subject = weekday + ' with Scout \u00b7 ' + subjectParts.join(', ');
-  } else {
-    subject = weekday + ' with Scout';
-  }
-
-  var shell = emailShell({
-    siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
-    headerLabel: 'Scout',
-    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(name) + '.</div>' +
-              '<div style="font-size:13px;color:#888;margin-top:4px">Week ' + weekNum + ' of 12.</div>',
-    textGreeting: 'Good morning, ' + name + '.\nWeek ' + weekNum + ' of 12.\n\n',
-    htmlParts: htmlParts,
-    textParts: textParts,
-    footerLine: 'You get this because you switched on Scout\u2019s daily actions.',
-    unsubUrl: unsubUrl
-  });
-
-  var _sendRes = await sendEmail(env, user.recoveryEmail, subject, shell.text, shell.html, {
-    'List-Unsubscribe': '<' + unsubUrl + '>',
-    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-  }, { fromName: 'Scout by G7' });
-  if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
-  return { status: _sendRes.ok ? 'sent' : 'send_failed', resendId: _sendRes.id || null };
-}
-
 /* ══════════════════════════════════════════════════════════════════════════
-   Morning Leads Email — sends today's leads + follow-ups to the firm.
-   Returns { status, subject?, html?, text?, leadCount?, followUpCount? }.
-   When dryRun is true, builds the email but does not send it.
+   Morning Email — the one daily email: leads, follow-ups, Scout's Move,
+   yesterday's WhatsApp sends + link taps.
+   opts: { dryRun?, adminCost?, move? }
+   move: { headline, reason, action, message, sourceUrl, sourceTitle } or null
+   Returns { status, subject?, html?, text?, leadCount?, followUpCount?,
+             sections?, resendId? }.
    ══════════════════════════════════════════════════════════════════════════ */
 async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var dryRun = !!(opts && opts.dryRun);
+  var move = (opts && opts.move) || null;
 
   /* ── Guard: already sent today? ── */
   var sentKey = 'email:morning:' + firmCode + ':' + day;
@@ -2042,7 +1814,6 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var leadsData = await env.G7_KV.get(todayKey, 'json');
   var _leadGenStatus = leadsData ? 'cached' : null;
   if (!leadsData) {
-    /* Generate leads first — both admin dry-run and cron need them */
     var cost = newCostAccum();
     var _costBucket = (opts && opts.adminCost) ? 'ADMIN' : firmCode;
     try {
@@ -2068,41 +1839,58 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var _bucket = (st ? st.pick('scout_bucket') : null) || 'retail';
   var _rsRaw = st ? st.pick('scout_review_skip') : null;
   var _reviewSkip = _rsRaw === true || _rsRaw === 'true';
-
-  /* Resolve message language — same source as lead messages (auth:users KV) */
   var msgLang = (user && user.messageLanguage) || 'Hinglish';
-
   var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip, msgLang);
 
-  /* ── Nothing to send? ── */
-  if (leads.length === 0 && due.length === 0) return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0 };
+  /* ── Build set of follow-up person IDs to avoid duplicates with leads ── */
+  var _dueIds = {};
+  due.forEach(function(d) { if (d.person && d.person.id) _dueIds[d.person.id] = true; });
 
-  /* ── Build unsubscribe URL (null = secret missing → abort send) ── */
+  /* ── Check emailActions preference for Scout's Move section ── */
+  var includeMove = move && move.headline && emailPrefs(user).actions;
+
+  /* ── Yesterday's activity: WhatsApp sends + link taps ── */
+  var _yesterday = new Date(Date.now() + 5.5 * 3600000 - 86400000).toISOString().slice(0, 10);
+  var _waSent = 0;
+  if (env.DB) {
+    try {
+      var _waRow = await env.DB.prepare(
+        "SELECT COUNT(*) as c FROM customer_events WHERE firm_code = ? AND type = 'stage_change' AND to_stage = 'contacted' AND at >= ? AND at < ?"
+      ).bind(firmCode, _yesterday + 'T00:00:00Z', day + 'T00:00:00Z').first();
+      _waSent = (_waRow && _waRow.c) || 0;
+    } catch (e) {}
+  }
+  var _taps = null;
+  var _totalTaps = 0;
+  var links = await env.G7_KV.get('scout:inbound:' + firmCode + ':links', 'json');
+  if (links) {
+    try {
+      _taps = await tapReport(env, firmCode, day);
+      _totalTaps = (_taps.now.bio || 0) + (_taps.now.google || 0) + (_taps.now.status || 0);
+    } catch (e) {}
+  }
+  var hasYesterday = _waSent > 0 || _totalTaps > 0;
+
+  /* ── Nothing to send? Send if ANY section has content ── */
+  if (leads.length === 0 && due.length === 0 && !includeMove && !hasYesterday) {
+    return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0, sections: [] };
+  }
+
+  /* ── Build unsubscribe URL ── */
   var unsubUrl = await morningUnsubUrl(env, firmCode);
   if (!unsubUrl) return { status: 'missing_unsub_secret' };
 
-  /* ── Build today URL ── */
   var _siteBase = (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '');
   var todayUrl = _siteBase + '/scout/today.html';
-
-  /* ── Build customers URL ── */
   var customersUrl = _siteBase + '/scout/pipeline.html';
 
-  /* ── Subject (plain text header, no HTML escaping; strip newlines to prevent header injection) ── */
-  var subject = '';
-  if (leads.length > 0) {
-    subject = leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' for ' + bizName + ' today';
-  } else {
-    subject = due.length + ' follow-up' + (due.length === 1 ? '' : 's') + ' due for ' + bizName + ' today';
-  }
-  subject = subject.replace(/[\r\n]/g, '');
-
-  /* ── HTML parts ── */
   var htmlParts = [];
   var textParts = [];
+  var sections = [];
 
-  /* ── NEW LEADS ── */
+  /* ── 1. NEW LEADS ── */
   if (leads.length > 0) {
+    sections.push('leads');
     htmlParts.push(emailHeading(leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' today'));
     var showLeads = leads.slice(0, 8);
     for (var li = 0; li < showLeads.length; li++) {
@@ -2110,14 +1898,10 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       var lName = escEmail(lead.name || 'New lead');
       var lGroup = escEmail(lead.group || '');
       var lReason = escEmail(lead.fitReason || '');
-      /* Truncate reason at 120 chars */
       if (lReason.length > 120) { var wb = lReason.lastIndexOf(' ', 120); lReason = lReason.slice(0, wb > 60 ? wb : 120) + '\u2026'; }
-
       var leadHtml = '<strong>' + lName + '</strong>';
       if (lGroup) leadHtml += ' <span style="font-size:11px;color:#888;background:#f0eee8;padding:2px 8px;border-radius:10px;margin-left:4px">' + lGroup + '</span>';
       if (lReason) leadHtml += '<br><span style="font-size:12px;color:#666;line-height:1.5">' + lReason + '</span>';
-
-      /* WhatsApp button */
       var waMsg = (lead.messages && lead.messages.first) || '';
       var lPhone = waPhone(lead.phone);
       var btns = '';
@@ -2125,10 +1909,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
         var waUrl = emailSafeUrl('https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg));
         btns += '<a href="' + escEmail(waUrl) + '" style="display:inline-block;background:#25D366;color:#fff;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:6px">WhatsApp</a>';
       }
-
       htmlParts.push(emailRow(leadHtml + '<br>' + btns));
-
-      /* Text version */
       var leadText = '  ' + (lead.name || 'New lead') + ' (' + (lead.group || '') + ')';
       if (lead.fitReason) leadText += '\n  ' + lead.fitReason;
       if (lPhone && waMsg) leadText += '\n  WhatsApp: https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg);
@@ -2141,8 +1922,9 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
     textParts.unshift('NEW CUSTOMERS TODAY (' + leads.length + ')');
   }
 
-  /* ── FOLLOW-UPS ── */
+  /* ── 2. FOLLOW-UPS DUE ── */
   if (due.length > 0) {
+    sections.push('followups');
     htmlParts.push(emailHeading(due.length + ' follow-up' + (due.length === 1 ? '' : 's') + ' due today'));
     var showDue = due.slice(0, 5);
     for (var di = 0; di < showDue.length; di++) {
@@ -2159,7 +1941,6 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       htmlParts.push(emailRow(dLine));
     }
     if (due.length > 5) htmlParts.push(emailGreyRow('+' + (due.length - 5) + ' more in your pipeline'));
-
     var fuTexts = ['FOLLOW-UPS DUE TODAY (' + due.length + ')'];
     showDue.forEach(function(d) {
       var p2 = d.person || {};
@@ -2169,10 +1950,67 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
     textParts.push(fuTexts.join('\n'));
   }
 
-  /* ── Assemble shell — one main button: Open Today (leads) or Open Customers (follow-ups only) ── */
+  /* ── 3. SCOUT'S MOVE (only if emailActions is on) ── */
+  if (includeMove) {
+    sections.push('move');
+    htmlParts.push(emailHeading('Scout\u2019s move today'));
+    htmlParts.push(emailRow('<strong>' + escEmail(move.headline) + '</strong>'));
+    if (move.reason) htmlParts.push(emailRow('<span style="font-size:12px;color:#888">Why: ' + escEmail(move.reason) + '</span>'));
+    if (move.sourceUrl) htmlParts.push(emailRow('<a href="' + escEmail(emailSafeUrl(move.sourceUrl)) + '" style="font-size:12px;color:#888">' + escEmail(move.sourceTitle || 'Source') + '</a>'));
+    htmlParts.push(emailRow(escEmail(move.action || '')));
+    if (move.message) {
+      htmlParts.push(emailRow(emailQuote(move.message)));
+      var moveWaUrl = emailSafeUrl('https://wa.me/?text=' + encodeURIComponent(move.message));
+      htmlParts.push(emailRow('<a href="' + escEmail(moveWaUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">Share on WhatsApp</a>'));
+    }
+    htmlParts.push(emailGreyRow('A suggestion from Scout \u2014 you know your business best.'));
+    textParts.push('SCOUT\'S MOVE TODAY');
+    textParts.push('  ' + move.headline);
+    if (move.reason) textParts.push('  Why: ' + move.reason);
+    if (move.action) textParts.push('  ' + move.action);
+    if (move.message) {
+      textParts.push('  > ' + move.message);
+      textParts.push('  Share on WhatsApp: https://wa.me/?text=' + encodeURIComponent(move.message));
+    }
+    textParts.push('  A suggestion from Scout — you know your business best.');
+  }
+
+  /* ── 4. YESTERDAY'S ACTIVITY (WhatsApp sends + link taps, only if any) ── */
+  if (hasYesterday) {
+    sections.push('yesterday');
+    htmlParts.push(emailHeading('Yesterday'));
+    var yParts = [];
+    if (_waSent > 0) yParts.push(_waSent + ' WhatsApp message' + (_waSent === 1 ? '' : 's') + ' sent');
+    if (_totalTaps > 0) {
+      var tapParts = [];
+      ['bio', 'google', 'status'].forEach(function(s) {
+        if (_taps.now[s]) tapParts.push(s + ': ' + tapWord(_taps.now[s]));
+      });
+      yParts.push(tapParts.join(', ') + ' on your links');
+    }
+    htmlParts.push(emailRow(yParts.map(function(t){ return escEmail(t); }).join('<br>')));
+    textParts.push('YESTERDAY\n  ' + yParts.join('\n  '));
+  }
+
+  /* ── Subject ── */
+  var subject = '';
+  if (leads.length > 0 && includeMove) {
+    subject = leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' + today\u2019s move for ' + bizName;
+  } else if (leads.length > 0) {
+    subject = leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' for ' + bizName + ' today';
+  } else if (includeMove) {
+    subject = 'Today\u2019s move for ' + bizName;
+  } else if (due.length > 0) {
+    subject = due.length + ' follow-up' + (due.length === 1 ? '' : 's') + ' due for ' + bizName + ' today';
+  } else {
+    subject = 'Your morning update from Scout';
+  }
+  subject = subject.replace(/[\r\n]/g, '');
+
+  /* ── Assemble shell ── */
   var _mainBtn = leads.length > 0
     ? { url: todayUrl, label: 'Open Today' }
-    : { url: customersUrl, label: 'Open Customers' };
+    : { url: customersUrl, label: 'Open Scout' };
   var shell = emailShell({
     siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout',
@@ -2187,7 +2025,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
 
   if (dryRun) {
     return { status: 'dry_run', subject: subject, html: shell.html, text: shell.text,
-             leadCount: leads.length, followUpCount: due.length,
+             leadCount: leads.length, followUpCount: due.length, sections: sections,
              leadGenStatus: _leadGenStatus, unsubUrl: unsubUrl };
   }
 
@@ -2198,7 +2036,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   }, { fromName: 'Scout by G7' });
   if (_sendRes.ok) await kvPut(env, sentKey, '1', { expirationTtl: 172800 });
   return { status: _sendRes.ok ? 'sent' : 'send_failed', subject: subject,
-           leadCount: leads.length, followUpCount: due.length,
+           leadCount: leads.length, followUpCount: due.length, sections: sections,
            leadGenStatus: _leadGenStatus, resendId: _sendRes.id || null };
 }
 
@@ -2627,26 +2465,29 @@ async function sendTestNewsEmail(env, firmCode) {
   return _sendRes.ok ? { sent: true, to: env.ADMIN_EMAIL, items: indCount + '+' + alsoCount, resendId: _sendRes.id || null } : { error: 'send_failed' };
 }
 
-/* The whole morning job for one firm: news → move → actions email → news email. */
+/* The whole morning job for one firm:
+   lead gen → news build → Scout's Move → merged morning email → news email.
+   The morning email includes leads, follow-ups, Scout's Move, and yesterday's
+   activity in one email. No separate actions email. */
 async function runMorningForFirm(env, firmCode, day) {
   const saved = await getMarketContext(env, firmCode);
   if (!saved || !saved.context) return 'no_context';
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json') || {};
 
-  /* Per-firm flags: cronPaused and isTest skip all generation */
   if (user.cronPaused) return 'paused';
   if (user.isTest) return 'test';
 
-  /* Skip firms with nothing to deliver: both emails off AND not recently
-     active on the dashboard. "Recently" = lastSeen within last 3 days. */
+  /* Skip firms with nothing to deliver: news off AND not recently active. */
   const ep = emailPrefs(user);
-  if (!ep.actions && !ep.news) {
+  var mePref = await getFirmSetting(env, firmCode, 'morningEmail');
+  if (!mePref) mePref = { on: true, time: '08:00' };
+  if (!mePref.on && !ep.news) {
     var lastSeenRaw = await env.G7_KV.get('scout:lastSeen:' + firmCode);
     var seenDaysAgo = lastSeenRaw ? Math.floor((Date.now() - new Date(lastSeenRaw).getTime()) / 86400000) : 999;
     if (seenDaysAgo > 3) return 'skipped_no_email';
   }
 
-  /* Budget guard — skip generation if firm cost cap exceeded. */
+  /* Budget guard */
   var _bc = await budgetCheck(env, day, firmCode);
   if (!_bc.ok) {
     console.log(JSON.stringify({ budgetSkip: firmCode, firmSpent: _bc.firmSpent }));
@@ -2655,19 +2496,26 @@ async function runMorningForFirm(env, firmCode, day) {
   }
 
   var cost = newCostAccum();
-  var news = null, move = null, a = 'error', n = 'error';
+  var news = null, move = null, m = { status: 'skipped' }, n = { status: 'skipped', resendId: null };
+
+  /* 1. News build */
   var effectiveNewsPrefs;
   try { effectiveNewsPrefs = await resolveNewsPrefs(env, firmCode, user.newsPrefs); } catch (e) { effectiveNewsPrefs = user.newsPrefs || []; }
   try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectiveNewsPrefs, cost); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); try { await recordError(env, { source: 'worker', route: 'cron/news', firmCode: firmCode, kind: 'rss_all_failed', message: String(e && e.message || e) }); } catch(e2) {} }
+
+  /* 2. Scout's Move */
   const st = await loadScoutState(env, firmCode);
   try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st, false, cost); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); try { await recordError(env, { source: 'worker', route: 'cron/move', firmCode: firmCode, kind: 'move_failed', message: String(e && e.message || e) }); } catch(e2) {} }
-  try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { a = { status: 'error', resendId: null }; console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+
+  /* 3. Merged morning email (leads + follow-ups + move + yesterday) */
+  try { m = await sendMorningLeadsEmail(env, firmCode, day, { move: move }); } catch (e) { m = { status: 'error' }; console.log(JSON.stringify({ morningEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+
+  /* 4. News email */
   if (news) { try { n = await sendNewsEmail(env, firmCode, day); } catch (e) { n = { status: 'error', resendId: null }; console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = { status: 'no_news', resendId: null }; }
 
-  /* Flush cost to KV after the full firm run. */
   var costUsd = 0;
   try { costUsd = await flushCost(env, day, firmCode, cost); } catch (e) {}
-  return { status: 'actions:' + (a && a.status || a) + ' news:' + (n && n.status || n) + ' move:' + (move ? 'ok' : 'none'), cost: Object.assign({}, cost), costUsd: costUsd };
+  return { status: 'morning:' + (m && m.status || 'error') + ' news:' + (n && n.status || n) + ' move:' + (move ? 'ok' : 'none'), cost: Object.assign({}, cost), costUsd: costUsd };
 }
 
 /* ── On-demand group search — runs Places pipeline for one group, adds to Today ── */
@@ -7230,8 +7078,8 @@ export default {
 
     // ─────────────────────────────────────────────────────────────
     // POST /admin/email/morning — { adminPassword, firmCode, dryRun? }
-    // Triggers morning leads email for one firm. Dry run returns HTML/text
-    // without sending. Otherwise sends once to the firm's recovery email.
+    // Sends the merged morning email (leads + follow-ups + Scout's Move +
+    // yesterday's activity). Generates move if context exists.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'POST' && path === '/admin/email/morning') {
       let body;
@@ -7243,7 +7091,22 @@ export default {
       if (!_meFirm) return jsonResponse({ error: 'firmCode required' }, 400);
       var _meDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
       try {
-        var _meResult = await sendMorningLeadsEmail(env, _meFirm, _meDay, { dryRun: !!body.dryRun, adminCost: true });
+        /* Generate Scout's Move if context exists */
+        var _meMove = null;
+        var _meSaved = await getMarketContext(env, _meFirm);
+        if (_meSaved && _meSaved.context) {
+          var _meCost = newCostAccum();
+          var _meUser2 = await env.G7_KV.get('auth:users:' + _meFirm, 'json') || {};
+          var _mePrefs;
+          try { _mePrefs = await resolveNewsPrefs(env, _meFirm, _meUser2.newsPrefs); } catch (e) { _mePrefs = _meUser2.newsPrefs || []; }
+          try { await buildDailyNews(env, _meFirm, _meDay, _meSaved.context, _meSaved.city || '', _mePrefs, _meCost); } catch (e) {}
+          var _meSt = await loadScoutState(env, _meFirm);
+          var _meNews = null;
+          try { _meNews = await env.G7_KV.get('news:' + _meFirm + ':' + _meDay, 'json'); } catch(e) {}
+          try { _meMove = await generateScoutMove(env, _meFirm, _meDay, _meSaved.context, _meNews, _meSt, false, _meCost); } catch (e) {}
+          await flushCost(env, _meDay, 'ADMIN', _meCost);
+        }
+        var _meResult = await sendMorningLeadsEmail(env, _meFirm, _meDay, { dryRun: !!body.dryRun, adminCost: true, move: _meMove });
         return jsonResponse(_meResult);
       } catch (e) {
         return jsonResponse({ error: 'morning_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
@@ -7296,35 +7159,10 @@ export default {
       }
     }
 
-    // POST /admin/email/actions — { adminPassword, firmCode, dryRun? }
-    // Generates move if needed, then sends the real actions email to the firm.
+    // POST /admin/email/actions — DEPRECATED: merged into morning email.
+    // Returns guidance to use /admin/email/morning instead.
     if (request.method === 'POST' && path === '/admin/email/actions') {
-      let body;
-      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
-      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
-        return jsonResponse({ error: 'Invalid admin password' }, 403);
-      }
-      var _aaFirm = String(body.firmCode || '').toUpperCase().trim();
-      if (!_aaFirm) return jsonResponse({ error: 'firmCode required' }, 400);
-      var _aaDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
-      try {
-        var _aaSaved = await getMarketContext(env, _aaFirm);
-        if (!_aaSaved || !_aaSaved.context) return jsonResponse({ error: 'no_context — run analysis first' }, 400);
-        var _aaUser = await env.G7_KV.get('auth:users:' + _aaFirm, 'json') || {};
-        var _aaPrefs;
-        try { _aaPrefs = await resolveNewsPrefs(env, _aaFirm, _aaUser.newsPrefs); } catch (e) { _aaPrefs = _aaUser.newsPrefs || []; }
-        var _aaCost = newCostAccum();
-        var _aaNews = null;
-        try { _aaNews = await buildDailyNews(env, _aaFirm, _aaDay, _aaSaved.context, _aaSaved.city || '', _aaPrefs, _aaCost); } catch (e) {}
-        var _aaSt = await loadScoutState(env, _aaFirm);
-        var _aaMove = null;
-        try { _aaMove = await generateScoutMove(env, _aaFirm, _aaDay, _aaSaved.context, _aaNews, _aaSt, false, _aaCost); } catch (e) {}
-        await flushCost(env, _aaDay, 'ADMIN', _aaCost);
-        var _aaResult = await sendActionsEmail(env, _aaFirm, _aaDay, _aaMove);
-        return jsonResponse({ status: _aaResult.status, resendId: _aaResult.resendId || null });
-      } catch (e) {
-        return jsonResponse({ error: 'actions_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
-      }
+      return jsonResponse({ status: 'merged_into_morning', message: "Scout's Move is now part of the morning email. Use POST /admin/email/morning instead." });
     }
 
     // POST /admin/links/create — { adminPassword, firmCode, kind, url, leadId? }
@@ -10461,7 +10299,7 @@ export default {
         if (user) {
           if (type === 'actions') {
             user.emailActions = false;
-            stoppedLabel = 'daily actions email';
+            stoppedLabel = 'Scout\u2019s Move section in the morning email';
           } else if (type === 'news') {
             user.emailNews = false;
             stoppedLabel = 'news email';
@@ -10900,15 +10738,8 @@ export default {
             await flushCost(env, day, _dFirm, _dlCost);
             _devLeadReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200), ms: Date.now() - _dlt0 });
           }
-          /* Morning email */
-          try {
-            var _dMeResult = await sendMorningLeadsEmail(env, _dFirm, day);
-            _devMeReport.push({ firm: _dFirm, status: _dMeResult.status, leadCount: _dMeResult.leadCount, followUpCount: _dMeResult.followUpCount, resendId: _dMeResult.resendId || null });
-          } catch (e) {
-            _devMeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
-          }
-          /* ── News + Scout's Move + actions/news emails (same path as prod) ── */
-          var _dNews = null, _dMove = null, _dActionsStatus = 'skipped', _dNewsStatus = 'skipped';
+          /* ── News build + Scout's Move ── */
+          var _dNews = null, _dMove = null, _dNewsStatus = 'skipped';
           var _dSaved = await getMarketContext(env, _dFirm);
           if (_dSaved && _dSaved.context) {
             var _dNewsCost = newCostAccum();
@@ -10926,13 +10757,20 @@ export default {
             } catch (e) {
               console.log(JSON.stringify({ devMoveError: _dFirm, error: String(e && e.message || e).slice(0, 200) }));
             }
-            try { var _dAR = await sendActionsEmail(env, _dFirm, day, _dMove); _dActionsStatus = _dAR.status; } catch (e) { _dActionsStatus = 'error:' + String(e.message || e).slice(0, 100); }
-            if (_dNews) {
-              try { var _dNR = await sendNewsEmail(env, _dFirm, day); _dNewsStatus = _dNR.status; } catch (e) { _dNewsStatus = 'error:' + String(e.message || e).slice(0, 100); }
-            } else { _dNewsStatus = 'no_news'; }
             try { await flushCost(env, day, _dFirm, _dNewsCost); } catch (e) {}
           }
-          _devMeReport.push({ firm: _dFirm, type: 'news+move', actions: _dActionsStatus, news: _dNewsStatus, move: _dMove ? 'ok' : 'none' });
+          /* ── Merged morning email (leads + follow-ups + move + yesterday) ── */
+          try {
+            var _dMeResult = await sendMorningLeadsEmail(env, _dFirm, day, { move: _dMove });
+            _devMeReport.push({ firm: _dFirm, status: _dMeResult.status, leadCount: _dMeResult.leadCount, followUpCount: _dMeResult.followUpCount, sections: _dMeResult.sections, resendId: _dMeResult.resendId || null });
+          } catch (e) {
+            _devMeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
+          }
+          /* ── News email ── */
+          if (_dNews) {
+            try { var _dNR = await sendNewsEmail(env, _dFirm, day); _dNewsStatus = _dNR.status; } catch (e) { _dNewsStatus = 'error:' + String(e.message || e).slice(0, 100); }
+          } else { _dNewsStatus = 'no_news'; }
+          _devMeReport.push({ firm: _dFirm, type: 'news', news: _dNewsStatus, move: _dMove ? 'ok' : 'none' });
         }
         _devCursor = _devPage.list_complete ? undefined : _devPage.cursor;
       } while (_devCursor);
