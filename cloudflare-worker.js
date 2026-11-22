@@ -1778,10 +1778,10 @@ function emailShell(opts) {
 /* Actions email: today's step, follow-ups, WhatsApp sends, link taps. */
 async function sendActionsEmail(env, firmCode, day, move) {
   const sentKey = 'actions:emailed:' + firmCode + ':' + day;
-  if (await env.G7_KV.get(sentKey)) return 'already_sent';
+  if (await env.G7_KV.get(sentKey)) return { status: 'already_sent', resendId: null };
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
-  if (!emailPrefs(user).actions) return 'not_opted_in';
-  if (!user || !user.recoveryEmail) return 'no_email';
+  if (!emailPrefs(user).actions) return { status: 'not_opted_in', resendId: null };
+  if (!user || !user.recoveryEmail) return { status: 'no_email', resendId: null };
 
   const st = await loadScoutState(env, firmCode);
   const pend = st ? (st.pick('scout_pending_result') || {}) : {};
@@ -1792,7 +1792,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
       : (pend.scoutOutput || {});
   } catch (e) {}
   const hasAnalysis = analysis && analysis.tab3;
-  if (!hasAnalysis) return 'nothing_to_send';
+  if (!hasAnalysis) return { status: 'nothing_to_send', resendId: null };
 
   const weekNum = parseInt((st && st.pick('scout_week_number')) || '1', 10) || 1;
   const weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
@@ -2004,7 +2004,7 @@ async function sendActionsEmail(env, firmCode, day, move) {
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   }, { fromName: 'Scout by G7' });
   if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
-  return _sendRes.ok ? 'sent' : 'send_failed';
+  return { status: _sendRes.ok ? 'sent' : 'send_failed', resendId: _sendRes.id || null };
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2526,10 +2526,10 @@ function newsGreetingName(user, context, firmCode) {
    from GET /scout/news or the test-email path. */
 async function sendNewsEmail(env, firmCode, day) {
   const sentKey = 'market:emailed:' + firmCode + ':' + day;
-  if (await env.G7_KV.get(sentKey)) return 'already_sent';
+  if (await env.G7_KV.get(sentKey)) return { status: 'already_sent', resendId: null };
   const user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
-  if (!emailPrefs(user).news) return 'not_opted_in';
-  if (!user || !user.recoveryEmail) return 'no_email';
+  if (!emailPrefs(user).news) return { status: 'not_opted_in', resendId: null };
+  if (!user || !user.recoveryEmail) return { status: 'no_email', resendId: null };
 
   /* Build news from cache (cacheOnly — never generate from the email path). */
   var saved = await getMarketContext(env, firmCode);
@@ -2541,10 +2541,10 @@ async function sendNewsEmail(env, firmCode, day) {
     prefs: effectivePrefs,
     cacheOnly: true
   });
-  if (!news) return 'nothing_to_send';
+  if (!news) return { status: 'nothing_to_send', resendId: null };
 
   var body = renderNewsBody(news);
-  if (!body.htmlParts.length) return 'nothing_to_send';
+  if (!body.htmlParts.length) return { status: 'nothing_to_send', resendId: null };
 
   /* Greeting uses the business name, never the firm code. */
   const name = newsGreetingName(user, saved && saved.context, firmCode);
@@ -2575,7 +2575,7 @@ async function sendNewsEmail(env, firmCode, day) {
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   }, { fromName: 'Scout by G7' });
   if (_sendRes.ok) await kvPut(env,sentKey, '1', { expirationTtl: 172800 });
-  return _sendRes.ok ? 'sent' : 'send_failed';
+  return { status: _sendRes.ok ? 'sent' : 'send_failed', resendId: _sendRes.id || null };
 }
 
 /* Admin test email: renders today's cached news via assembleNews and sends
@@ -2652,13 +2652,13 @@ async function runMorningForFirm(env, firmCode, day) {
   try { news = await buildDailyNews(env, firmCode, day, saved.context, saved.city || '', effectiveNewsPrefs, cost); } catch (e) { console.log(JSON.stringify({ newsError: firmCode, error: String(e && e.message || e).slice(0, 300) })); try { await recordError(env, { source: 'worker', route: 'cron/news', firmCode: firmCode, kind: 'rss_all_failed', message: String(e && e.message || e) }); } catch(e2) {} }
   const st = await loadScoutState(env, firmCode);
   try { move = await generateScoutMove(env, firmCode, day, saved.context, news, st, false, cost); } catch (e) { console.log(JSON.stringify({ moveError: firmCode, error: String(e && e.message || e).slice(0, 300) })); try { await recordError(env, { source: 'worker', route: 'cron/move', firmCode: firmCode, kind: 'move_failed', message: String(e && e.message || e) }); } catch(e2) {} }
-  try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
-  if (news) { try { n = await sendNewsEmail(env, firmCode, day); } catch (e) { console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = 'no_news'; }
+  try { a = await sendActionsEmail(env, firmCode, day, move); } catch (e) { a = { status: 'error', resendId: null }; console.log(JSON.stringify({ actionsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); }
+  if (news) { try { n = await sendNewsEmail(env, firmCode, day); } catch (e) { n = { status: 'error', resendId: null }; console.log(JSON.stringify({ newsEmailError: firmCode, error: String(e && e.message || e).slice(0, 300) })); } } else { n = { status: 'no_news', resendId: null }; }
 
   /* Flush cost to KV after the full firm run. */
   var costUsd = 0;
   try { costUsd = await flushCost(env, day, firmCode, cost); } catch (e) {}
-  return { status: 'actions:' + a + ' news:' + n + ' move:' + (move ? 'ok' : 'none'), cost: Object.assign({}, cost), costUsd: costUsd };
+  return { status: 'actions:' + (a && a.status || a) + ' news:' + (n && n.status || n) + ' move:' + (move ? 'ok' : 'none'), cost: Object.assign({}, cost), costUsd: costUsd };
 }
 
 /* ── On-demand group search — runs Places pipeline for one group, adds to Today ── */
@@ -7258,6 +7258,66 @@ export default {
       }
     }
 
+    // POST /admin/email/news — { adminPassword, firmCode, dryRun? }
+    // Generates news if needed, then sends the real news email to the firm.
+    if (request.method === 'POST' && path === '/admin/email/news') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var _anFirm = String(body.firmCode || '').toUpperCase().trim();
+      if (!_anFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+      var _anDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      try {
+        /* Generate news if not cached */
+        var _anSaved = await getMarketContext(env, _anFirm);
+        if (!_anSaved || !_anSaved.context) return jsonResponse({ error: 'no_context — run analysis first' }, 400);
+        var _anUser = await env.G7_KV.get('auth:users:' + _anFirm, 'json') || {};
+        var _anPrefs;
+        try { _anPrefs = await resolveNewsPrefs(env, _anFirm, _anUser.newsPrefs); } catch (e) { _anPrefs = _anUser.newsPrefs || []; }
+        var _anCost = newCostAccum();
+        await buildDailyNews(env, _anFirm, _anDay, _anSaved.context, _anSaved.city || '', _anPrefs, _anCost);
+        await flushCost(env, _anDay, 'ADMIN', _anCost);
+        /* Send the real email */
+        var _anResult = await sendNewsEmail(env, _anFirm, _anDay);
+        return jsonResponse({ status: _anResult.status, resendId: _anResult.resendId || null });
+      } catch (e) {
+        return jsonResponse({ error: 'news_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
+      }
+    }
+
+    // POST /admin/email/actions — { adminPassword, firmCode, dryRun? }
+    // Generates move if needed, then sends the real actions email to the firm.
+    if (request.method === 'POST' && path === '/admin/email/actions') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) {
+        return jsonResponse({ error: 'Invalid admin password' }, 403);
+      }
+      var _aaFirm = String(body.firmCode || '').toUpperCase().trim();
+      if (!_aaFirm) return jsonResponse({ error: 'firmCode required' }, 400);
+      var _aaDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+      try {
+        var _aaSaved = await getMarketContext(env, _aaFirm);
+        if (!_aaSaved || !_aaSaved.context) return jsonResponse({ error: 'no_context — run analysis first' }, 400);
+        var _aaUser = await env.G7_KV.get('auth:users:' + _aaFirm, 'json') || {};
+        var _aaPrefs;
+        try { _aaPrefs = await resolveNewsPrefs(env, _aaFirm, _aaUser.newsPrefs); } catch (e) { _aaPrefs = _aaUser.newsPrefs || []; }
+        var _aaCost = newCostAccum();
+        var _aaNews = null;
+        try { _aaNews = await buildDailyNews(env, _aaFirm, _aaDay, _aaSaved.context, _aaSaved.city || '', _aaPrefs, _aaCost); } catch (e) {}
+        var _aaSt = await loadScoutState(env, _aaFirm);
+        var _aaMove = null;
+        try { _aaMove = await generateScoutMove(env, _aaFirm, _aaDay, _aaSaved.context, _aaNews, _aaSt, false, _aaCost); } catch (e) {}
+        await flushCost(env, _aaDay, 'ADMIN', _aaCost);
+        var _aaResult = await sendActionsEmail(env, _aaFirm, _aaDay, _aaMove);
+        return jsonResponse({ status: _aaResult.status, resendId: _aaResult.resendId || null });
+      } catch (e) {
+        return jsonResponse({ error: 'actions_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
+      }
+    }
+
     // POST /admin/links/create — { adminPassword, firmCode, kind, url, leadId? }
     if (request.method === 'POST' && path === '/admin/links/create') {
       let body;
@@ -7789,7 +7849,9 @@ export default {
       var cost = newCostAccum();
 
       /* ── Inject verified D1 counts into the conversation ──
-         Query real pipeline numbers so the AI never hallucinates stats. */
+         Query real pipeline numbers so the AI never hallucinates stats.
+         Also loads a KV snapshot from the previous briefing to compute
+         exact deltas — the model must never invent comparison numbers. */
       var _bfMsgs = body.messages || [];
       if (env.DB) {
         try {
@@ -7814,6 +7876,39 @@ export default {
           ).bind(session.firmCode).all();
           var _bfNames = ((_bfRecentNames && _bfRecentNames.results) || []).map(function(r) { return r.name + ' (' + r.stage + ')'; });
 
+          /* Current snapshot for comparison */
+          var _bfNow = {
+            found: _bfByStage.found || 0,
+            contacted: _bfByStage.contacted || 0,
+            replied: _bfByStage.replied || 0,
+            won: _bfByStage.won || 0,
+            expired: _bfByStage.expired || 0
+          };
+
+          /* Load previous snapshot from KV */
+          var _bfSnapKey = 'briefing:snapshot:' + session.firmCode;
+          var _bfPrev = await env.G7_KV.get(_bfSnapKey, 'json');
+          var _bfChangeLine = '';
+          if (_bfPrev && _bfPrev.date && _bfPrev.date !== _bfDay) {
+            var _bfDiffs = [];
+            var _bfFields = [
+              { key: 'found', label: 'found (uncontacted)' },
+              { key: 'contacted', label: 'contacted' },
+              { key: 'replied', label: 'replied' },
+              { key: 'won', label: 'won' }
+            ];
+            for (var _fi = 0; _fi < _bfFields.length; _fi++) {
+              var _fk = _bfFields[_fi].key;
+              var _diff = _bfNow[_fk] - (_bfPrev[_fk] || 0);
+              if (_diff !== 0) _bfDiffs.push(_bfFields[_fi].label + ': ' + (_diff > 0 ? '+' : '') + _diff);
+            }
+            if (_bfDiffs.length > 0) {
+              _bfChangeLine = 'Changes since ' + _bfPrev.date + ': ' + _bfDiffs.join(', ');
+            } else {
+              _bfChangeLine = 'Changes since ' + _bfPrev.date + ': no change';
+            }
+          }
+
           var _bfData = 'VERIFIED DATA FROM DATABASE (use ONLY these numbers, never invent others):\n' +
             'New leads today: ' + ((_bfNewToday && _bfNewToday.c) || 0) + '\n' +
             'Total found (uncontacted): ' + (_bfByStage.found || 0) + '\n' +
@@ -7823,10 +7918,18 @@ export default {
             'Expired: ' + (_bfByStage.expired || 0) + '\n' +
             'Opened your link (last 7 days): ' + ((_bfLinkOpened && _bfLinkOpened.c) || 0) + '\n' +
             'Recent names: ' + (_bfNames.length > 0 ? _bfNames.join(', ') : 'none') + '\n' +
-            'RULE: State only these numbers. If a count is 0, do not mention that category.';
+            (_bfChangeLine ? _bfChangeLine + '\n' : '') +
+            'RULES:\n' +
+            '- State only the numbers given above. Never compute or invent changes.\n' +
+            '- If a count is 0, do not mention that category.\n' +
+            '- For changes, use only the "Changes since" line above. If it is absent, say nothing about changes.';
 
           /* Prepend verified data as a user message before the conversation */
           _bfMsgs = [{ role: 'user', content: _bfData }].concat(_bfMsgs);
+
+          /* Save current snapshot for next comparison */
+          _bfNow.date = _bfDay;
+          ctx.waitUntil(kvPut(env, _bfSnapKey, JSON.stringify(_bfNow), { expirationTtl: 7 * 86400 }));
         } catch (e) {
           /* If D1 fails, proceed without injected data — the frontend state is still present */
         }
@@ -7854,6 +7957,7 @@ export default {
           stream:     false,
           system:     'You are Scout, a business-development assistant for a small Indian business. ' +
                       'Answer questions using ONLY the verified database numbers provided. ' +
+                      'State only the numbers given, never compute or invent changes. ' +
                       'Be concise, friendly, and actionable. Use plain language.',
           messages:   _bfMsgs
         })
@@ -10747,6 +10851,32 @@ export default {
           } catch (e) {
             _devMeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
           }
+          /* ── News + Scout's Move + actions/news emails (same path as prod) ── */
+          var _dNews = null, _dMove = null, _dActionsStatus = 'skipped', _dNewsStatus = 'skipped';
+          var _dSaved = await getMarketContext(env, _dFirm);
+          if (_dSaved && _dSaved.context) {
+            var _dNewsCost = newCostAccum();
+            var _dUser2 = await env.G7_KV.get('auth:users:' + _dFirm, 'json') || {};
+            var _dNewsPrefs;
+            try { _dNewsPrefs = await resolveNewsPrefs(env, _dFirm, _dUser2.newsPrefs); } catch (e) { _dNewsPrefs = _dUser2.newsPrefs || []; }
+            try {
+              _dNews = await buildDailyNews(env, _dFirm, day, _dSaved.context, _dSaved.city || '', _dNewsPrefs, _dNewsCost);
+            } catch (e) {
+              console.log(JSON.stringify({ devNewsError: _dFirm, error: String(e && e.message || e).slice(0, 200) }));
+            }
+            var _dSt = await loadScoutState(env, _dFirm);
+            try {
+              _dMove = await generateScoutMove(env, _dFirm, day, _dSaved.context, _dNews, _dSt, false, _dNewsCost);
+            } catch (e) {
+              console.log(JSON.stringify({ devMoveError: _dFirm, error: String(e && e.message || e).slice(0, 200) }));
+            }
+            try { var _dAR = await sendActionsEmail(env, _dFirm, day, _dMove); _dActionsStatus = _dAR.status; } catch (e) { _dActionsStatus = 'error:' + String(e.message || e).slice(0, 100); }
+            if (_dNews) {
+              try { var _dNR = await sendNewsEmail(env, _dFirm, day); _dNewsStatus = _dNR.status; } catch (e) { _dNewsStatus = 'error:' + String(e.message || e).slice(0, 100); }
+            } else { _dNewsStatus = 'no_news'; }
+            try { await flushCost(env, day, _dFirm, _dNewsCost); } catch (e) {}
+          }
+          _devMeReport.push({ firm: _dFirm, type: 'news+move', actions: _dActionsStatus, news: _dNewsStatus, move: _dMove ? 'ok' : 'none' });
         }
         _devCursor = _devPage.list_complete ? undefined : _devPage.cursor;
       } while (_devCursor);
