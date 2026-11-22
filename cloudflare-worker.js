@@ -4854,7 +4854,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   if (env.DB) {
     try {
       var existRows = await env.DB.prepare(
-        "SELECT place_id FROM customers WHERE firm_code = ? AND place_id IS NOT NULL"
+        "SELECT place_id FROM customers WHERE firm_code = ? AND place_id IS NOT NULL AND deleted_at IS NULL"
       ).bind(firmCode).all();
       (existRows.results || []).forEach(function(r) { if (r.place_id) existingPlaceIds.add(r.place_id); });
     } catch (e) {}
@@ -4976,25 +4976,36 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     });
   }
 
+  /* Pick target: 7 to allow headroom for reachable filter (capped to 5 after) */
+  var PICK_TARGET = 7;
   function _balancePick(scored) {
     var picked = [];
     var groupCounts = {};
+    /* Pass 1: one per group for balance */
     var _seenGroups = new Set();
     scored.forEach(function(s) {
-      if (picked.length >= 5) return;
+      if (picked.length >= PICK_TARGET) return;
       var gn = s._groupName;
       if (_seenGroups.has(gn)) return;
       _seenGroups.add(gn);
       picked.push(s);
       groupCounts[gn] = 1;
     });
+    /* Pass 2: up to 2 per group */
     scored.forEach(function(s) {
-      if (picked.length >= 5) return;
+      if (picked.length >= PICK_TARGET) return;
       var gn = s._groupName;
       if ((groupCounts[gn] || 0) >= 2) return;
       if (picked.indexOf(s) !== -1) return;
       picked.push(s);
       groupCounts[gn] = (groupCounts[gn] || 0) + 1;
+    });
+    /* Pass 3: relax per-group cap — fill from any group */
+    scored.forEach(function(s) {
+      if (picked.length >= PICK_TARGET) return;
+      if (picked.indexOf(s) !== -1) return;
+      picked.push(s);
+      groupCounts[s._groupName] = (groupCounts[s._groupName] || 0) + 1;
     });
     return { picked: picked, groupCounts: groupCounts };
   }
@@ -5026,7 +5037,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
      Priority: unsearched groups first, then rotate areas for searched groups. */
   var _searchOffset = 1;
   var _areaRotation = 0;
-  while (picked.length < 5 && textSearchCalls < MAX_SEARCHES) {
+  while (picked.length < PICK_TARGET && textSearchCalls < MAX_SEARCHES) {
     /* First try: find an unsearched group */
     var _nextGIdx = -1;
     for (var _ug = 0; _ug < enabledGroups.length; _ug++) {
@@ -5133,6 +5144,8 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     if (p._groupChannel === 'visit') return true;
     return p.channels.indexOf('whatsapp') !== -1 || p.channels.indexOf('call') !== -1 || p.channels.indexOf('email') !== -1;
   });
+  /* Cap to 5 after reachable filter (picked up to 7 for headroom) */
+  if (picked.length > 5) picked = picked.slice(0, 5);
 
   /* ── Dry run: skip messages, pool removal, D1 save, KV cache ── */
   if (dryRun) {
