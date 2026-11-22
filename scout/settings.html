@@ -705,8 +705,9 @@ async function renderEmails() {
     '<option value="10:30"' + (me.time==='10:30'?' selected':'') + '>10:30 AM</option>' +
     '<option value="11:00"' + (me.time==='11:00'?' selected':'') + '>11:00 AM</option>' +
     '</select><span style="font-size:11px;color:var(--grey2);margin-left:6px">IST</span></div>';
-  html += '<div class="s-row"><span class="s-row-label">Daily actions email</span>' +
-    '<button class="s-toggle ' + (_emailState.actions ? 'on' : 'off') + '" id="emailActionsToggle">' + (_emailState.actions ? 'On' : 'Off') + '</button></div>';
+  html += '<div class="s-row" id="actionsToggleRow" style="' + (me.on ? '' : 'display:none') + '"><span class="s-row-label">Include Scout\u2019s Move</span>' +
+    '<button class="s-toggle ' + (_emailState.actions ? 'on' : 'off') + '" id="emailActionsToggle">' + (_emailState.actions ? 'On' : 'Off') + '</button>' +
+    '<div style="font-size:11px;color:var(--grey2);margin-top:4px">Today\u2019s one action, inside the morning email</div></div>';
   html += '<div class="s-row"><span class="s-row-label">News email</span>' +
     '<button class="s-toggle ' + (_emailState.news ? 'on' : 'off') + '" id="emailNewsToggle">' + (_emailState.news ? 'On' : 'Off') + '</button></div>';
   var we = _emailState.weeklyEmail || { on: true };
@@ -718,6 +719,8 @@ async function renderEmails() {
   document.getElementById('emailMorningToggle').onclick = function(){
     var newOn = !me.on;
     saveEmailToggle({ morningEmail: { on: newOn, time: document.getElementById('morningTimeSelect').value } });
+    document.getElementById('morningTimeRow').style.display = newOn ? '' : 'none';
+    document.getElementById('actionsToggleRow').style.display = newOn ? '' : 'none';
   };
   document.getElementById('morningTimeSelect').onchange = function(){
     saveEmailToggle({ morningEmail: { on: true, time: this.value } });
