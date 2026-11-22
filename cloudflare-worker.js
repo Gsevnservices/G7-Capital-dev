@@ -10715,7 +10715,16 @@ export default {
           if (_dk.name.indexOf(':src:') !== -1) continue;
           var _dFirm = _dk.name.slice('scout:leadprofile:'.length);
           if (!_dFirm) continue;
-          /* Check morningEmail is on and slot matches */
+          /* Weekly email runs for every firm (has its own ISO-week dedupe).
+             Moved outside the slot-match gate so firms with non-matching
+             morningEmail.time still get their weekly email. */
+          try {
+            var _dWeResult = await sendWeeklyEmail(env, _dFirm, {});
+            _devWeReport.push({ firm: _dFirm, status: _dWeResult.status, resendId: _dWeResult.resendId || null });
+          } catch (e) {
+            _devWeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
+          }
+          /* Check morningEmail is on and slot matches — only for leads + morning email */
           var _dMePref = await getFirmSetting(env, _dFirm, 'morningEmail');
           if (!_dMePref) _dMePref = { on: true, time: '08:00' };
           if (!_dMePref.on) { _devMeReport.push({ firm: _dFirm, status: 'email_off' }); continue; }
@@ -10737,13 +10746,6 @@ export default {
             _devMeReport.push({ firm: _dFirm, status: _dMeResult.status, leadCount: _dMeResult.leadCount, followUpCount: _dMeResult.followUpCount, resendId: _dMeResult.resendId || null });
           } catch (e) {
             _devMeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
-          }
-          /* Weekly email (every day on dev, not just Monday) */
-          try {
-            var _dWeResult = await sendWeeklyEmail(env, _dFirm, {});
-            _devWeReport.push({ firm: _dFirm, status: _dWeResult.status, resendId: _dWeResult.resendId || null });
-          } catch (e) {
-            _devWeReport.push({ firm: _dFirm, status: 'error', error: String(e.message || e).slice(0, 200) });
           }
         }
         _devCursor = _devPage.list_complete ? undefined : _devPage.cursor;
