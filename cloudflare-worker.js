@@ -381,6 +381,15 @@ const COST_TABLE = {
 /* Factory for a per-request cost accumulator. Create one at the start of
    each request or cron firm-run; pass it explicitly through every function
    that calls Anthropic; flush it once at the end. */
+
+/* ── Shared SQL fragments for consistent lead counting ──
+   Every query that counts or lists customers must exclude soft-deleted rows
+   and test rows. Use these constants so the definition lives in one place.
+   LEAD_WHERE: "deleted_at IS NULL AND not-test"  (append with AND)
+   LEAD_WHERE_SRC: same + "source = 'places'"     (for lead-gen queries) */
+const LEAD_WHERE = "deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1)";
+const LEAD_WHERE_SRC = "source = 'places' AND " + LEAD_WHERE;
+
 function newCostAccum() {
   return { calls: 0, usd: 0, web_search_requests: 0, input_tokens: 0, output_tokens: 0, log: [],
     /* per-source breakdown (USD) */
@@ -2241,7 +2250,7 @@ async function sendWeeklyEmail(env, firmCode, opts) {
   try {
     /* Found: customers created this week via places source */
     var foundR = await env.DB.prepare(
-      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) AND created_at >= ? AND created_at < ?"
+      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " AND created_at >= ? AND created_at < ?"
     ).bind(firmCode, weekStart + 'T00:00:00Z', weekEndExcl + 'T00:00:00Z').first();
     stats.found = (foundR && foundR.c) || 0;
 
@@ -2265,7 +2274,7 @@ async function sendWeeklyEmail(env, firmCode, opts) {
 
     /* Previous week for comparison */
     var prevFoundR = await env.DB.prepare(
-      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND source = 'places' AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) AND created_at >= ? AND created_at < ?"
+      "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " AND created_at >= ? AND created_at < ?"
     ).bind(firmCode, prevStart + 'T00:00:00Z', prevEndExcl + 'T00:00:00Z').first();
     prevStats.found = (prevFoundR && prevFoundR.c) || 0;
 
@@ -4783,7 +4792,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   if (!dryRun && env.DB) {
     try {
       var _capRow = await env.DB.prepare(
-        "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
+        "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " AND json_extract(data, '$.lead_day') = ?"
       ).bind(firmCode, day).first();
       if (_capRow && _capRow.cnt >= 5) return { status: 'daily_cap', found: _capRow.cnt };
     } catch (e) {}
@@ -7858,13 +7867,13 @@ export default {
           var _bfDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
           var _bfWeekAgo = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
           var _bfCounts = await env.DB.prepare(
-            "SELECT stage, COUNT(*) as c FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) GROUP BY stage"
+            "SELECT stage, COUNT(*) as c FROM customers WHERE firm_code = ? AND " + LEAD_WHERE + " GROUP BY stage"
           ).bind(session.firmCode).all();
           var _bfByStage = {};
           ((_bfCounts && _bfCounts.results) || []).forEach(function(r) { _bfByStage[r.stage] = r.c; });
 
           var _bfNewToday = await env.DB.prepare(
-            "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND json_extract(data, '$.lead_day') = ? AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1)"
+            "SELECT COUNT(*) as c FROM customers WHERE firm_code = ? AND " + LEAD_WHERE + " AND json_extract(data, '$.lead_day') = ?"
           ).bind(session.firmCode, _bfDay).first();
 
           var _bfLinkOpened = await env.DB.prepare(
@@ -7872,7 +7881,7 @@ export default {
           ).bind(session.firmCode, _bfWeekAgo + 'T00:00:00Z').first();
 
           var _bfRecentNames = await env.DB.prepare(
-            "SELECT name, stage FROM customers WHERE firm_code = ? AND deleted_at IS NULL AND stage IN ('contacted','replied','won') AND (json_extract(data, '$.test') IS NULL OR json_extract(data, '$.test') != 1) ORDER BY updated_at DESC LIMIT 10"
+            "SELECT name, stage FROM customers WHERE firm_code = ? AND " + LEAD_WHERE + " AND stage IN ('contacted','replied','won') ORDER BY updated_at DESC LIMIT 10"
           ).bind(session.firmCode).all();
           var _bfNames = ((_bfRecentNames && _bfRecentNames.results) || []).map(function(r) { return r.name + ' (' + r.stage + ')'; });
 
@@ -7885,27 +7894,78 @@ export default {
             expired: _bfByStage.expired || 0
           };
 
-          /* Load previous snapshot from KV */
-          var _bfSnapKey = 'briefing:snapshot:' + session.firmCode;
-          var _bfPrev = await env.G7_KV.get(_bfSnapKey, 'json');
+          /* ── Day-level snapshot for "since yesterday" comparison ──
+             One snapshot per IST day, written on the first briefing of that day.
+             Compare against the most recent *previous* day's snapshot (up to 7 days back).
+             Never compare twice in the same day against a snapshot from minutes ago. */
+          var _bfSnapPrefix = 'briefing:snap:' + session.firmCode + ':';
+          var _bfTodaySnap = await env.G7_KV.get(_bfSnapPrefix + _bfDay, 'json');
           var _bfChangeLine = '';
-          if (_bfPrev && _bfPrev.date && _bfPrev.date !== _bfDay) {
-            var _bfDiffs = [];
-            var _bfFields = [
-              { key: 'found', label: 'found (uncontacted)' },
-              { key: 'contacted', label: 'contacted' },
-              { key: 'replied', label: 'replied' },
-              { key: 'won', label: 'won' }
-            ];
-            for (var _fi = 0; _fi < _bfFields.length; _fi++) {
-              var _fk = _bfFields[_fi].key;
-              var _diff = _bfNow[_fk] - (_bfPrev[_fk] || 0);
-              if (_diff !== 0) _bfDiffs.push(_bfFields[_fi].label + ': ' + (_diff > 0 ? '+' : '') + _diff);
+
+          /* Find the most recent previous day with a snapshot (up to 7 days back) */
+          if (!_bfTodaySnap) {
+            /* First briefing of the day — look for yesterday, then further back */
+            var _bfPrev = null;
+            var _bfPrevDate = null;
+            for (var _di = 1; _di <= 7; _di++) {
+              var _dCheck = new Date(Date.now() + 5.5 * 3600000 - _di * 86400000).toISOString().slice(0, 10);
+              _bfPrev = await env.G7_KV.get(_bfSnapPrefix + _dCheck, 'json');
+              if (_bfPrev) { _bfPrevDate = _dCheck; break; }
             }
-            if (_bfDiffs.length > 0) {
-              _bfChangeLine = 'Changes since ' + _bfPrev.date + ': ' + _bfDiffs.join(', ');
-            } else {
-              _bfChangeLine = 'Changes since ' + _bfPrev.date + ': no change';
+            if (_bfPrev && _bfPrevDate) {
+              var _bfDiffs = [];
+              var _bfFields = [
+                { key: 'found', label: 'found (uncontacted)' },
+                { key: 'contacted', label: 'contacted' },
+                { key: 'replied', label: 'replied' },
+                { key: 'won', label: 'won' }
+              ];
+              for (var _fi = 0; _fi < _bfFields.length; _fi++) {
+                var _fk = _bfFields[_fi].key;
+                var _diff = _bfNow[_fk] - (_bfPrev[_fk] || 0);
+                if (_diff !== 0) _bfDiffs.push(_bfFields[_fi].label + ': ' + (_diff > 0 ? '+' : '') + _diff);
+              }
+              /* "since yesterday" if 1 day ago, else "since {date}" */
+              var _bfSinceLabel = (_bfPrevDate === new Date(Date.now() + 5.5 * 3600000 - 86400000).toISOString().slice(0, 10))
+                ? 'yesterday' : _bfPrevDate;
+              if (_bfDiffs.length > 0) {
+                _bfChangeLine = 'Changes since ' + _bfSinceLabel + ': ' + _bfDiffs.join(', ');
+              } else {
+                _bfChangeLine = 'Changes since ' + _bfSinceLabel + ': no change';
+              }
+            }
+            /* Save today's snapshot (first briefing of the day) */
+            ctx.waitUntil(kvPut(env, _bfSnapPrefix + _bfDay, JSON.stringify(_bfNow), { expirationTtl: 8 * 86400 }));
+          }
+          /* If _bfTodaySnap already exists, we still compare against the previous day */
+          if (_bfTodaySnap && !_bfChangeLine) {
+            var _bfPrev2 = null;
+            var _bfPrevDate2 = null;
+            for (var _di2 = 1; _di2 <= 7; _di2++) {
+              var _dCheck2 = new Date(Date.now() + 5.5 * 3600000 - _di2 * 86400000).toISOString().slice(0, 10);
+              _bfPrev2 = await env.G7_KV.get(_bfSnapPrefix + _dCheck2, 'json');
+              if (_bfPrev2) { _bfPrevDate2 = _dCheck2; break; }
+            }
+            if (_bfPrev2 && _bfPrevDate2) {
+              var _bfDiffs2 = [];
+              var _bfFields2 = [
+                { key: 'found', label: 'found (uncontacted)' },
+                { key: 'contacted', label: 'contacted' },
+                { key: 'replied', label: 'replied' },
+                { key: 'won', label: 'won' }
+              ];
+              for (var _fi2 = 0; _fi2 < _bfFields2.length; _fi2++) {
+                var _fk2 = _bfFields2[_fi2].key;
+                var _diff2 = _bfNow[_fk2] - (_bfPrev2[_fk2] || 0);
+                if (_diff2 !== 0) _bfDiffs2.push(_bfFields2[_fi2].label + ': ' + (_diff2 > 0 ? '+' : '') + _diff2);
+              }
+              var _bfSinceLabel2 = (_bfPrevDate2 === new Date(Date.now() + 5.5 * 3600000 - 86400000).toISOString().slice(0, 10))
+                ? 'yesterday' : _bfPrevDate2;
+              if (_bfDiffs2.length > 0) {
+                _bfChangeLine = 'Changes since ' + _bfSinceLabel2 + ': ' + _bfDiffs2.join(', ');
+              } else {
+                _bfChangeLine = 'Changes since ' + _bfSinceLabel2 + ': no change';
+              }
             }
           }
 
@@ -7926,10 +7986,6 @@ export default {
 
           /* Prepend verified data as a user message before the conversation */
           _bfMsgs = [{ role: 'user', content: _bfData }].concat(_bfMsgs);
-
-          /* Save current snapshot for next comparison */
-          _bfNow.date = _bfDay;
-          ctx.waitUntil(kvPut(env, _bfSnapKey, JSON.stringify(_bfNow), { expirationTtl: 7 * 86400 }));
         } catch (e) {
           /* If D1 fails, proceed without injected data — the frontend state is still present */
         }
@@ -8604,8 +8660,8 @@ export default {
         try {
           /* Uncontacted leads from last 7 days — today + carry-over (newest first) */
           var _ltRows = await env.DB.prepare(
-            "SELECT id, name, phone, stage, data FROM customers WHERE firm_code = ? AND source = 'places' " +
-            "AND stage = 'found' AND deleted_at IS NULL " +
+            "SELECT id, name, phone, stage, data FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " " +
+            "AND stage = 'found' " +
             "AND (json_extract(data, '$.lead_day') >= ? OR json_extract(data, '$.lead_day') IS NULL) " +
             "ORDER BY created_at DESC LIMIT 40"
           ).bind(_ltSess.firmCode, _lt7ago).all();
@@ -8781,7 +8837,7 @@ export default {
       if (env.DB) {
         try {
           var _lgCapRow = await env.DB.prepare(
-            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
+            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " AND json_extract(data, '$.lead_day') = ?"
           ).bind(_lgSess.firmCode, _lgDay).first();
           if (_lgCapRow && _lgCapRow.cnt >= 5) {
             return jsonResponse({ ok: true, status: 'daily_cap' });
@@ -9128,8 +9184,8 @@ export default {
         /* Overall funnel this week */
         var _lsWeekAgo = new Date(Date.now() + 5.5 * 3600000 - 7 * 86400000).toISOString().slice(0, 10);
         var _lsFunnel = await env.DB.prepare(
-          "SELECT stage, COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' " +
-          "AND created_at >= ? AND deleted_at IS NULL GROUP BY stage"
+          "SELECT stage, COUNT(*) as cnt FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " " +
+          "AND created_at >= ? GROUP BY stage"
         ).bind(_lsSess.firmCode, _lsWeekAgo).all();
 
         /* lead_stats totals */
@@ -9143,8 +9199,8 @@ export default {
         try {
           var _lsRt = await env.DB.prepare(
             "SELECT json_extract(data, '$.group') as grp, json_extract(data, '$.replyType') as rt, COUNT(*) as cnt " +
-            "FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.replyType') IS NOT NULL " +
-            "AND deleted_at IS NULL GROUP BY grp, rt"
+            "FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " AND json_extract(data, '$.replyType') IS NOT NULL " +
+            "GROUP BY grp, rt"
           ).bind(_lsSess.firmCode).all();
           _lsReplyTypes = (_lsRt && _lsRt.results) || [];
         } catch (e) {}
@@ -9827,7 +9883,7 @@ export default {
       if (env.DB) {
         try {
           var _ldRow = await env.DB.prepare(
-            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND source = 'places' AND json_extract(data, '$.lead_day') = ? AND deleted_at IS NULL"
+            "SELECT COUNT(*) as cnt FROM customers WHERE firm_code = ? AND " + LEAD_WHERE_SRC + " AND json_extract(data, '$.lead_day') = ?"
           ).bind(session.firmCode, _istDay).first();
           _leadsToday = _ldRow ? _ldRow.cnt : 0;
         } catch (e) {}
