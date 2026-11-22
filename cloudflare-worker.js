@@ -2708,8 +2708,8 @@ async function runGroupSearch(env, firmCode, groupName, cost) {
   var _fRes = await filterPlacesCandidates(env, firmCode, raw, profileJson, ownCategory);
   var filtered = _fRes.candidates;
 
-  /* Score with Haiku */
-  var scored = await scoreLeadFit(env, filtered, group, context, cost);
+  /* Score with Haiku — scoreLeadFit expects profile (with .groups array) */
+  var scored = await scoreLeadFit(env, filtered, profileJson, group.name, context, cost);
   scored.sort(function(a, b) { return b.fitScore - a.fitScore; });
   var top = scored.slice(0, 5); // scoreLeadFit already drops below 6
 
@@ -7825,11 +7825,19 @@ export default {
             'Recent names: ' + (_bfNames.length > 0 ? _bfNames.join(', ') : 'none') + '\n' +
             'RULE: State only these numbers. If a count is 0, do not mention that category.';
 
-          /* Prepend as a system-role context block before the user messages */
-          _bfMsgs = [{ role: 'user', content: _bfData }, { role: 'assistant', content: 'Understood. I will only use the verified database numbers above.' }].concat(_bfMsgs);
+          /* Prepend verified data as a user message before the conversation */
+          _bfMsgs = [{ role: 'user', content: _bfData }].concat(_bfMsgs);
         } catch (e) {
           /* If D1 fails, proceed without injected data — the frontend state is still present */
         }
+      }
+
+      /* Ensure messages is non-empty and ends with a user message */
+      if (_bfMsgs.length === 0) {
+        _bfMsgs = [{ role: 'user', content: body.question || 'What is my update today?' }];
+      }
+      if (_bfMsgs[_bfMsgs.length - 1].role !== 'user') {
+        _bfMsgs.push({ role: 'user', content: body.question || 'What is my update today?' });
       }
 
       const anthropicResponse = await anthropicFetch('https://api.anthropic.com/v1/messages', {
@@ -7840,10 +7848,13 @@ export default {
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model:      'claude-sonnet-5-5',
-          max_tokens: 6000,
-          thinking:   { type: 'between_tools' },
+          model:      'claude-haiku-5-5',
+          max_tokens: 4000,
+          thinking:   { type: 'disabled' },
           stream:     false,
+          system:     'You are Scout, a business-development assistant for a small Indian business. ' +
+                      'Answer questions using ONLY the verified database numbers provided. ' +
+                      'Be concise, friendly, and actionable. Use plain language.',
           messages:   _bfMsgs
         })
       }, 'briefing');
@@ -7854,7 +7865,7 @@ export default {
       }
 
       const result = await anthropicResponse.json();
-      recordCost(cost, 'claude-sonnet-5-5', result);
+      recordCost(cost, 'claude-haiku-5-5', result);
       ctx.waitUntil(flushCost(env, new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10), session.firmCode, cost));
       const text = (result.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; }).join('');
 
@@ -8016,6 +8027,12 @@ export default {
       }
       var cost = newCostAccum();
 
+      /* Validate messages — must have at least one message ending with user role */
+      var _ciMsgs = body.messages || [];
+      if (_ciMsgs.length === 0) {
+        return jsonResponse({ error: 'messages is required' }, 400);
+      }
+
       const anthropicResponse = await anthropicFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -8030,7 +8047,7 @@ export default {
           thinking: { type: 'between_tools' },
           stream:   true,
           system:   body.system   || '',
-          messages: body.messages || []
+          messages: _ciMsgs
         })
       }, 'checkin');
 
@@ -9486,8 +9503,9 @@ export default {
         var _gsMsg = String(e.message || e);
         if (_gsMsg === 'no_profile') return jsonResponse({ error: 'Run a business analysis first.' }, 400);
         if (_gsMsg === 'group_not_found') return jsonResponse({ error: 'Group not found or disabled.' }, 404);
+        console.log(JSON.stringify({ groupSearchError: _gsSess.firmCode, error: _gsMsg.slice(0, 300) }));
         await recordError(env, { source: 'worker', route: 'leads/group-search', firmCode: _gsSess.firmCode, kind: 'search_failed', message: _gsMsg.slice(0, 200) });
-        return jsonResponse({ error: 'Search failed. Please try again.' }, 502);
+        return jsonResponse({ error: 'Search failed. Please try again.', detail: _gsMsg.slice(0, 200) }, 502);
       }
     }
 
