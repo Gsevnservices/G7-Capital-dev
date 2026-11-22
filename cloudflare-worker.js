@@ -1842,6 +1842,16 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var msgLang = (user && user.messageLanguage) || 'Hinglish';
   var due = pipelineDueFromStore(pipeline, Date.now(), bizName, _bucket, _reviewSkip, msgLang);
 
+  /* ── Parse scoutOutput for WhatsApp calendar + week number ── */
+  var analysis = {};
+  try {
+    analysis = typeof pend.scoutOutput === 'string'
+      ? JSON.parse(pend.scoutOutput.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim())
+      : (pend.scoutOutput || {});
+  } catch (e) {}
+  var weekNum = parseInt((st && st.pick('scout_week_number')) || '1', 10) || 1;
+  var weekday = new Date(day + 'T06:00:00+05:30').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+
   /* ── Build set of follow-up person IDs to avoid duplicates with leads ── */
   var _dueIds = {};
   due.forEach(function(d) { if (d.person && d.person.id) _dueIds[d.person.id] = true; });
@@ -1869,10 +1879,11 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       _totalTaps = (_taps.now.bio || 0) + (_taps.now.google || 0) + (_taps.now.status || 0);
     } catch (e) {}
   }
-  var hasYesterday = _waSent > 0 || _totalTaps > 0;
+  var hasYesterday = _waSent > 0;
+  var hasLinks = !!links;
 
   /* ── Nothing to send? Send if ANY section has content ── */
-  if (leads.length === 0 && due.length === 0 && !includeMove && !hasYesterday) {
+  if (leads.length === 0 && due.length === 0 && !includeMove && !hasYesterday && !hasLinks) {
     return { status: 'nothing_to_send', leadCount: 0, followUpCount: 0, sections: [] };
   }
 
@@ -1975,21 +1986,58 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
     textParts.push('  A suggestion from Scout — you know your business best.');
   }
 
-  /* ── 4. YESTERDAY'S ACTIVITY (WhatsApp sends + link taps, only if any) ── */
+  /* ── 3b. PLANNED WHATSAPP SENDS (under Scout's Move, max 2) ── */
+  var tab3 = (analysis && analysis.tab3) || {};
+  var waCal = tab3.whatsappCalendar || {};
+  var calWeek = ((weekNum - 1) % 4) + 1;
+  var waEntries = Array.isArray(waCal['week' + calWeek]) ? waCal['week' + calWeek] : [];
+  var todayWa = waEntries.filter(function(e) { return e.day && e.day.toLowerCase() === weekday.toLowerCase(); });
+  if (todayWa.length > 0) {
+    var showWa = todayWa.slice(0, 2);
+    for (var wi = 0; wi < showWa.length; wi++) {
+      var we = showWa[wi];
+      var wLabel = escEmail(we.listName || we.sendTo || '');
+      var wTime = escEmail(we.time || '');
+      var alsoLine = 'Also today: send to <strong>' + wLabel + '</strong>' + (wTime ? ' at ' + wTime : '');
+      if (we.message) {
+        var calWaUrl = emailSafeUrl('https://wa.me/?text=' + encodeURIComponent(we.message));
+        alsoLine += ' <a href="' + escEmail(calWaUrl) + '" style="color:#B8862B;text-decoration:none;font-weight:600">\u00a0WhatsApp</a>';
+      }
+      htmlParts.push(emailRow(alsoLine));
+      var wText = '  Also today: send to ' + (we.listName || we.sendTo || '') + (wTime ? ' at ' + wTime : '');
+      if (we.message) wText += '\n  > ' + we.message + '\n  WhatsApp: https://wa.me/?text=' + encodeURIComponent(we.message);
+      textParts.push(wText);
+    }
+    if (!sections.includes('move')) sections.push('planned_wa');
+  }
+
+  /* ── 4. YESTERDAY (WhatsApp sends only, if any) ── */
   if (hasYesterday) {
     sections.push('yesterday');
     htmlParts.push(emailHeading('Yesterday'));
-    var yParts = [];
-    if (_waSent > 0) yParts.push(_waSent + ' WhatsApp message' + (_waSent === 1 ? '' : 's') + ' sent');
+    htmlParts.push(emailRow(escEmail(_waSent + ' WhatsApp message' + (_waSent === 1 ? '' : 's') + ' sent')));
+    textParts.push('YESTERDAY\n  ' + _waSent + ' WhatsApp message' + (_waSent === 1 ? '' : 's') + ' sent');
+  }
+
+  /* ── 5. YOUR LINKS (taps, or no-taps fallback) ── */
+  if (hasLinks) {
+    sections.push('links');
+    htmlParts.push(emailHeading('Your links'));
     if (_totalTaps > 0) {
       var tapParts = [];
       ['bio', 'google', 'status'].forEach(function(s) {
-        if (_taps.now[s]) tapParts.push(s + ': ' + tapWord(_taps.now[s]));
+        if (_taps && _taps.now[s]) tapParts.push(escEmail(s.charAt(0).toUpperCase() + s.slice(1)) + ': <strong>' + tapWord(_taps.now[s]) + '</strong>');
       });
-      yParts.push(tapParts.join(', ') + ' on your links');
+      htmlParts.push(emailRow(tapParts.join(' \u00b7 ')));
+      var tapTexts = [];
+      ['bio', 'google', 'status'].forEach(function(s) {
+        if (_taps && _taps.now[s]) tapTexts.push(s.charAt(0).toUpperCase() + s.slice(1) + ': ' + tapWord(_taps.now[s]));
+      });
+      textParts.push('YOUR LINKS\n  ' + tapTexts.join(' · '));
+    } else {
+      htmlParts.push(emailRow('No taps yet \u2014 share your bio link today.'));
+      textParts.push('YOUR LINKS\n  No taps yet — share your bio link today.');
     }
-    htmlParts.push(emailRow(yParts.map(function(t){ return escEmail(t); }).join('<br>')));
-    textParts.push('YESTERDAY\n  ' + yParts.join('\n  '));
   }
 
   /* ── Subject ── */
@@ -2014,8 +2062,9 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   var shell = emailShell({
     siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
     headerLabel: 'Scout',
-    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(bizName) + '.</div>',
-    textGreeting: 'Good morning, ' + bizName + '.\n\n',
+    greeting: '<div style="font-size:20px;color:#111;margin-top:8px">Good morning, ' + escEmail(bizName) + '.</div>' +
+              '<div style="font-size:13px;color:#888;margin-top:4px">Week ' + weekNum + ' of 12.</div>',
+    textGreeting: 'Good morning, ' + bizName + '.\nWeek ' + weekNum + ' of 12.\n\n',
     htmlParts: htmlParts,
     textParts: textParts,
     mainButton: _mainBtn,
