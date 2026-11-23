@@ -1236,11 +1236,11 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     </div>
   </div>
 
-  <!-- PANEL 5: LEADS — redirects to Today -->
+  <!-- PANEL 5: LEADS — CTA to start plan or go to Today -->
   <div class="tab-panel" id="panel5">
-    <div style="padding:32px 0;text-align:center">
+    <div style="padding:32px 0;text-align:center" id="panel5Content">
       <p style="color:var(--grey1);font-size:14px;margin-bottom:16px">Your leads are on Today.</p>
-      <a href="today.html" style="color:var(--gold);font-family:'Tenor Sans',sans-serif;font-size:12px;letter-spacing:0.15em;text-transform:uppercase;text-decoration:none">GO TO TODAY →</a>
+      <a href="today.html" id="panel5Link" style="color:var(--gold);font-family:'Tenor Sans',sans-serif;font-size:12px;letter-spacing:0.15em;text-transform:uppercase;text-decoration:none">GO TO TODAY →</a>
     </div>
   </div>
 
@@ -1426,20 +1426,32 @@ window.addEventListener('DOMContentLoaded', async function() {
     }).catch(function() {});
   })();
 
-  /* Fire-and-forget: trigger lead generation if today's leads are missing.
-     After analysis completes, the user lands here — ensure leads are generated
-     even if they never visit the Today page or Dashboard. */
+  /* After analysis — check billing to decide lead gen or pricing CTA */
   (function() {
     var _tok = localStorage.getItem('g7_session_token') || '';
-    fetch(SCOUT_WORKER + '/scout/leads/today', {
+    fetch(SCOUT_WORKER + '/billing/status', {
       headers: { 'Authorization': 'Bearer ' + _tok }
-    }).then(function(r) { return r.json(); }).then(function(d) {
-      if (d.generating && (d.leads || []).length === 0) {
-        fetch(SCOUT_WORKER + '/scout/leads/generate', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + _tok }
-        }).catch(function() {});
+    }).then(function(r) { return r.json(); }).then(function(bs) {
+      if (bs.status !== 'active') {
+        /* Not paid — show pricing CTA in panel 5 */
+        var p5 = document.getElementById('panel5Content');
+        if (p5) {
+          p5.innerHTML = '<p style="color:var(--grey1);font-size:14px;margin-bottom:16px">Start your plan to get 5 new leads every day.</p>' +
+            '<a href="pricing.html" style="display:inline-block;background:var(--gold);color:#080808;font-family:\'Tenor Sans\',sans-serif;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;padding:14px 32px;text-decoration:none">START GETTING CUSTOMERS</a>';
+        }
+        return;
       }
+      /* Active — trigger lead gen */
+      fetch(SCOUT_WORKER + '/scout/leads/today', {
+        headers: { 'Authorization': 'Bearer ' + _tok }
+      }).then(function(r2) { return r2.json(); }).then(function(d) {
+        if (d.generating && (d.leads || []).length === 0) {
+          fetch(SCOUT_WORKER + '/scout/leads/generate', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + _tok }
+          }).catch(function() {});
+        }
+      }).catch(function() {});
     }).catch(function() {});
   })();
 

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pricing — G7 Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/env.js?v=1"></script>
+<script src="../assets/auth.js?v=19"></script>
+<script src="../assets/scout.js?v=55"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;font-size:16px}
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;--black4:#1E1E1E;
+  --gold:#C9A84C;--gold-l:#E2C97E;--gold-m:#A8873A;
+  --white:#FAFAF8;--white2:#F0EFE9;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(201,168,76,0.15);--border2:rgba(250,250,248,0.08)
+}
+body{font-family:'Tenor Sans',sans-serif;background:var(--black);color:var(--white);overflow-x:hidden;cursor:none;min-height:100vh;visibility:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:.4}
+.cursor{position:fixed;width:8px;height:8px;background:var(--gold);border-radius:50%;pointer-events:none;z-index:9999;transition:transform .15s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+.cursor-ring{position:fixed;width:36px;height:36px;border:1px solid rgba(201,168,76,.5);border-radius:50%;pointer-events:none;z-index:9998;transition:all .12s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+@media(max-width:480px){.cursor,.cursor-ring{display:none}body{cursor:auto}}
+nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:center;justify-content:space-between;padding:0 64px;height:80px;background:rgba(8,8,8,.92);backdrop-filter:blur(24px);border-bottom:1px solid var(--border2)}
+.nav-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:300;letter-spacing:.25em;text-transform:uppercase;color:var(--white);text-decoration:none}
+.nav-logo em{font-style:normal;color:var(--gold)}
+.nav-right{display:flex;align-items:center;gap:32px}
+.nav-link{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .3s}
+.nav-link:hover{color:var(--white)}
+@media(max-width:768px){nav{padding:0 24px}.nav-link{display:none}}
+
+.page-header{margin-top:80px;padding:56px 64px 40px;text-align:center}
+.eyebrow{font-size:9px;letter-spacing:.25em;text-transform:uppercase;color:var(--gold);margin-bottom:16px}
+.page-heading{font-family:'Cormorant Garamond',serif;font-size:clamp(28px,4vw,42px);font-weight:300;line-height:1.2;color:var(--white);margin-bottom:12px}
+.page-sub{font-size:13px;color:var(--grey1);line-height:1.6;max-width:420px;margin:0 auto}
+@media(max-width:768px){.page-header{padding:40px 24px 32px}}
+
+/* ── Plan cards ── */
+.plans{display:flex;gap:24px;max-width:640px;margin:0 auto;padding:24px 24px 48px;flex-wrap:wrap;justify-content:center}
+.plan-card{flex:1;min-width:260px;max-width:300px;background:var(--black2);border:1px solid var(--border2);padding:36px 28px;position:relative;transition:border-color .3s}
+.plan-card:hover{border-color:var(--border)}
+.plan-card.featured{border-color:var(--border)}
+.plan-badge{position:absolute;top:-12px;right:16px;font-size:9px;letter-spacing:.15em;text-transform:uppercase;background:rgba(201,168,76,0.15);color:var(--gold);padding:4px 12px;border-radius:2px;border:1px solid rgba(201,168,76,0.3)}
+.plan-name{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--grey2);margin-bottom:16px}
+.plan-price{font-family:'Cormorant Garamond',serif;font-size:36px;font-weight:300;color:var(--white);line-height:1.1;margin-bottom:4px}
+.plan-price span{font-size:14px;color:var(--grey1);font-family:'Tenor Sans',sans-serif}
+.plan-period{font-size:11px;color:var(--grey2);margin-bottom:24px}
+.plan-btn{display:block;width:100%;background:transparent;border:1px solid rgba(201,168,76,0.4);color:var(--gold);font-family:'Tenor Sans',sans-serif;font-size:10px;letter-spacing:.15em;text-transform:uppercase;padding:14px;cursor:pointer;transition:all .3s;text-align:center;text-decoration:none;min-height:44px}
+.plan-btn:hover{border-color:var(--gold);background:rgba(201,168,76,0.08)}
+.plan-btn.gold{background:var(--gold);color:#080808;border-color:var(--gold)}
+.plan-btn.gold:hover{background:var(--gold-l)}
+.plan-btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ── Feature list ── */
+.features{max-width:460px;margin:0 auto;padding:0 24px 56px}
+.features-head{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:20px;text-align:center}
+.feat-item{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;font-size:13px;color:var(--grey1);line-height:1.6}
+.feat-check{color:var(--gold);font-size:14px;flex-shrink:0;margin-top:2px}
+
+/* ── Refund line ── */
+.refund-line{text-align:center;font-size:12px;color:var(--grey2);padding:0 24px 48px;line-height:1.6}
+.refund-line a{color:var(--gold);text-decoration:none;border-bottom:1px solid rgba(201,168,76,0.4)}
+
+/* ── Reason banner (shown when redirected) ── */
+.reason-banner{max-width:560px;margin:0 auto 24px;padding:14px 24px;background:rgba(201,168,76,0.08);border:1px solid var(--border);font-size:12px;color:var(--gold-l);line-height:1.5;text-align:center;display:none}
+
+/* ── Loading / status ── */
+.status-msg{text-align:center;font-size:12px;color:var(--grey2);padding:12px;display:none}
+.status-msg.error{color:#C45A5A}
+.status-msg.success{color:var(--gold)}
+</style>
+</head>
+<body>
+
+<div class="cursor" id="cursor"></div>
+<div class="cursor-ring" id="cursorRing"></div>
+
+<nav>
+  <a href="today.html" class="nav-logo">G<em>7</em> Scout</a>
+  <div class="nav-right">
+    <a href="today.html" class="nav-link">Today</a>
+    <a href="pipeline.html" class="nav-link">Pipeline</a>
+    <a href="settings.html" class="nav-link">Settings</a>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="eyebrow">Pricing</div>
+  <h1 class="page-heading">Start getting customers</h1>
+  <p class="page-sub">Scout finds new customers for your business every day, with a WhatsApp message ready for each one.</p>
+</div>
+
+<!-- Reason banner (shown when redirected from a gated page) -->
+<div class="reason-banner" id="reasonBanner"></div>
+
+<div class="plans">
+  <!-- Monthly -->
+  <div class="plan-card">
+    <div class="plan-name">Monthly</div>
+    <div class="plan-price">₹3,000 <span>/month</span></div>
+    <div class="plan-period">Cancel anytime</div>
+    <button class="plan-btn gold" id="btnMonthly" onclick="startCheckout('monthly')">Start monthly plan</button>
+  </div>
+  <!-- Yearly -->
+  <div class="plan-card featured">
+    <div class="plan-badge">Save 20%</div>
+    <div class="plan-name">Yearly</div>
+    <div class="plan-price">₹28,800 <span>/year</span></div>
+    <div class="plan-period">₹2,400/month · One-time payment</div>
+    <button class="plan-btn" id="btnYearly" onclick="startCheckout('yearly')">Start yearly plan</button>
+  </div>
+</div>
+
+<div class="status-msg" id="statusMsg"></div>
+
+<div class="features">
+  <div class="features-head">What's included</div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>5 new leads every day, found near your business</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>A WhatsApp message written for each lead</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>Follow-up reminders so no one is forgotten</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>Ask Scout — 10 questions a day about your business</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>Morning email with your leads and what to do today</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>Tracked links to see who visits</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>Weekly check-in with Scout</span></div>
+  <div class="feat-item"><span class="feat-check">✓</span><span>Extra group search — 1 per day</span></div>
+</div>
+
+<div class="refund-line">
+  Fully refundable within 7 days of your first payment.<br>
+  <a href="refund.html">Refund policy</a>
+</div>
+
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+/* ── Globals ── */
+var SCOUT_WORKER = (typeof G7_ENV !== 'undefined' && G7_ENV.SCOUT_WORKER) || 'https://g7-proxy-dev.gsevnservices.workers.dev';
+var _auth = {};
+var _user = {};
+var _session = null;
+
+/* ── Cursor (desktop only) ── */
+var cur = document.getElementById('cursor');
+var ring = document.getElementById('cursorRing');
+document.addEventListener('mousemove', function(e) {
+  cur.style.left = e.clientX + 'px'; cur.style.top = e.clientY + 'px';
+  ring.style.left = e.clientX + 'px'; ring.style.top = e.clientY + 'px';
+});
+
+/* ── Init ── */
+(async function() {
+  document.body.style.visibility = 'visible';
+
+  /* Show reason banner if redirected */
+  var params = new URLSearchParams(window.location.search);
+  var reason = params.get('reason');
+  if (reason) {
+    var banner = document.getElementById('reasonBanner');
+    var msgs = {
+      leads: 'Start your plan to see your daily leads.',
+      ask: 'Start your plan to use Ask Scout.',
+      checkin: 'Start your plan for weekly check-ins.',
+      groupsearch: 'Start your plan to search groups.',
+      billing: 'Start your plan to unlock all features.'
+    };
+    banner.textContent = msgs[reason] || msgs.billing;
+    banner.style.display = 'block';
+  }
+
+  /* Auth check */
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) {
+    /* Not logged in — still show page, but buttons will redirect to login */
+    return;
+  }
+  _auth = { 'Authorization': 'Bearer ' + token };
+
+  /* Check if already active */
+  try {
+    var r = await fetch(SCOUT_WORKER + '/billing/status', { headers: _auth });
+    if (r.ok) {
+      var d = await r.json();
+      if (d.status === 'active') {
+        document.getElementById('btnMonthly').textContent = 'You have an active plan';
+        document.getElementById('btnMonthly').disabled = true;
+        document.getElementById('btnYearly').textContent = 'You have an active plan';
+        document.getElementById('btnYearly').disabled = true;
+        showStatus('Your plan is active. Go to <a href="today.html" style="color:var(--gold)">Today</a> to see your leads.', 'success');
+      }
+    }
+  } catch (e) {}
+
+  /* Load user info for prefill */
+  try {
+    var r2 = await fetch(SCOUT_WORKER + '/scout/recovery-email', { headers: _auth });
+    if (r2.ok) { var d2 = await r2.json(); _user.email = d2.email || ''; }
+  } catch (e) {}
+})();
+
+function showStatus(msg, type) {
+  var el = document.getElementById('statusMsg');
+  el.innerHTML = msg;
+  el.className = 'status-msg' + (type ? ' ' + type : '');
+  el.style.display = 'block';
+}
+
+async function startCheckout(plan) {
+  var token = localStorage.getItem('g7_session_token');
+  if (!token) {
+    window.location.href = '../login.html?product=scout&next=scout/pricing.html';
+    return;
+  }
+
+  var btn = document.getElementById(plan === 'monthly' ? 'btnMonthly' : 'btnYearly');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+
+  try {
+    var r = await fetch(SCOUT_WORKER + '/billing/checkout', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan: plan })
+    });
+    var d = await r.json();
+    if (d.error) {
+      showStatus(d.error, 'error');
+      btn.disabled = false;
+      btn.textContent = plan === 'monthly' ? 'Start monthly plan' : 'Start yearly plan';
+      return;
+    }
+
+    /* Open Razorpay Checkout */
+    var options = {
+      key: d.key_id,
+      name: 'Scout by G7',
+      description: plan === 'monthly' ? 'Monthly plan — ₹3,000/month' : 'Yearly plan — ₹28,800/year',
+      prefill: { email: _user.email || '' },
+      theme: { color: '#C9A84C' },
+      modal: {
+        ondismiss: function() {
+          btn.disabled = false;
+          btn.textContent = plan === 'monthly' ? 'Start monthly plan' : 'Start yearly plan';
+        }
+      },
+      handler: function(response) {
+        /* Payment succeeded — verify on server */
+        verifyPayment(plan, response);
+      }
+    };
+
+    if (plan === 'monthly') {
+      options.subscription_id = d.subscription_id;
+    } else {
+      options.order_id = d.order_id;
+      options.amount = 2880000;
+      options.currency = 'INR';
+    }
+
+    var rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(resp) {
+      showStatus('Payment failed. Please try again.', 'error');
+      btn.disabled = false;
+      btn.textContent = plan === 'monthly' ? 'Start monthly plan' : 'Start yearly plan';
+    });
+    rzp.open();
+
+  } catch (e) {
+    showStatus('Something went wrong. Please try again.', 'error');
+    btn.disabled = false;
+    btn.textContent = plan === 'monthly' ? 'Start monthly plan' : 'Start yearly plan';
+  }
+}
+
+async function verifyPayment(plan, response) {
+  showStatus('Verifying payment...', '');
+  try {
+    var payload = { plan: plan };
+    if (plan === 'monthly') {
+      payload.razorpay_payment_id = response.razorpay_payment_id;
+      payload.razorpay_subscription_id = response.razorpay_subscription_id;
+      payload.razorpay_signature = response.razorpay_signature;
+    } else {
+      payload.razorpay_payment_id = response.razorpay_payment_id;
+      payload.razorpay_order_id = response.razorpay_order_id;
+      payload.razorpay_signature = response.razorpay_signature;
+    }
+
+    var r = await fetch(SCOUT_WORKER + '/billing/verify', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + localStorage.getItem('g7_session_token'), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var d = await r.json();
+    if (d.ok) {
+      showStatus('Payment confirmed! Redirecting...', 'success');
+      setTimeout(function() { window.location.href = 'today.html'; }, 1500);
+    } else {
+      showStatus(d.error || 'Verification failed. Contact support.', 'error');
+    }
+  } catch (e) {
+    showStatus('Could not verify payment. Contact support if charged.', 'error');
+  }
+}
+</script>
+</body>
+</html>
