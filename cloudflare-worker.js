@@ -1817,7 +1817,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
     var cost = newCostAccum();
     var _costBucket = (opts && opts.adminCost) ? 'ADMIN' : firmCode;
     try {
-      var genResult = await runLeadsForFirm(env, firmCode, day, cost);
+      var genResult = await runLeadsForFirm(env, firmCode, day, cost, { exemptBudget: true });
       _leadGenStatus = genResult.status || 'unknown';
       await flushCost(env, day, _costBucket, cost);
       if (genResult.status === 'ok' || genResult.status === 'already_generated') {
@@ -3708,15 +3708,77 @@ var GROUP_TYPE_RULES = {
   'dental': { allowed: ['dental_clinic','dentist','medical_clinic'], blocked: ['beauty_salon'] }
 };
 
-/* Derive blockedTypes for a group from its name and placesTypes.
+/* Derive blockedTypes using Haiku AI — returns { allowedTypes, blockedTypes } with valid Google types only.
+   Falls back to keyword rules on failure. */
+async function deriveGroupTypeRulesAI(env, group, businessType, cost) {
+  var validList = Array.from(VALID_PLACE_TYPES).filter(function(t) {
+    /* Exclude overly generic Table B types */
+    return t !== 'establishment' && t !== 'point_of_interest' && t !== 'food' && t !== 'finance' &&
+           t !== 'health' && t !== 'geocode' && t !== 'neighborhood' && t !== 'political' &&
+           t !== 'premise' && t !== 'route' && t !== 'street_address' && t !== 'sublocality' && t !== 'locality';
+  }).sort();
+  var prompt = 'I run a ' + (businessType || 'local business') + '. ' +
+    'One of my customer groups is called "' + (group.name || '') + '".\n' +
+    'The Google Places search types already assigned to this group are: ' +
+    JSON.stringify(group.placesTypes || []) + '.\n\n' +
+    'From this EXACT list of valid Google Places types, pick:\n' +
+    '1. allowedTypes — types that genuinely belong to this customer group\n' +
+    '2. blockedTypes — types that Google might return in searches for this group but do NOT belong ' +
+    '(e.g. contractors for a residential group, agencies for a corporate group)\n\n' +
+    'VALID TYPES (use only from this list, copy exact spelling):\n' +
+    validList.join(', ') + '\n\n' +
+    'Return ONLY valid JSON: {"allowedTypes":["..."],"blockedTypes":["..."]}';
+  try {
+    var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-5-5', max_tokens: 1000, thinking: { type: 'disabled' },
+        system: 'You classify Google Places types for customer group targeting. Return only valid JSON. Use only types from the provided list.',
+        messages: [{ role: 'user', content: prompt }]
+      })
+    }, 'type-rules');
+    if (!r.ok) throw new Error('Haiku type rules: ' + r.status);
+    var data = await r.json();
+    if (cost) recordCost(cost, 'claude-haiku-5-5', data);
+    var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+    /* Extract JSON */
+    var jStart = text.indexOf('{'), jEnd = text.lastIndexOf('}');
+    if (jStart === -1 || jEnd === -1) throw new Error('No JSON in response');
+    var parsed = JSON.parse(text.slice(jStart, jEnd + 1));
+    /* Validate: only keep types that are in VALID_PLACE_TYPES */
+    var validAllowed = (parsed.allowedTypes || []).filter(function(t) { return VALID_PLACE_TYPES.has(t); });
+    var validBlocked = (parsed.blockedTypes || []).filter(function(t) { return VALID_PLACE_TYPES.has(t); });
+    /* Ensure allowed types include the group's existing placesTypes */
+    var allowedSet = new Set(validAllowed);
+    (group.placesTypes || []).forEach(function(t) { allowedSet.add(t); });
+    /* Add synonyms */
+    allowedSet.forEach(function(t) {
+      var syns = TYPE_SYNONYMS[t];
+      if (syns) syns.forEach(function(s) { allowedSet.add(s); });
+    });
+    /* Remove conflicts */
+    var blockedSet = new Set(validBlocked.filter(function(t) { return !allowedSet.has(t); }));
+    return { allowedTypes: Array.from(allowedSet), blockedTypes: Array.from(blockedSet), source: 'haiku' };
+  } catch (e) {
+    console.log(JSON.stringify({ typeRulesAIFail: group.name, error: String(e.message || e).slice(0, 200) }));
+    return null; /* Caller falls back to keyword rules */
+  }
+}
+
+/* Derive blockedTypes from keyword rules (fallback when Haiku fails).
+   Uses whole-word matching so "sports rehab" won't match the "sport" rule.
    Returns { allowedTypes: [...], blockedTypes: [...] }. */
-function deriveGroupTypeRules(group) {
+function deriveGroupTypeRulesKeyword(group) {
   var nameLower = (group.name || '').toLowerCase();
   var allowed = new Set(group.placesTypes || []);
   var blocked = new Set();
-  /* Match against known rule keywords */
+  /* Match against known rule keywords — WHOLE WORD only */
+  var nameWords = nameLower.split(/[\s,\-\/&]+/);
+  var nameWordSet = new Set(nameWords);
   for (var kw in GROUP_TYPE_RULES) {
-    if (nameLower.indexOf(kw) !== -1) {
+    /* Whole-word match: keyword must appear as a complete word in the group name */
+    if (nameWordSet.has(kw) || nameWords.some(function(w) { return w === kw + 's' || w + 's' === kw; })) {
       var rules = GROUP_TYPE_RULES[kw];
       rules.allowed.forEach(function(t) { allowed.add(t); });
       rules.blocked.forEach(function(t) { if (!allowed.has(t)) blocked.add(t); });
@@ -3730,17 +3792,40 @@ function deriveGroupTypeRules(group) {
   });
   /* Ensure nothing in expanded is also blocked */
   expanded.forEach(function(t) { blocked.delete(t); });
-  return { allowedTypes: Array.from(expanded), blockedTypes: Array.from(blocked) };
+  return { allowedTypes: Array.from(expanded), blockedTypes: Array.from(blocked), source: 'keyword' };
 }
 
-/* Apply type rules to all groups in a profile (mutates profile). */
+/* Apply type rules to all groups in a profile (sync fallback, keyword-only). */
 function applyGroupTypeRules(profile) {
   if (!profile || !Array.isArray(profile.groups)) return profile;
   profile.groups.forEach(function(g) {
-    var rules = deriveGroupTypeRules(g);
+    /* Skip if already has AI-derived rules */
+    if (g._typeRulesSource === 'haiku' && g.allowedTypes && g.blockedTypes) return;
+    var rules = deriveGroupTypeRulesKeyword(g);
     g.allowedTypes = rules.allowedTypes;
     g.blockedTypes = rules.blockedTypes;
   });
+  return profile;
+}
+
+/* Apply type rules using Haiku AI for all groups (async, with keyword fallback). */
+async function applyGroupTypeRulesAI(env, profile, businessType, cost) {
+  if (!profile || !Array.isArray(profile.groups)) return profile;
+  for (var i = 0; i < profile.groups.length; i++) {
+    var g = profile.groups[i];
+    var aiRules = await deriveGroupTypeRulesAI(env, g, businessType, cost);
+    if (aiRules) {
+      g.allowedTypes = aiRules.allowedTypes;
+      g.blockedTypes = aiRules.blockedTypes;
+      g._typeRulesSource = 'haiku';
+    } else {
+      /* Fallback to keyword rules */
+      var kwRules = deriveGroupTypeRulesKeyword(g);
+      g.allowedTypes = kwRules.allowedTypes;
+      g.blockedTypes = kwRules.blockedTypes;
+      g._typeRulesSource = 'keyword';
+    }
+  }
   return profile;
 }
 
@@ -3931,8 +4016,11 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   profile.exclude = (Array.isArray(profile.exclude) ? profile.exclude : []).slice(0, 20).map(function(e) { return String(e).slice(0, 60).toLowerCase(); });
   /* Correct invalid types and expand synonyms */
   correctProfileTypes(profile);
-  /* Derive allowed/blocked type rules per group */
-  applyGroupTypeRules(profile);
+  /* Derive allowed/blocked type rules per group (AI with keyword fallback) */
+  var _bizType = '';
+  var _typeMatch = context.match(/TYPE:\s*(.+)/);
+  if (_typeMatch) _bizType = _typeMatch[1].trim();
+  await applyGroupTypeRulesAI(env, profile, _bizType, cost);
   /* Preserve confirmedAt from existing profile if re-generating */
   var _existingProf = await getLeadProfile(env, firmCode);
   profile.confirmedAt = (_existingProf && _existingProf.confirmedAt) || new Date().toISOString();
@@ -4776,6 +4864,7 @@ async function rebuildLeadProfile(env, firmCode, context, city, cost) {
 /* ── Main lead generation — pool-first, max 1-2 Text Search/day ── */
 async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   var dryRun = opts && opts.dryRun;
+  var exemptBudget = opts && opts.exemptBudget;
   var allDrops = []; /* collects drop reasons across all stages */
   var profileJson = await getLeadProfile(env, firmCode);
   if (profileJson) { correctProfileTypes(profileJson); applyGroupTypeRules(profileJson); }
@@ -4797,8 +4886,8 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     } catch (e) {}
   }
 
-  /* Budget check — skip in dry run */
-  if (!dryRun) {
+  /* Budget check — skip in dry run AND when caller exempts (morning email / cron path) */
+  if (!dryRun && !exemptBudget) {
     var bc = await budgetCheck(env, day, firmCode);
     if (!bc.ok) return { status: 'budget_exceeded' };
   }
@@ -5111,16 +5200,47 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   /* Record all Places text search cost */
   recordPlacesCost(cost, textSearchCalls, 0);
 
-  if (pool.length === 0) {
+  /* ── Zero-lead safety: if 0 picks with unused searches, try more groups ── */
+  if (picked.length === 0 && !dryRun && textSearchCalls < MAX_SEARCHES) {
+    shortfallReasons.push('zero_pick_retry');
+    while (picked.length === 0 && textSearchCalls < MAX_SEARCHES) {
+      var _retryIdx = (groupIdx + textSearchCalls) % enabledGroups.length;
+      await _searchOneGroup(_retryIdx, dayOfYear + textSearchCalls + 10);
+      _dedupeAndEnrich();
+      var _retryCandidates = pool.filter(function(p) {
+        for (var si = 0; si < scored.length; si++) { if (scored[si].placeId === p.placeId) return false; }
+        return true;
+      });
+      if (_retryCandidates.length > 0) {
+        try {
+          var _retryScored = await scoreLeadFit(env, _retryCandidates, profileJson, _retryCandidates[0]._groupName, context, cost);
+          droppedByFit += _retryCandidates.length - _retryScored.length;
+          scored = scored.concat(_retryScored);
+        } catch (e) { shortfallReasons.push('score_failed_safety:' + String(e.message || e).slice(0, 100)); }
+      }
+      var _retryBp = _balancePick(scored);
+      picked = _retryBp.picked;
+      groupCounts = _retryBp.groupCounts;
+    }
+    recordPlacesCost(cost, textSearchCalls - (cost._prevTextCalls || 0), 0);
+  }
+
+  if (pool.length === 0 && picked.length === 0) {
     shortfallReasons.push('no_candidates_after_pool_and_search');
     console.log(JSON.stringify({ leads: firmCode, day: day, shortfall: shortfallReasons, droppedByType: droppedByType }));
-    if (!dryRun) await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
+    if (!dryRun) {
+      await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
+      try { await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'zero_lead_run', message: 'Pool empty, all searches exhausted. Drops: ' + droppedByType + ' type, ' + droppedByFit + ' fit. Searches: ' + textSearchCalls }); } catch(e) {}
+    }
     return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, drops: allDrops };
   }
 
   if (picked.length === 0) {
     shortfallReasons.push('no_scored_candidates');
-    if (!dryRun) await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, droppedByFit: droppedByFit, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
+    if (!dryRun) {
+      await kvPut(env, todayKey, JSON.stringify({ leads: [], shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, droppedByFit: droppedByFit, generatedAt: new Date().toISOString() }), { expirationTtl: 2 * 86400 });
+      try { await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'zero_lead_run', message: 'Scored ' + pool.length + ' candidates, 0 passed threshold. Drops: ' + droppedByType + ' type, ' + droppedByFit + ' fit. Searches: ' + textSearchCalls }); } catch(e) {}
+    }
     return { status: 'no_leads', shortfall: shortfallReasons, textSearchCalls: textSearchCalls, droppedByType: droppedByType, droppedByFit: droppedByFit, drops: allDrops };
   }
 
@@ -7347,17 +7467,26 @@ export default {
         });
       }
       var results = {};
+      var _bfCost = newCostAccum();
       for (var _fi = 0; _fi < firms.length; _fi++) {
         var _fc = firms[_fi];
         var _prof = await getLeadProfile(env, _fc);
         if (!_prof) { results[_fc] = 'no_profile'; continue; }
         correctProfileTypes(_prof);
-        applyGroupTypeRules(_prof);
+        /* Derive business type from market context */
+        var _bfCtx = await getMarketContext(env, _fc);
+        var _bfBizType = '';
+        if (_bfCtx && _bfCtx.context) {
+          var _bfMatch = _bfCtx.context.match(/TYPE:\s*(.+)/);
+          if (_bfMatch) _bfBizType = _bfMatch[1].trim();
+        }
+        await applyGroupTypeRulesAI(env, _prof, _bfBizType, _bfCost);
         await saveLeadProfile(env, _fc, _prof);
         results[_fc] = (_prof.groups || []).map(function(g) {
-          return { name: g.name, allowedTypes: (g.allowedTypes || []).length, blockedTypes: (g.blockedTypes || []).length };
+          return { name: g.name, source: g._typeRulesSource || 'unknown', allowedTypes: g.allowedTypes || [], blockedTypes: g.blockedTypes || [] };
         });
       }
+      await flushCost(env, new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10), 'ADMIN', _bfCost);
       return jsonResponse({ ok: true, results: results });
     }
 
@@ -10933,7 +11062,7 @@ export default {
           var _dlt0 = Date.now();
           var _dlCost = newCostAccum();
           try {
-            var _dlResult = await runLeadsForFirm(env, _dFirm, day, _dlCost);
+            var _dlResult = await runLeadsForFirm(env, _dFirm, day, _dlCost, { exemptBudget: true });
             await flushCost(env, day, _dFirm, _dlCost);
             _devLeadReport.push({ firm: _dFirm, status: _dlResult.status, found: _dlResult.found || 0, ms: Date.now() - _dlt0 });
           } catch (e) {
