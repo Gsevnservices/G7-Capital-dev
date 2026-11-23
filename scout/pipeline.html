@@ -1188,6 +1188,15 @@ window.addEventListener('DOMContentLoaded', async function() {
   document.body.style.visibility = 'visible';
   migrateUnscopedScoutKeys();
 
+  /* Billing gate — check billing status before loading pipeline */
+  try {
+    var _bgR = await fetch(SCOUT_WORKER + '/billing/status', { headers: { 'Authorization': 'Bearer ' + token } });
+    if (_bgR.ok) {
+      var _bgD = await _bgR.json();
+      if (_bgD.status !== 'active') { window.location.href = 'pricing.html?reason=billing'; return; }
+    }
+  } catch (e) {}
+
   /* Load server state + message language before first render so chase
      messages use the correct language and scout_review_link is available. */
   await loadScoutStateFromServer();

@@ -195,11 +195,11 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
     <div id="regularsContent"><div class="s-note">Loading...</div></div>
   </div>
 
-  <!-- 7. PLAN -->
+  <!-- 7. BILLING -->
   <div class="ss" id="plan">
     <div class="ss-head">
-      <div class="ss-label">Plan</div>
-      <div class="ss-desc">Your plan and usage.</div>
+      <div class="ss-label">Billing</div>
+      <div class="ss-desc">Your plan, usage, and payment.</div>
     </div>
     <div id="planContent"><div class="s-note">Loading...</div></div>
   </div>
@@ -824,7 +824,7 @@ function renderRegulars() {
 }
 
 /* ═══════════════════════════════════════
-   7. PLAN
+   7. BILLING
 ═══════════════════════════════════════ */
 async function renderPlan() {
   var el = document.getElementById('planContent');
@@ -832,14 +832,39 @@ async function renderPlan() {
     var r = await fetch(SCOUT_WORKER + '/scout/plan', { headers: _auth });
     if (!r.ok) { el.innerHTML = '<div class="s-note">Could not load plan.</div>'; return; }
     var d = await r.json();
-    var isPaid = d.plan === 'paid';
-    var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
-    html += '<span style="display:inline-block;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:4px 12px;border-radius:2px;' +
-      (isPaid ? 'background:rgba(224,146,47,0.15);color:#F0B968;border:1px solid rgba(224,146,47,0.3)' : 'background:rgba(255,255,255,0.06);color:#8A8880;border:1px solid rgba(255,255,255,0.1)') + '">' +
-      (isPaid ? 'Paid plan' : 'Free plan') + '</span>';
-    if (!isPaid) html += '<a href="mailto:gsevnservices@gmail.com?subject=Upgrade" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#E0922F;text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Talk to us for pricing &rarr;</a>';
+    var b = d.billing;
+    var isActive = d.plan === 'active';
+    var html = '';
+
+    /* ── Status banner for past_due ── */
+    if (b && b.status === 'past_due') {
+      html += '<div style="padding:12px 16px;background:rgba(196,90,90,0.12);border:1px solid rgba(196,90,90,0.3);margin-bottom:16px;font-size:12px;color:#E0756A;line-height:1.5">Payment failed: update your payment to keep getting leads.</div>';
+    }
+    /* ── Banner for cancelled ── */
+    if (b && b.status === 'cancelled' && b.currentPeriodEnd) {
+      html += '<div style="padding:12px 16px;background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.2);margin-bottom:16px;font-size:12px;color:var(--gold-l);line-height:1.5">Your plan ends on ' + _escH(b.currentPeriodEnd.slice(0, 10)) + '.</div>';
+    }
+
+    /* ── Plan badge ── */
+    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
+    if (isActive) {
+      var planLabel = (b && b.plan === 'yearly') ? 'Yearly plan' : 'Monthly plan';
+      html += '<span style="display:inline-block;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:4px 12px;border-radius:2px;background:rgba(224,146,47,0.15);color:#F0B968;border:1px solid rgba(224,146,47,0.3)">' + planLabel + '</span>';
+    } else {
+      html += '<span style="display:inline-block;font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:4px 12px;border-radius:2px;background:rgba(255,255,255,0.06);color:#8A8880;border:1px solid rgba(255,255,255,0.1)">No plan</span>';
+      html += '<a href="pricing.html" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#E0922F;text-decoration:none;border-bottom:1px solid rgba(224,146,47,0.4)">Start your plan &rarr;</a>';
+    }
     html += '</div>';
 
+    /* ── Billing details (active/cancelled only) ── */
+    if (b && (b.status === 'active' || b.status === 'cancelled')) {
+      if (b.currentPeriodEnd) {
+        var endLabel = b.cancelAtPeriodEnd ? 'Access ends' : (b.plan === 'monthly' ? 'Next charge' : 'Plan ends');
+        html += '<div style="font-size:12px;color:var(--grey1);margin-bottom:12px">' + endLabel + ': <span style="color:var(--white)">' + _escH(b.currentPeriodEnd.slice(0, 10)) + '</span></div>';
+      }
+    }
+
+    /* ── Usage bars ── */
     var labels = { ask: 'Ask Scout', analysis: 'Business analysis', checkin: 'Weekly check-in', leads: 'New leads today', groupsearch: 'Extra group search' };
     var feats = d.features || {};
     for (var k in labels) {
@@ -848,11 +873,75 @@ async function renderPlan() {
       var pct = f.limit > 0 ? Math.min(100, Math.round(f.used / f.limit * 100)) : 0;
       html += '<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">' +
         '<span style="color:var(--grey1)">' + labels[k] + '</span><span style="color:var(--white)">' +
-        (f.limit > 0 ? f.used + '/' + f.limit + (f.period === 'day' ? ' today' : f.period === 'month' ? ' this month' : '') : 'Paid only') +
+        (f.limit > 0 ? f.used + '/' + f.limit + (f.period === 'day' ? ' today' : f.period === 'month' ? ' this month' : '') : (isActive ? '—' : 'Needs plan')) +
         '</span></div><div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden"><div style="width:' + pct + '%;height:100%;background:' + (pct >= 100 ? '#c44' : '#E0922F') + '"></div></div></div>';
     }
+
+    /* ── Cancel button (only for active, non-cancelled) ── */
+    if (isActive && b && !b.cancelAtPeriodEnd) {
+      html += '<div style="margin-top:24px"><button class="s-btn" id="cancelPlanBtn" onclick="cancelPlan()" style="color:var(--grey2);border-color:var(--border2)">Cancel plan</button></div>';
+    }
+
+    /* ── Refund button (only within 7 days of first payment, not already refunded) ── */
+    if (b && b.firstPaidAt && !b.refundedAt) {
+      var daysSinceFirst = (Date.now() - new Date(b.firstPaidAt).getTime()) / 86400000;
+      if (daysSinceFirst <= 7) {
+        html += '<div style="margin-top:12px"><button class="s-btn" id="refundBtn" onclick="requestRefund()" style="color:#C45A5A;border-color:rgba(196,90,90,0.4)">Request full refund</button>' +
+          '<div style="font-size:11px;color:var(--grey2);margin-top:4px">Available for ' + Math.ceil(7 - daysSinceFirst) + ' more day' + (Math.ceil(7 - daysSinceFirst) === 1 ? '' : 's') + '.</div></div>';
+      }
+    }
+
+    html += '<div id="billingStatus" style="font-size:11px;margin-top:8px;display:none"></div>';
     el.innerHTML = html;
   } catch(e) { el.innerHTML = '<div class="s-note">Could not load plan.</div>'; }
+}
+
+function _escH(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function cancelPlan() {
+  if (!confirm('Cancel your plan? You will keep access until the end of your current period.')) return;
+  var btn = document.getElementById('cancelPlanBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
+  try {
+    var r = await fetch(SCOUT_WORKER + '/billing/cancel', { method: 'POST', headers: _auth });
+    var d = await r.json();
+    if (d.ok) {
+      var st = document.getElementById('billingStatus');
+      st.textContent = 'Plan cancelled. Access continues until ' + (d.currentPeriodEnd || '').slice(0, 10) + '.';
+      st.style.color = 'var(--gold)';
+      st.style.display = 'block';
+      setTimeout(function() { renderPlan(); }, 1500);
+    } else {
+      alert(d.error || 'Could not cancel. Try again.');
+      if (btn) { btn.disabled = false; btn.textContent = 'Cancel plan'; }
+    }
+  } catch (e) {
+    alert('Network error. Try again.');
+    if (btn) { btn.disabled = false; btn.textContent = 'Cancel plan'; }
+  }
+}
+
+async function requestRefund() {
+  if (!confirm('Request a full refund? Your plan will end immediately and all features will be locked.')) return;
+  var btn = document.getElementById('refundBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
+  try {
+    var r = await fetch(SCOUT_WORKER + '/billing/refund', { method: 'POST', headers: _auth });
+    var d = await r.json();
+    if (d.ok) {
+      var st = document.getElementById('billingStatus');
+      st.textContent = 'Refund processed. The amount will be credited within 5-7 business days.';
+      st.style.color = 'var(--gold)';
+      st.style.display = 'block';
+      setTimeout(function() { renderPlan(); }, 1500);
+    } else {
+      alert(d.error || 'Could not process refund. Contact support.');
+      if (btn) { btn.disabled = false; btn.textContent = 'Request full refund'; }
+    }
+  } catch (e) {
+    alert('Network error. Try again.');
+    if (btn) { btn.disabled = false; btn.textContent = 'Request full refund'; }
+  }
 }
 
 /* ═══════════════════════════════════════

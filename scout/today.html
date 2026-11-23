@@ -308,6 +308,11 @@ async function loadToday() {
   try {
     var r = await fetch(SCOUT_WORKER + '/scout/leads/today', { headers: _auth });
     if (r.status === 401) { scoutSessionExpired(); return; }
+    /* Billing gate: 402 with reason=billing → redirect to pricing */
+    if (r.status === 402) {
+      var _gateData = await r.json();
+      if (_gateData.reason === 'billing') { window.location.href = 'pricing.html?reason=leads'; return; }
+    }
     if (!r.ok) throw new Error('Failed to load');
     _todayData = await r.json();
   } catch (e) {

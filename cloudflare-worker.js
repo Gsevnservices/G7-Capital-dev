@@ -447,19 +447,21 @@ async function flushCost(env, day, firmCode, cost) {
 
 /* ── Per-feature daily limits (IST day) ──
    KV key: feat:{day}:{firmCode}:{feature}  (string int, 24h TTL)
-   Returns { ok, used, limit, feature } */
+   Returns { ok, used, limit, feature }
+   Billing in D1 is the single source of truth — no free plan. */
 var FEAT_LIMITS = {
-  ask:      { paid: 10, free: 3 },   /* Ask Scout = /scout/briefing */
-  /* leads uses custom gate: paid 5/day, free 5 lifetime — see /scout/leads routes */
+  ask:      { active: 10 },   /* Ask Scout = /scout/briefing */
+  /* leads: 5/day — see /scout/leads routes */
   /* news + move are once-a-day via cron/cache — no counter needed.
      analyse + checkin keep their existing monthly gates. */
 };
 async function featureGate(env, day, firmCode, feature) {
   var def = FEAT_LIMITS[feature];
   if (!def) return { ok: true, used: 0, limit: 999, feature: feature };
-  var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
-  var plan = (user && user.plan) ? user.plan : 'free';
-  var limit = def[plan] || def.free;
+  var active = await isBillingActive(env, firmCode);
+  var plan = active ? 'active' : 'none';
+  var limit = active ? (def.active || 999) : 0;
+  if (!active) return { ok: false, used: 0, limit: 0, feature: feature, plan: plan };
   var key = 'feat:' + day + ':' + firmCode + ':' + feature;
   var used = parseInt(await env.G7_KV.get(key) || '0', 10);
   if (used >= limit) return { ok: false, used: used, limit: limit, feature: feature, plan: plan };
@@ -472,14 +474,10 @@ async function featureIncrement(env, gate) {
 }
 
 /* Firm money backstop — only firm-level, no global day cap.
-   Analysis is exempt (opts.exemptFirm). */
+   Analysis is exempt (opts.exemptFirm). $0.50/day for all active firms. */
 async function budgetCheck(env, day, firmCode, opts) {
   if (opts && opts.exemptFirm) return { ok: true, firmSpent: 0 };
-  var user = await env.G7_KV.get('auth:users:' + firmCode, 'json');
-  var plan = (user && user.plan) ? user.plan : 'free';
-  var firmCap = plan === 'free'
-    ? parseFloat(env.COST_CAP_FIRM_FREE || '0.35')
-    : parseFloat(env.COST_CAP_FIRM || '0.50');
+  var firmCap = parseFloat(env.COST_CAP_FIRM || '0.50');
   var firmSpent = parseFloat(await env.G7_KV.get('cost:' + day + ':' + firmCode) || '0');
   if (firmSpent >= firmCap) {
     return { ok: false, reason: 'firm', firmSpent: firmSpent, cap: firmCap };
@@ -535,7 +533,7 @@ function _istMonthStart() {
   return new Date(firstOfNext.getTime() - 5.5 * 3600000).toISOString();
 }
 
-/* Paid limits — single source of truth. */
+/* Active-plan limits — single source of truth. No free tier. */
 var PAID_LIMITS = {
   ask:      { limit: 10, period: 'day' },
   analysis: { limit: 3,  period: 'month' },
@@ -549,9 +547,11 @@ function limitResponse(feature, plan, used, limit, period, message, reason) {
   var resetsAt = (period === 'day') ? _istMidnight()
     : (period === 'month') ? _istMonthStart()
     : null;
+  /* If plan is 'none', always redirect to pricing */
+  var _reason = reason || (plan === 'none' ? 'billing' : 'feature');
   return jsonResponse({
     error: 'limit',
-    reason: reason || 'feature',
+    reason: _reason,
     message: message || 'Limit reached',
     feature: feature,
     plan: plan,
@@ -656,6 +656,76 @@ async function sendEmail(env, to, subject, text, html, headers, opts) {
     try { resBody = await r.json(); } catch(e2) {}
     return { ok: true, id: resBody.id || null };
   } catch (e) { return { ok: false }; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BILLING HELPERS — Razorpay integration (test mode)
+   D1 `billing` table is the single source of truth for paid access.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Constant-time HMAC-SHA256 verification for Razorpay webhook signatures. */
+async function verifyRazorpaySignature(secret, body, signature) {
+  var enc = new TextEncoder();
+  var key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  var sig = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+  var hex = Array.from(new Uint8Array(sig)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+  if (hex.length !== signature.length) return false;
+  var diff = 0;
+  for (var i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ signature.charCodeAt(i);
+  return diff === 0;
+}
+
+/* Read billing row from D1. Returns null if no row. */
+async function getBilling(env, firmCode) {
+  if (!env.DB) return null;
+  try {
+    return await env.DB.prepare("SELECT * FROM billing WHERE firm_code = ?").bind(firmCode).first();
+  } catch (e) { return null; }
+}
+
+/* Upsert billing row — merges fields into existing row or creates new. */
+async function upsertBilling(env, firmCode, fields) {
+  var existing = await getBilling(env, firmCode);
+  if (existing) {
+    var sets = [];
+    var vals = [];
+    for (var k in fields) {
+      if (k === 'firm_code') continue;
+      sets.push(k + ' = ?');
+      vals.push(fields[k]);
+    }
+    sets.push("updated_at = datetime('now')");
+    vals.push(firmCode);
+    await env.DB.prepare("UPDATE billing SET " + sets.join(', ') + " WHERE firm_code = ?").bind(...vals).run();
+  } else {
+    fields.firm_code = firmCode;
+    fields.updated_at = new Date().toISOString();
+    var cols = Object.keys(fields);
+    var placeholders = cols.map(function() { return '?'; });
+    await env.DB.prepare("INSERT INTO billing (" + cols.join(', ') + ") VALUES (" + placeholders.join(', ') + ")")
+      .bind(...cols.map(function(c) { return fields[c]; })).run();
+  }
+}
+
+/* Log a billing event — ignores duplicates by event_id. */
+async function logBillingEvent(env, eventId, type, firmCode, payload) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO billing_events (event_id, type, firm_code, payload_json, at) VALUES (?, ?, ?, ?, datetime('now'))"
+    ).bind(eventId, type, firmCode, typeof payload === 'string' ? payload : JSON.stringify(payload)).run();
+  } catch (e) {}
+}
+
+/* Check if a firm has active billing. Returns true/false.
+   This is THE gate for all paid features. */
+async function isBillingActive(env, firmCode) {
+  var b = await getBilling(env, firmCode);
+  if (!b) return false;
+  if (b.status === 'active') return true;
+  /* Cancelled firms keep access until their paid period ends */
+  if (b.status === 'cancelled' && b.current_period_end && new Date(b.current_period_end) > new Date()) return true;
+  return false;
 }
 
 /* ── ANALYSIS FAILURE RECORDER ──
@@ -7187,9 +7257,8 @@ export default {
         return jsonResponse({ error: 'Invalid JSON body' }, 400);
       }
 
-      const { adminPassword, firmCode, firmName, password, product: rawProduct, plan: rawPlan } = body;
+      const { adminPassword, firmCode, firmName, password, product: rawProduct } = body;
       const product = (rawProduct === 'scout') ? 'scout' : 'alex';
-      const plan = (rawPlan === 'paid') ? 'paid' : 'free';
 
       // Validate admin password against environment variable
       if (!adminPassword || adminPassword !== env.ADMIN_PASSWORD) {
@@ -7215,7 +7284,6 @@ export default {
           passwordHash,
           createdAt: Date.now(),
           product,
-          plan,
           tier: product === 'scout' ? 'scout' : 'beta'
         })
       );
@@ -7945,13 +8013,14 @@ export default {
         return jsonResponse({ error: 'Invalid JSON body' }, 400);
       }
 
-      // ---- Limit gate: free = 1 lifetime, paid = 3 per calendar month ----
-      const userRecord = await env.G7_KV.get('auth:users:' + session.firmCode, 'json');
-      const plan = userRecord && userRecord.plan ? userRecord.plan : 'free';
+      // ---- Limit gate: analysis is free (sign-up + first analysis stay free).
+      //      1 lifetime for everyone. Paid users get 3/month. ----
+      var _anActive = await isBillingActive(env, session.firmCode);
+      var plan = _anActive ? 'active' : 'none';
       const monthKey = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
       let analysisCount = 0;
       let analysisCounterKey;
-      if (plan === 'paid') {
+      if (_anActive) {
         analysisCounterKey = 'scout:limit:' + session.firmCode + ':analyses:' + monthKey;
         const cntRaw = await env.G7_KV.get(analysisCounterKey);
         analysisCount = cntRaw ? parseInt(cntRaw, 10) : 0;
@@ -8454,24 +8523,21 @@ export default {
         return jsonResponse({ error: 'Invalid JSON body' }, 400);
       }
 
-      // ---- Limit gate: free = 0 (upgrade_required), paid = 8 per calendar month ----
-      const userRecord = await env.G7_KV.get('auth:users:' + session.firmCode, 'json');
-      const plan = userRecord && userRecord.plan ? userRecord.plan : 'free';
+      // ---- Limit gate: billing required, 8 per calendar month ----
+      var _ciActive = await isBillingActive(env, session.firmCode);
+      var plan = _ciActive ? 'active' : 'none';
+      if (!_ciActive) {
+        return limitResponse('checkin', plan, 0, 0, 'month',
+          'Weekly check-ins need an active plan.', 'billing');
+      }
       const monthKey = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
       let checkinCount = 0;
-      let checkinCounterKey;
-      if (plan === 'paid') {
-        checkinCounterKey = 'scout:limit:' + session.firmCode + ':checkins:' + monthKey;
-        const cntRaw = await env.G7_KV.get(checkinCounterKey);
-        checkinCount = cntRaw ? parseInt(cntRaw, 10) : 0;
-        if (checkinCount >= 8) {
-          return limitResponse('checkin', plan, checkinCount, 8, 'month',
-            'You\u2019ve used all your check-ins this month.');
-        }
-      } else {
-        // Free users cannot check in — check-ins are a paid-only feature
-        return limitResponse('checkin', plan, 0, 0, 'month',
-          'Weekly check-ins are part of the paid plan.');
+      let checkinCounterKey = 'scout:limit:' + session.firmCode + ':checkins:' + monthKey;
+      const cntRaw = await env.G7_KV.get(checkinCounterKey);
+      checkinCount = cntRaw ? parseInt(cntRaw, 10) : 0;
+      if (checkinCount >= 8) {
+        return limitResponse('checkin', plan, checkinCount, 8, 'month',
+          'You\u2019ve used all your check-ins this month.');
       }
       // ---- end limit gate ----
 
@@ -8945,9 +9011,12 @@ export default {
     // ── GET /scout/leads/today — all actionable leads for this firm ──
     // Returns: all uncontacted (stage=found) leads from any day (carry-over),
     // today's new leads, reminders due, and callbacks.
+    // Billing required — unpaid firms get 402 with reason=billing.
     if (request.method === 'GET' && path === '/scout/leads/today') {
       var _ltSess = await validateSession(request, env);
       if (!_ltSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _ltActive = await isBillingActive(env, _ltSess.firmCode);
+      if (!_ltActive) return limitResponse('leads', 'none', 0, 0, 'day', 'Start your plan to see leads.', 'billing');
       var _ltDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
 
       /* ── Build the full lead list from D1 (authoritative) ── */
@@ -9113,10 +9182,12 @@ export default {
 
     // ── POST /scout/leads/generate — run lead generation in-request ──
     // Protected by KV lock (one run per firm per day). Returns leads directly.
-    // The frontend calls this when GET /scout/leads/today says generating=true.
+    // Billing required.
     if (request.method === 'POST' && path === '/scout/leads/generate') {
       var _lgSess = await validateSession(request, env);
       if (!_lgSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _lgActive = await isBillingActive(env, _lgSess.firmCode);
+      if (!_lgActive) return limitResponse('leads', 'none', 0, 0, 'day', 'Start your plan to generate leads.', 'billing');
       var _lgDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
       var _lgLockKey = 'scout:leads:generating:' + _lgSess.firmCode + ':' + _lgDay;
 
@@ -9928,6 +9999,8 @@ export default {
     if (request.method === 'POST' && path === '/scout/leads/group-search') {
       var _gsSess = await validateSession(request, env);
       if (!_gsSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _gsActive = await isBillingActive(env, _gsSess.firmCode);
+      if (!_gsActive) return limitResponse('groupsearch', 'none', 0, 0, 'day', 'Start your plan to search groups.', 'billing');
       var _gsBody;
       try { _gsBody = await request.json(); } catch (e) { return jsonResponse({ error: 'bad_json' }, 400); }
       var _gsGroup = String(_gsBody.group || '').trim();
@@ -9938,8 +10011,7 @@ export default {
       var _gsCountKey = 'scout:limit:' + _gsSess.firmCode + ':groupsearch:' + _gsDay;
       var _gsCount = parseInt(await env.G7_KV.get(_gsCountKey) || '0', 10);
       if (_gsCount >= 1) {
-        var _gsUser = await env.G7_KV.get('auth:users:' + _gsSess.firmCode, 'json') || {};
-        return limitResponse('groupsearch', _gsUser.plan || 'free', _gsCount, 1, 'day',
+        return limitResponse('groupsearch', 'active', _gsCount, 1, 'day',
           'Next group search available tomorrow.');
       }
 
@@ -10149,32 +10221,34 @@ export default {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // GET /scout/plan — current plan + per-feature usage.
+    // GET /scout/plan — current billing status + per-feature usage.
     // Read-only: no writes, no counters incremented.
+    // D1 billing table is the single source of truth.
     // ─────────────────────────────────────────────────────────────
     if (request.method === 'GET' && path === '/scout/plan') {
       const session = await validateSession(request, env);
       if (!session) return jsonResponse({ error: 'unauthorized' }, 401);
-      const user = await env.G7_KV.get('auth:users:' + session.firmCode, 'json') || {};
-      var _plan = user.plan || 'free';
+      var _billing = await getBilling(env, session.firmCode);
+      var _bActive = _billing && _billing.status === 'active';
+      var _plan = _bActive ? 'active' : 'none';
       var _istDay = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
       var _month = new Date().toISOString().slice(0, 7);
 
       /* Ask — daily counter */
       var _askUsed = parseInt(await env.G7_KV.get('feat:' + _istDay + ':' + session.firmCode + ':ask') || '0', 10);
-      var _askLim = _plan === 'paid' ? 10 : 3;
+      var _askLim = _bActive ? 10 : 0;
 
-      /* Analysis — free=lifetime, paid=monthly */
-      var _anKey = _plan === 'paid'
+      /* Analysis — always at least 1 lifetime free; active = 3/month */
+      var _anKey = _bActive
         ? 'scout:limit:' + session.firmCode + ':analyses:' + _month
         : 'scout:limit:' + session.firmCode + ':analyses';
       var _anUsed = parseInt(await env.G7_KV.get(_anKey) || '0', 10);
-      var _anLim = _plan === 'paid' ? 3 : 1;
+      var _anLim = _bActive ? 3 : 1;
 
-      /* Check-in — free=0, paid=monthly */
+      /* Check-in — active only, 8/month */
       var _ciKey = 'scout:limit:' + session.firmCode + ':checkins:' + _month;
-      var _ciUsed = _plan === 'paid' ? parseInt(await env.G7_KV.get(_ciKey) || '0', 10) : 0;
-      var _ciLim = _plan === 'paid' ? 8 : 0;
+      var _ciUsed = _bActive ? parseInt(await env.G7_KV.get(_ciKey) || '0', 10) : 0;
+      var _ciLim = _bActive ? 8 : 0;
 
       /* Leads today — count from D1 customers by IST lead_day */
       var _leadsToday = 0;
@@ -10186,19 +10260,26 @@ export default {
           _leadsToday = _ldRow ? _ldRow.cnt : 0;
         } catch (e) {}
       }
-      var _leadsLim = 5;
+      var _leadsLim = _bActive ? 5 : 0;
 
       /* Group search — daily */
       var _gsKey = 'scout:limit:' + session.firmCode + ':groupsearch:' + _istDay;
       var _gsUsed = parseInt(await env.G7_KV.get(_gsKey) || '0', 10);
-      var _gsLim = 1;
+      var _gsLim = _bActive ? 1 : 0;
 
       return jsonResponse({
         plan: _plan,
-        planSince: user.planSince || user.createdAt || null,
+        billing: _billing ? {
+          plan: _billing.plan,
+          status: _billing.status,
+          currentPeriodEnd: _billing.current_period_end || null,
+          cancelAtPeriodEnd: !!_billing.cancel_at_period_end,
+          firstPaidAt: _billing.first_paid_at || null,
+          refundedAt: _billing.refunded_at || null
+        } : null,
         features: {
           ask:         { used: _askUsed,    limit: _askLim,   paidLimit: 10, period: 'day',      resetsAt: _istMidnight() },
-          analysis:    { used: _anUsed,     limit: _anLim,    paidLimit: 3,  period: _plan === 'paid' ? 'month' : 'lifetime', resetsAt: _plan === 'paid' ? _istMonthStart() : null },
+          analysis:    { used: _anUsed,     limit: _anLim,    paidLimit: 3,  period: _bActive ? 'month' : 'lifetime', resetsAt: _bActive ? _istMonthStart() : null },
           checkin:     { used: _ciUsed,     limit: _ciLim,    paidLimit: 8,  period: 'month',    resetsAt: _istMonthStart() },
           leads:       { used: _leadsToday, limit: _leadsLim, paidLimit: 5,  period: 'day',      resetsAt: _istMidnight() },
           groupsearch: { used: _gsUsed,     limit: _gsLim,    paidLimit: 1,  period: 'day',      resetsAt: _istMidnight() }
@@ -11125,6 +11206,435 @@ export default {
       return jsonResponse({ today: _aeToday, yesterday: _aeYesterday, errors: (_aeRows && _aeRows.results) || [] });
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BILLING ROUTES — Razorpay integration (test mode)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // ── POST /billing/checkout — create a Razorpay subscription (monthly) or order (yearly) ──
+    if (request.method === 'POST' && path === '/billing/checkout') {
+      var _bcSess = await validateSession(request, env);
+      if (!_bcSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _bcBody;
+      try { _bcBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _bcPlan = String(_bcBody.plan || '').toLowerCase();
+      if (_bcPlan !== 'monthly' && _bcPlan !== 'yearly') return jsonResponse({ error: 'plan must be monthly or yearly' }, 400);
+      if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return jsonResponse({ error: 'Payment not configured' }, 501);
+
+      var _bcUser = await env.G7_KV.get('auth:users:' + _bcSess.firmCode, 'json') || {};
+      var _bcAuth = 'Basic ' + btoa(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET);
+
+      if (_bcPlan === 'monthly') {
+        /* Look up plan ID from KV */
+        var _bcPlanId = await env.G7_KV.get('billing:plan:monthly');
+        if (!_bcPlanId) return jsonResponse({ error: 'Monthly plan not created yet. Run /admin/billing/create-plan first.' }, 501);
+        /* Create subscription */
+        var _bcSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
+          method: 'POST',
+          headers: { 'Authorization': _bcAuth, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            plan_id: _bcPlanId,
+            total_count: 120,
+            quantity: 1,
+            notes: { firm_code: _bcSess.firmCode, firm_name: _bcUser.firmName || '' }
+          })
+        });
+        var _bcSub = await _bcSubRes.json();
+        if (_bcSub.error) return jsonResponse({ error: _bcSub.error.description || 'Could not create subscription' }, 502);
+        /* Store subscription ID in billing table */
+        await upsertBilling(env, _bcSess.firmCode, {
+          plan: 'monthly',
+          razorpay_subscription_id: _bcSub.id
+        });
+        return jsonResponse({ key_id: env.RAZORPAY_KEY_ID, subscription_id: _bcSub.id, plan: 'monthly' });
+      } else {
+        /* Yearly: one-time order for ₹28,800 */
+        var _bcOrdRes = await fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: { 'Authorization': _bcAuth, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: 2880000,
+            currency: 'INR',
+            receipt: 'yearly_' + _bcSess.firmCode + '_' + Date.now(),
+            notes: { firm_code: _bcSess.firmCode, firm_name: _bcUser.firmName || '', plan: 'yearly' }
+          })
+        });
+        var _bcOrd = await _bcOrdRes.json();
+        if (_bcOrd.error) return jsonResponse({ error: _bcOrd.error.description || 'Could not create order' }, 502);
+        return jsonResponse({ key_id: env.RAZORPAY_KEY_ID, order_id: _bcOrd.id, plan: 'yearly' });
+      }
+    }
+
+    // ── POST /billing/verify — verify checkout signature, activate immediately ──
+    if (request.method === 'POST' && path === '/billing/verify') {
+      var _bvSess = await validateSession(request, env);
+      if (!_bvSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _bvBody;
+      try { _bvBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!env.RAZORPAY_KEY_SECRET) return jsonResponse({ error: 'not configured' }, 501);
+
+      var _bvPlan = String(_bvBody.plan || '').toLowerCase();
+      var _bvValid = false;
+
+      if (_bvPlan === 'monthly') {
+        /* Verify subscription payment: HMAC of payment_id + '|' + subscription_id */
+        var _bvPayload = (_bvBody.razorpay_payment_id || '') + '|' + (_bvBody.razorpay_subscription_id || '');
+        _bvValid = await verifyRazorpaySignature(env.RAZORPAY_KEY_SECRET, _bvPayload, _bvBody.razorpay_signature || '');
+      } else if (_bvPlan === 'yearly') {
+        /* Verify order payment: HMAC of order_id + '|' + payment_id */
+        var _bvPayload2 = (_bvBody.razorpay_order_id || '') + '|' + (_bvBody.razorpay_payment_id || '');
+        _bvValid = await verifyRazorpaySignature(env.RAZORPAY_KEY_SECRET, _bvPayload2, _bvBody.razorpay_signature || '');
+      }
+
+      if (!_bvValid) return jsonResponse({ error: 'Invalid signature' }, 400);
+
+      var _bvNow = new Date().toISOString();
+      var _bvFields = {
+        status: 'active',
+        razorpay_payment_id: _bvBody.razorpay_payment_id || null
+      };
+      /* Set first_paid_at only if not already set */
+      var _bvExist = await getBilling(env, _bvSess.firmCode);
+      if (!_bvExist || !_bvExist.first_paid_at) _bvFields.first_paid_at = _bvNow;
+
+      if (_bvPlan === 'monthly') {
+        _bvFields.plan = 'monthly';
+        _bvFields.razorpay_subscription_id = _bvBody.razorpay_subscription_id || null;
+        /* Period end: ~30 days from now (webhook will set the real one) */
+        _bvFields.current_period_end = new Date(Date.now() + 30 * 86400000).toISOString();
+      } else {
+        _bvFields.plan = 'yearly';
+        _bvFields.current_period_end = new Date(Date.now() + 365 * 86400000).toISOString();
+      }
+      _bvFields.cancel_at_period_end = 0;
+      _bvFields.refunded_at = null;
+
+      await upsertBilling(env, _bvSess.firmCode, _bvFields);
+      await logBillingEvent(env, 'verify_' + _bvNow, 'checkout.verified', _bvSess.firmCode, { plan: _bvPlan });
+
+      /* Send payment received email */
+      var _bvUser = await env.G7_KV.get('auth:users:' + _bvSess.firmCode, 'json') || {};
+      if (_bvUser.recoveryEmail) {
+        var _bvSubj = 'Payment received — your Scout plan is active';
+        var _bvHtml = emailShell({
+          siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+          headerLabel: 'Scout',
+          greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Thank you for your payment.</div>',
+          textGreeting: 'Thank you for your payment.\n\n',
+          htmlParts: [
+            emailRow('Your <strong>' + (_bvPlan === 'monthly' ? '₹3,000/month' : '₹28,800/year') + '</strong> plan is now active.'),
+            emailRow('Leads, Ask Scout, emails, and all features are unlocked.'),
+            emailGreyRow('Fully refundable within 7 days of your first payment.')
+          ],
+          textParts: ['Your ' + (_bvPlan === 'monthly' ? '₹3,000/month' : '₹28,800/year') + ' plan is now active.\nLeads, Ask Scout, emails, and all features are unlocked.\n\nFully refundable within 7 days of your first payment.'],
+          mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/today.html', label: 'Open Today' },
+          footerLine: 'Your plan is active.'
+        });
+        ctx.waitUntil(sendEmail(env, _bvUser.recoveryEmail, _bvSubj, _bvHtml.text, _bvHtml.html, {}, { fromName: 'Scout by G7' }));
+      }
+
+      return jsonResponse({ ok: true, status: 'active', plan: _bvPlan });
+    }
+
+    // ── POST /billing/webhook — Razorpay webhook handler ──
+    if (request.method === 'POST' && path === '/billing/webhook') {
+      if (!env.RAZORPAY_WEBHOOK_SECRET) return jsonResponse({ error: 'not configured' }, 501);
+      var _bwSig = request.headers.get('x-razorpay-signature') || '';
+      var _bwRaw = await request.text();
+      var _bwValid = await verifyRazorpaySignature(env.RAZORPAY_WEBHOOK_SECRET, _bwRaw, _bwSig);
+      if (!_bwValid) return jsonResponse({ error: 'Invalid signature' }, 400);
+
+      var _bwEvent;
+      try { _bwEvent = JSON.parse(_bwRaw); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      var _bwId = _bwEvent.event || '';
+      /* Use Razorpay's own event ID for deduplication (always present) */
+      var _bwEventId = _bwEvent.id || (_bwId + ':' + String(_bwEvent.created_at || Date.now()));
+
+      /* Duplicate check */
+      if (env.DB) {
+        try {
+          var _bwDup = await env.DB.prepare("SELECT id FROM billing_events WHERE event_id = ?").bind(_bwEventId).first();
+          if (_bwDup) return jsonResponse({ ok: true, duplicate: true });
+        } catch (e) {}
+      }
+
+      /* Extract firm_code from notes */
+      var _bwFirm = '';
+      var _bwEntity = null;
+      if (_bwEvent.payload) {
+        /* subscription events */
+        if (_bwEvent.payload.subscription && _bwEvent.payload.subscription.entity) {
+          _bwEntity = _bwEvent.payload.subscription.entity;
+          _bwFirm = (_bwEntity.notes && _bwEntity.notes.firm_code) || '';
+        }
+        /* payment events */
+        if (!_bwFirm && _bwEvent.payload.payment && _bwEvent.payload.payment.entity) {
+          var _bwPay = _bwEvent.payload.payment.entity;
+          _bwFirm = (_bwPay.notes && _bwPay.notes.firm_code) || '';
+          if (!_bwEntity) _bwEntity = _bwPay;
+        }
+        /* refund events */
+        if (!_bwFirm && _bwEvent.payload.refund && _bwEvent.payload.refund.entity) {
+          var _bwRef = _bwEvent.payload.refund.entity;
+          /* Look up firm from payment_id */
+          if (_bwRef.payment_id && env.DB) {
+            try {
+              var _bwLookup = await env.DB.prepare("SELECT firm_code FROM billing WHERE razorpay_payment_id = ?").bind(_bwRef.payment_id).first();
+              if (_bwLookup) _bwFirm = _bwLookup.firm_code;
+            } catch (e) {}
+          }
+          if (!_bwEntity) _bwEntity = _bwRef;
+        }
+      }
+
+      await logBillingEvent(env, _bwEventId, _bwId, _bwFirm, _bwRaw);
+
+      if (!_bwFirm) return jsonResponse({ ok: true, skipped: 'no_firm_code' });
+
+      var _bwNow = new Date().toISOString();
+
+      /* Handle each event type */
+      if (_bwId === 'subscription.activated' || _bwId === 'subscription.charged') {
+        var _bwEnd = null;
+        if (_bwEntity && _bwEntity.current_end) _bwEnd = new Date(_bwEntity.current_end * 1000).toISOString();
+        var _bwUpd = { status: 'active', plan: 'monthly' };
+        if (_bwEnd) _bwUpd.current_period_end = _bwEnd;
+        if (_bwEntity && _bwEntity.id) _bwUpd.razorpay_subscription_id = _bwEntity.id;
+        var _bwExist = await getBilling(env, _bwFirm);
+        if (!_bwExist || !_bwExist.first_paid_at) _bwUpd.first_paid_at = _bwNow;
+        _bwUpd.cancel_at_period_end = 0;
+        await upsertBilling(env, _bwFirm, _bwUpd);
+      } else if (_bwId === 'payment.captured') {
+        /* One-time yearly order */
+        var _bwNotes = (_bwEntity && _bwEntity.notes) || {};
+        if (_bwNotes.plan === 'yearly' || _bwNotes.plan === 'annual') {
+          var _bwYEnd = new Date(Date.now() + 365 * 86400000).toISOString();
+          var _bwYUpd = { status: 'active', plan: 'yearly', current_period_end: _bwYEnd };
+          if (_bwEntity && _bwEntity.id) _bwYUpd.razorpay_payment_id = _bwEntity.id;
+          var _bwYExist = await getBilling(env, _bwFirm);
+          if (!_bwYExist || !_bwYExist.first_paid_at) _bwYUpd.first_paid_at = _bwNow;
+          _bwYUpd.cancel_at_period_end = 0;
+          await upsertBilling(env, _bwFirm, _bwYUpd);
+        }
+      } else if (_bwId === 'subscription.pending' || _bwId === 'payment.failed') {
+        await upsertBilling(env, _bwFirm, { status: 'past_due' });
+        /* Send payment failed email */
+        var _bwUser = await env.G7_KV.get('auth:users:' + _bwFirm, 'json') || {};
+        if (_bwUser.recoveryEmail) {
+          var _bwFSubj = 'Payment failed — update your payment method';
+          var _bwFHtml = emailShell({
+            siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+            headerLabel: 'Scout',
+            greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Your payment could not be processed.</div>',
+            textGreeting: 'Your payment could not be processed.\n\n',
+            htmlParts: [emailRow('Please update your payment method to keep getting leads and emails.'), emailGreyRow('Your features will pause in 3 days if payment is not updated.')],
+            textParts: ['Please update your payment method to keep getting leads and emails.\nYour features will pause in 3 days if payment is not updated.'],
+            mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/settings.html#plan', label: 'Update Payment' },
+            footerLine: 'Please update your payment.'
+          });
+          ctx.waitUntil(sendEmail(env, _bwUser.recoveryEmail, _bwFSubj, _bwFHtml.text, _bwFHtml.html, {}, { fromName: 'Scout by G7' }));
+        }
+      } else if (_bwId === 'subscription.halted') {
+        await upsertBilling(env, _bwFirm, { status: 'expired' });
+      } else if (_bwId === 'subscription.cancelled') {
+        await upsertBilling(env, _bwFirm, { status: 'cancelled', cancel_at_period_end: 1 });
+        /* Send cancelled email */
+        var _bwCUser = await env.G7_KV.get('auth:users:' + _bwFirm, 'json') || {};
+        if (_bwCUser.recoveryEmail) {
+          var _bwBill = await getBilling(env, _bwFirm);
+          var _bwEndDate = (_bwBill && _bwBill.current_period_end) ? _bwBill.current_period_end.slice(0, 10) : 'your period end';
+          var _bwCSubj = 'Your Scout plan has been cancelled';
+          var _bwCHtml = emailShell({
+            siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+            headerLabel: 'Scout',
+            greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Your plan has been cancelled.</div>',
+            textGreeting: 'Your plan has been cancelled.\n\n',
+            htmlParts: [emailRow('You still have access until <strong>' + escEmail(_bwEndDate) + '</strong>.'), emailGreyRow('After that, leads and emails will stop.')],
+            textParts: ['You still have access until ' + _bwEndDate + '.\nAfter that, leads and emails will stop.'],
+            mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/settings.html#plan', label: 'View Plan' },
+            footerLine: 'Your plan ends on ' + _bwEndDate + '.'
+          });
+          ctx.waitUntil(sendEmail(env, _bwCUser.recoveryEmail, _bwCSubj, _bwCHtml.text, _bwCHtml.html, {}, { fromName: 'Scout by G7' }));
+        }
+      } else if (_bwId === 'refund.processed') {
+        await upsertBilling(env, _bwFirm, { status: 'refunded', refunded_at: _bwNow });
+        /* Send refunded email */
+        var _bwRUser = await env.G7_KV.get('auth:users:' + _bwFirm, 'json') || {};
+        if (_bwRUser.recoveryEmail) {
+          var _bwRSubj = 'Your refund has been processed';
+          var _bwRHtml = emailShell({
+            siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+            headerLabel: 'Scout',
+            greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Your refund is on its way.</div>',
+            textGreeting: 'Your refund is on its way.\n\n',
+            htmlParts: [emailRow('The full amount will be credited to your account within 5–7 business days.'), emailGreyRow('Your plan access has ended.')],
+            textParts: ['The full amount will be credited to your account within 5-7 business days.\nYour plan access has ended.'],
+            mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/settings.html#plan', label: 'View Account' },
+            footerLine: 'Refund processed.'
+          });
+          ctx.waitUntil(sendEmail(env, _bwRUser.recoveryEmail, _bwRSubj, _bwRHtml.text, _bwRHtml.html, {}, { fromName: 'Scout by G7' }));
+        }
+      }
+
+      return jsonResponse({ ok: true, event: _bwId, firm: _bwFirm });
+    }
+
+    // ── POST /billing/cancel — cancel at end of period ──
+    if (request.method === 'POST' && path === '/billing/cancel') {
+      var _bcanSess = await validateSession(request, env);
+      if (!_bcanSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _bcanBill = await getBilling(env, _bcanSess.firmCode);
+      if (!_bcanBill || _bcanBill.status !== 'active') return jsonResponse({ error: 'No active plan to cancel' }, 400);
+
+      if (_bcanBill.plan === 'monthly' && _bcanBill.razorpay_subscription_id && env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
+        /* Cancel subscription at period end via Razorpay API */
+        var _bcanAuth = 'Basic ' + btoa(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET);
+        try {
+          await fetch('https://api.razorpay.com/v1/subscriptions/' + _bcanBill.razorpay_subscription_id + '/cancel', {
+            method: 'POST',
+            headers: { 'Authorization': _bcanAuth, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cancel_at_cycle_end: 1 })
+          });
+        } catch (e) {}
+      }
+
+      await upsertBilling(env, _bcanSess.firmCode, { cancel_at_period_end: 1 });
+      await logBillingEvent(env, 'cancel_' + Date.now(), 'user.cancel', _bcanSess.firmCode, { at: new Date().toISOString() });
+      return jsonResponse({ ok: true, cancelAtPeriodEnd: true, currentPeriodEnd: _bcanBill.current_period_end });
+    }
+
+    // ── POST /billing/refund — full refund within 7 days of first payment ──
+    if (request.method === 'POST' && path === '/billing/refund') {
+      var _brSess = await validateSession(request, env);
+      if (!_brSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _brBill = await getBilling(env, _brSess.firmCode);
+      if (!_brBill) return jsonResponse({ error: 'No billing record' }, 400);
+      if (_brBill.refunded_at) return jsonResponse({ error: 'Already refunded' }, 400);
+      if (!_brBill.first_paid_at) return jsonResponse({ error: 'No payment on record' }, 400);
+
+      /* Check 7-day window */
+      var _brFirstMs = new Date(_brBill.first_paid_at).getTime();
+      var _brNowMs = Date.now();
+      if (_brNowMs - _brFirstMs > 7 * 86400000) return jsonResponse({ error: 'Refund window (7 days) has passed' }, 400);
+
+      /* Issue refund via Razorpay API */
+      if (!_brBill.razorpay_payment_id || !env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+        return jsonResponse({ error: 'Cannot process refund — missing payment info' }, 400);
+      }
+      var _brAuth = 'Basic ' + btoa(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET);
+      var _brRefRes = await fetch('https://api.razorpay.com/v1/payments/' + _brBill.razorpay_payment_id + '/refund', {
+        method: 'POST',
+        headers: { 'Authorization': _brAuth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: { firm_code: _brSess.firmCode, reason: 'User requested refund within 7 days' } })
+      });
+      var _brRefBody = await _brRefRes.json();
+      if (_brRefBody.error) return jsonResponse({ error: _brRefBody.error.description || 'Refund failed' }, 502);
+
+      /* Cancel subscription if monthly */
+      if (_brBill.plan === 'monthly' && _brBill.razorpay_subscription_id) {
+        try {
+          await fetch('https://api.razorpay.com/v1/subscriptions/' + _brBill.razorpay_subscription_id + '/cancel', {
+            method: 'POST',
+            headers: { 'Authorization': _brAuth, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cancel_at_cycle_end: 0 })
+          });
+        } catch (e) {}
+      }
+
+      var _brNow = new Date().toISOString();
+      await upsertBilling(env, _brSess.firmCode, { status: 'refunded', refunded_at: _brNow });
+      await logBillingEvent(env, 'refund_' + Date.now(), 'user.refund', _brSess.firmCode, { refundId: _brRefBody.id || null });
+      return jsonResponse({ ok: true, status: 'refunded' });
+    }
+
+    // ── GET /billing/status — current billing status ──
+    if (request.method === 'GET' && path === '/billing/status') {
+      var _bsSess = await validateSession(request, env);
+      if (!_bsSess) return jsonResponse({ error: 'unauthorized' }, 401);
+      var _bsBill = await getBilling(env, _bsSess.firmCode);
+      if (!_bsBill) return jsonResponse({ status: 'none' });
+      return jsonResponse({
+        status: _bsBill.status,
+        plan: _bsBill.plan,
+        currentPeriodEnd: _bsBill.current_period_end,
+        cancelAtPeriodEnd: !!_bsBill.cancel_at_period_end,
+        firstPaidAt: _bsBill.first_paid_at,
+        refundedAt: _bsBill.refunded_at
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ADMIN BILLING ROUTES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // ── POST /admin/billing/create-plan — idempotent: create Razorpay monthly plan ──
+    if (request.method === 'POST' && path === '/admin/billing/create-plan') {
+      var _abcBody;
+      try { _abcBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_abcBody.adminPassword || _abcBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Forbidden' }, 403);
+      if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return jsonResponse({ error: 'Razorpay not configured' }, 501);
+
+      /* Check if already exists */
+      var _abcExist = await env.G7_KV.get('billing:plan:monthly');
+      if (_abcExist) return jsonResponse({ ok: true, plan_id: _abcExist, existing: true });
+
+      var _abcAuth = 'Basic ' + btoa(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET);
+      var _abcRes = await fetch('https://api.razorpay.com/v1/plans', {
+        method: 'POST',
+        headers: { 'Authorization': _abcAuth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          period: 'monthly',
+          interval: 1,
+          item: { name: 'Scout Monthly', amount: 300000, currency: 'INR', description: 'Scout by G7 — Monthly plan' }
+        })
+      });
+      var _abcPlan = await _abcRes.json();
+      if (_abcPlan.error) return jsonResponse({ error: _abcPlan.error.description || 'Could not create plan' }, 502);
+      await kvPut(env, 'billing:plan:monthly', _abcPlan.id);
+      return jsonResponse({ ok: true, plan_id: _abcPlan.id });
+    }
+
+    // ── POST /admin/billing/activate — manually activate a firm ──
+    if (request.method === 'POST' && path === '/admin/billing/activate') {
+      var _abaBody;
+      try { _abaBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_abaBody.adminPassword || _abaBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Forbidden' }, 403);
+      var _abaFirm = String(_abaBody.firm || _abaBody.firmCode || '').toUpperCase().trim();
+      if (!_abaFirm) return jsonResponse({ error: 'firm is required' }, 400);
+      var _abaPlan = String(_abaBody.plan || 'monthly').toLowerCase();
+      var _abaNow = new Date().toISOString();
+      var _abaEnd = _abaPlan === 'yearly'
+        ? new Date(Date.now() + 365 * 86400000).toISOString()
+        : new Date(Date.now() + 30 * 86400000).toISOString();
+      await upsertBilling(env, _abaFirm, {
+        plan: _abaPlan, status: 'active',
+        current_period_end: _abaEnd, first_paid_at: _abaNow,
+        cancel_at_period_end: 0, refunded_at: null
+      });
+      await logBillingEvent(env, 'admin_activate_' + _abaFirm + '_' + Date.now(), 'admin.activate', _abaFirm, { by: 'admin' });
+      return jsonResponse({ ok: true, firm: _abaFirm, status: 'active', plan: _abaPlan, periodEnd: _abaEnd });
+    }
+
+    // ── POST /admin/billing/expire — manually expire a firm ──
+    if (request.method === 'POST' && path === '/admin/billing/expire') {
+      var _abeBody;
+      try { _abeBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_abeBody.adminPassword || _abeBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Forbidden' }, 403);
+      var _abeFirm = String(_abeBody.firm || _abeBody.firmCode || '').toUpperCase().trim();
+      if (!_abeFirm) return jsonResponse({ error: 'firm is required' }, 400);
+      await upsertBilling(env, _abeFirm, { status: 'expired' });
+      await logBillingEvent(env, 'admin_expire_' + _abeFirm + '_' + Date.now(), 'admin.expire', _abeFirm, { by: 'admin' });
+      return jsonResponse({ ok: true, firm: _abeFirm, status: 'expired' });
+    }
+
+    // ── GET /admin/billing/list — all billing rows ──
+    if (request.method === 'GET' && path === '/admin/billing/list') {
+      var _ablPwd = url.searchParams.get('adminPassword');
+      if (!_ablPwd || _ablPwd !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Forbidden' }, 403);
+      if (!env.DB) return jsonResponse({ error: 'No D1' }, 501);
+      var _ablRows = await env.DB.prepare("SELECT * FROM billing ORDER BY updated_at DESC").all();
+      return jsonResponse({ billing: (_ablRows && _ablRows.results) || [] });
+    }
+
     // ── Catch-all 404 ─────────────────────────────────────────────────────────
     return jsonResponse({ error: 'Not found' }, 404);
 
@@ -11173,6 +11683,14 @@ export default {
           if (_dk.name.indexOf(':src:') !== -1) continue;
           var _dFirm = _dk.name.slice('scout:leadprofile:'.length);
           if (!_dFirm) continue;
+          /* Billing gate — skip leads, emails, cron for firms without active billing */
+          var _dBillingActive = await isBillingActive(env, _dFirm);
+          if (!_dBillingActive) {
+            _devLeadReport.push({ firm: _dFirm, status: 'no_billing' });
+            _devMeReport.push({ firm: _dFirm, status: 'no_billing' });
+            _devWeReport.push({ firm: _dFirm, status: 'no_billing' });
+            continue;
+          }
           /* Weekly email runs for every firm (has its own ISO-week dedupe).
              Moved outside the slot-match gate so firms with non-matching
              morningEmail.time still get their weekly email. */
@@ -11234,6 +11752,76 @@ export default {
         }
         _devCursor = _devPage.list_complete ? undefined : _devPage.cursor;
       } while (_devCursor);
+      /* ── Billing cron: expire + past_due → expired + yearly reminder ── */
+      var _billingCron = [];
+      if (env.DB) {
+        try {
+          /* 1. Expire yearly plans past their end date */
+          var _expRows = await env.DB.prepare(
+            "SELECT firm_code, current_period_end FROM billing WHERE plan = 'yearly' AND status = 'active' AND current_period_end < datetime('now')"
+          ).all();
+          for (var _exi = 0; _exi < ((_expRows && _expRows.results) || []).length; _exi++) {
+            var _exr = _expRows.results[_exi];
+            await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE firm_code = ?").bind(_exr.firm_code).run();
+            await logBillingEvent(env, 'cron_expire_' + _exr.firm_code + '_' + Date.now(), 'cron.yearly_expired', _exr.firm_code, {});
+            _billingCron.push({ firm: _exr.firm_code, action: 'yearly_expired' });
+          }
+
+          /* 2. Move past_due to expired after 3 days */
+          var _pdRows = await env.DB.prepare(
+            "SELECT firm_code, updated_at FROM billing WHERE status = 'past_due' AND updated_at < datetime('now', '-3 days')"
+          ).all();
+          for (var _pdi = 0; _pdi < ((_pdRows && _pdRows.results) || []).length; _pdi++) {
+            var _pdr = _pdRows.results[_pdi];
+            await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE firm_code = ?").bind(_pdr.firm_code).run();
+            await logBillingEvent(env, 'cron_pastdue_expire_' + _pdr.firm_code + '_' + Date.now(), 'cron.pastdue_expired', _pdr.firm_code, {});
+            _billingCron.push({ firm: _pdr.firm_code, action: 'pastdue_expired' });
+          }
+
+          /* 3. Send reminder 3 days before yearly plan ends */
+          var _remRows = await env.DB.prepare(
+            "SELECT firm_code, current_period_end FROM billing WHERE plan = 'yearly' AND status = 'active' AND current_period_end BETWEEN datetime('now', '+2 days') AND datetime('now', '+4 days')"
+          ).all();
+          for (var _remi = 0; _remi < ((_remRows && _remRows.results) || []).length; _remi++) {
+            var _remr = _remRows.results[_remi];
+            var _remDedupeKey = 'billing:reminder:' + _remr.firm_code + ':' + _remr.current_period_end.slice(0, 10);
+            if (await env.G7_KV.get(_remDedupeKey)) continue;
+            await kvPut(env, _remDedupeKey, '1', { expirationTtl: 7 * 86400 });
+            var _remUser = await env.G7_KV.get('auth:users:' + _remr.firm_code, 'json') || {};
+            if (_remUser.recoveryEmail) {
+              var _remEndDate = _remr.current_period_end.slice(0, 10);
+              var _remSubj = 'Your Scout yearly plan ends on ' + _remEndDate;
+              var _remHtml = emailShell({
+                siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+                headerLabel: 'Scout',
+                greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Your plan ends soon.</div>',
+                textGreeting: 'Your plan ends soon.\n\n',
+                htmlParts: [emailRow('Your yearly Scout plan ends on <strong>' + escEmail(_remEndDate) + '</strong>.'), emailRow('Renew to keep getting leads, emails, and all features.')],
+                textParts: ['Your yearly Scout plan ends on ' + _remEndDate + '.\nRenew to keep getting leads, emails, and all features.'],
+                mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/pricing.html', label: 'Renew Now' },
+                footerLine: 'Your plan ends on ' + _remEndDate + '.'
+              });
+              await sendEmail(env, _remUser.recoveryEmail, _remSubj, _remHtml.text, _remHtml.html, {}, { fromName: 'Scout by G7' });
+            }
+            _billingCron.push({ firm: _remr.firm_code, action: 'yearly_reminder_sent' });
+          }
+
+          /* 4. Cancelled subscriptions past period end → expired */
+          var _canRows = await env.DB.prepare(
+            "SELECT firm_code FROM billing WHERE status = 'cancelled' AND cancel_at_period_end = 1 AND current_period_end < datetime('now')"
+          ).all();
+          for (var _cani = 0; _cani < ((_canRows && _canRows.results) || []).length; _cani++) {
+            var _canr = _canRows.results[_cani];
+            await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE firm_code = ?").bind(_canr.firm_code).run();
+            await logBillingEvent(env, 'cron_cancel_expire_' + _canr.firm_code + '_' + Date.now(), 'cron.cancelled_expired', _canr.firm_code, {});
+            _billingCron.push({ firm: _canr.firm_code, action: 'cancelled_expired' });
+          }
+        } catch (e) {
+          _billingCron.push({ error: String(e.message || e).slice(0, 200) });
+        }
+      }
+      report.billingCron = _billingCron;
+
       report.leads = _devLeadReport;
       report.morningEmail = _devMeReport;
       report.weeklyEmail = _devWeReport;
@@ -11323,6 +11911,9 @@ export default {
         const firmCode = k.name.slice('market:ctx:'.length);
         report.current = firmCode;
         await kvPut(env,'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
+        /* Billing gate — skip firms without active billing */
+        var _mfBilling = await isBillingActive(env, firmCode);
+        if (!_mfBilling) { report.firms.push({ firm: firmCode, status: 'no_billing' }); continue; }
         const t0 = Date.now();
         try {
           const result = await runMorningForFirm(env, firmCode, day);
@@ -11352,6 +11943,9 @@ export default {
         if (_lk.name.indexOf(':src:') !== -1) continue;
         var _lfirm = _lk.name.slice('scout:leadprofile:'.length);
         if (!_lfirm) continue;
+        /* Billing gate */
+        var _lfBilling = await isBillingActive(env, _lfirm);
+        if (!_lfBilling) { _leadReport.push({ firm: _lfirm, status: 'no_billing' }); continue; }
         var _lt0 = Date.now();
         var _lCost = newCostAccum();
         try {
@@ -11383,6 +11977,9 @@ export default {
           if (_mk.name.indexOf(':src:') !== -1) continue;
           var _mFirm = _mk.name.slice('scout:leadprofile:'.length);
           if (!_mFirm) continue;
+          /* Billing gate */
+          var _mfBill2 = await isBillingActive(env, _mFirm);
+          if (!_mfBill2) { _meReport.push({ firm: _mFirm, status: 'no_billing' }); continue; }
           try {
             var _mePref3 = await getFirmSetting(env, _mFirm, 'morningEmail');
             if (!_mePref3) _mePref3 = { on: true, time: '08:00' };
@@ -11411,6 +12008,9 @@ export default {
           if (_wk.name.indexOf(':src:') !== -1) continue;
           var _wFirm = _wk.name.slice('scout:leadprofile:'.length);
           if (!_wFirm) continue;
+          /* Billing gate */
+          var _wfBill = await isBillingActive(env, _wFirm);
+          if (!_wfBill) { _weReport.push({ firm: _wFirm, status: 'no_billing' }); continue; }
           try {
             /* Use morning email time slot — send weekly email at the same time */
             var _wePref = await getFirmSetting(env, _wFirm, 'morningEmail');
@@ -11531,6 +12131,46 @@ export default {
     report.finishedAt = new Date().toISOString();
     console.log(JSON.stringify({ cron: report }));
     await kvPut(env,'cron:last', JSON.stringify(report), { expirationTtl: 7 * 86400 });
+
+    /* ── Billing cron: expire + past_due → expired + yearly reminder ── */
+    if (env.DB) {
+      try {
+        /* Expire yearly plans past their end date */
+        await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE plan = 'yearly' AND status = 'active' AND current_period_end < datetime('now')").run();
+        /* past_due → expired after 3 days */
+        await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE status = 'past_due' AND updated_at < datetime('now', '-3 days')").run();
+        /* Cancelled past period end → expired */
+        await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE status = 'cancelled' AND cancel_at_period_end = 1 AND current_period_end < datetime('now')").run();
+        /* Yearly ending reminder — 3 days before (same logic as dev, with dedupe) */
+        var _prodRemRows = await env.DB.prepare(
+          "SELECT firm_code, current_period_end FROM billing WHERE plan = 'yearly' AND status = 'active' AND current_period_end BETWEEN datetime('now', '+2 days') AND datetime('now', '+4 days')"
+        ).all();
+        for (var _pri = 0; _pri < ((_prodRemRows && _prodRemRows.results) || []).length; _pri++) {
+          var _prr = _prodRemRows.results[_pri];
+          var _prDedupeKey = 'billing:reminder:' + _prr.firm_code + ':' + _prr.current_period_end.slice(0, 10);
+          if (await env.G7_KV.get(_prDedupeKey)) continue;
+          await kvPut(env, _prDedupeKey, '1', { expirationTtl: 7 * 86400 });
+          var _prUser = await env.G7_KV.get('auth:users:' + _prr.firm_code, 'json') || {};
+          if (_prUser.recoveryEmail) {
+            var _prEnd = _prr.current_period_end.slice(0, 10);
+            var _prSubj = 'Your Scout yearly plan ends on ' + _prEnd;
+            var _prHtml = emailShell({
+              siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+              headerLabel: 'Scout',
+              greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Your plan ends soon.</div>',
+              textGreeting: 'Your plan ends soon.\n\n',
+              htmlParts: [emailRow('Your yearly Scout plan ends on <strong>' + escEmail(_prEnd) + '</strong>.'), emailRow('Renew to keep getting leads, emails, and all features.')],
+              textParts: ['Your yearly Scout plan ends on ' + _prEnd + '.\nRenew to keep getting leads, emails, and all features.'],
+              mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/pricing.html', label: 'Renew Now' },
+              footerLine: 'Your plan ends on ' + _prEnd + '.'
+            });
+            await sendEmail(env, _prUser.recoveryEmail, _prSubj, _prHtml.text, _prHtml.html, {}, { fromName: 'Scout by G7' });
+          }
+        }
+      } catch (e) {
+        console.error('Billing cron error:', String(e && e.message || e).slice(0, 200));
+      }
+    }
 
     /* ── Error digest email — once per day, ~7 AM IST or later ──
        Sends yesterday's error summary to ADMIN_EMAIL if any errors exist. */
