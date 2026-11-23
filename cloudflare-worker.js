@@ -1902,7 +1902,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   /* ── 1. NEW LEADS ── */
   if (leads.length > 0) {
     sections.push('leads');
-    htmlParts.push(emailHeading(leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' today'));
+    htmlParts.push(emailHeading(leads.length + ' new lead' + (leads.length === 1 ? '' : 's') + ' today'));
     var showLeads = leads.slice(0, 8);
     for (var li = 0; li < showLeads.length; li++) {
       var lead = showLeads[li];
@@ -1910,27 +1910,28 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
       var lGroup = escEmail(lead.group || '');
       var lReason = escEmail(lead.fitReason || '');
       if (lReason.length > 120) { var wb = lReason.lastIndexOf(' ', 120); lReason = lReason.slice(0, wb > 60 ? wb : 120) + '\u2026'; }
-      var leadHtml = '<strong>' + lName + '</strong>';
-      if (lGroup) leadHtml += ' <span style="font-size:11px;color:#888;background:#f0eee8;padding:2px 8px;border-radius:10px;margin-left:4px">' + lGroup + '</span>';
+      /* Layout: name bold → group grey → reason → WA link */
+      var leadHtml = '<strong style="font-size:14px">' + lName + '</strong>';
+      if (lGroup) leadHtml += '<br><span style="font-size:11px;color:#888">' + lGroup + '</span>';
       if (lReason) leadHtml += '<br><span style="font-size:12px;color:#666;line-height:1.5">' + lReason + '</span>';
       var waMsg = (lead.messages && lead.messages.first) || '';
       var lPhone = waPhone(lead.phone);
-      var btns = '';
       if (lPhone && waMsg) {
         var waUrl = emailSafeUrl('https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg));
-        btns += '<a href="' + escEmail(waUrl) + '" style="display:inline-block;background:#25D366;color:#fff;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:6px">WhatsApp</a>';
+        leadHtml += '<br><a href="' + escEmail(waUrl) + '" style="display:inline-block;background:#25D366;color:#fff;padding:6px 14px;border-radius:4px;text-decoration:none;font-size:12px;margin-top:6px">WhatsApp</a>';
       }
-      htmlParts.push(emailRow(leadHtml + '<br>' + btns));
-      var leadText = '  ' + (lead.name || 'New lead') + ' (' + (lead.group || '') + ')';
-      if (lead.fitReason) leadText += '\n  ' + lead.fitReason;
-      if (lPhone && waMsg) leadText += '\n  WhatsApp: https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg);
+      htmlParts.push(emailRow(leadHtml));
+      var leadText = '  ' + (lead.name || 'New lead');
+      if (lead.group) leadText += '\n    ' + lead.group;
+      if (lead.fitReason) leadText += '\n    ' + lead.fitReason;
+      if (lPhone && waMsg) leadText += '\n    WhatsApp: https://wa.me/' + lPhone + '?text=' + encodeURIComponent(waMsg);
       textParts.push(leadText);
     }
     if (leads.length > 8) {
       htmlParts.push(emailGreyRow('+' + (leads.length - 8) + ' more \u2014 open Today to see all'));
       textParts.push('  +' + (leads.length - 8) + ' more — open Today to see all');
     }
-    textParts.unshift('NEW CUSTOMERS TODAY (' + leads.length + ')');
+    textParts.unshift('NEW LEADS TODAY (' + leads.length + ')');
   }
 
   /* ── 2. FOLLOW-UPS DUE ── */
@@ -2043,9 +2044,9 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
   /* ── Subject ── */
   var subject = '';
   if (leads.length > 0 && includeMove) {
-    subject = leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' + today\u2019s move for ' + bizName;
+    subject = leads.length + ' new lead' + (leads.length === 1 ? '' : 's') + ' + today\u2019s move for ' + bizName;
   } else if (leads.length > 0) {
-    subject = leads.length + ' new customer' + (leads.length === 1 ? '' : 's') + ' for ' + bizName + ' today';
+    subject = leads.length + ' new lead' + (leads.length === 1 ? '' : 's') + ' for ' + bizName + ' today';
   } else if (includeMove) {
     subject = 'Today\u2019s move for ' + bizName;
   } else if (due.length > 0) {
@@ -3662,6 +3663,87 @@ var VALID_PLACE_TYPES = new Set([
   /* Table B generic */ 'establishment','point_of_interest','food','finance','health','general_contractor','geocode','neighborhood','political','premise','route','street_address','sublocality','locality'
 ]);
 
+/* ── Per-group allowed/blocked type rules ──
+   Allowed = types that genuinely belong in this group.
+   Blocked = types Google returns in searches for the group that do NOT belong.
+   Derived once per group from name + placesTypes, stored with the group. */
+var GROUP_TYPE_RULES = {
+  /* Residential — contractors and agencies show up in housing searches */
+  'apartment': { allowed: ['apartment_building','apartment_complex','housing_complex','condominium_complex'], blocked: ['general_contractor','real_estate_agency','roofing_contractor','plumber','electrician','painter','moving_company','insurance_agency','lawyer'] },
+  'residential': { allowed: ['apartment_building','apartment_complex','housing_complex','condominium_complex'], blocked: ['general_contractor','real_estate_agency','roofing_contractor','plumber','electrician','painter','moving_company','insurance_agency','lawyer'] },
+  /* Corporate / office — block unrelated service types, NOT coworking */
+  'corporate': { allowed: ['corporate_office','coworking_space','business_center'], blocked: ['insurance_agency','lawyer','real_estate_agency','travel_agency'] },
+  'coworking': { allowed: ['coworking_space','business_center','corporate_office'], blocked: ['insurance_agency','lawyer','real_estate_agency'] },
+  'tech': { allowed: ['corporate_office','coworking_space','business_center'], blocked: ['insurance_agency','lawyer','real_estate_agency'] },
+  'startup': { allowed: ['corporate_office','coworking_space','business_center'], blocked: ['insurance_agency','lawyer','real_estate_agency'] },
+  /* Fitness / wellness */
+  'gym': { allowed: ['gym','fitness_center','sports_club','sports_complex','yoga_studio','wellness_center'], blocked: ['beauty_salon','hair_salon','spa'] },
+  'fitness': { allowed: ['gym','fitness_center','sports_club','sports_complex','yoga_studio','wellness_center'], blocked: ['beauty_salon','hair_salon','spa'] },
+  'yoga': { allowed: ['yoga_studio','wellness_center','gym','fitness_center'], blocked: ['beauty_salon','hair_salon'] },
+  'physio': { allowed: ['physiotherapist','medical_clinic','wellness_center','hospital','doctor'], blocked: ['beauty_salon'] },
+  'diet': { allowed: ['health','medical_clinic','doctor','wellness_center','consultant'], blocked: ['restaurant','cafe','gym'] },
+  'nutrition': { allowed: ['health','medical_clinic','doctor','wellness_center','consultant'], blocked: ['restaurant','cafe','gym'] },
+  /* Sports retail */
+  'sport': { allowed: ['sporting_goods_store','shoe_store','clothing_store','bicycle_store','store'], blocked: ['gym','fitness_center','restaurant'] },
+  'running': { allowed: ['sporting_goods_store','shoe_store','clothing_store','store'], blocked: ['gym','fitness_center'] },
+  'athletic': { allowed: ['sporting_goods_store','shoe_store','clothing_store','store','bicycle_store'], blocked: ['gym','fitness_center'] },
+  /* Food */
+  'cafe': { allowed: ['cafe','coffee_shop','bakery','restaurant'], blocked: ['corporate_office'] },
+  'restaurant': { allowed: ['restaurant','cafe','bar','fast_food_restaurant','meal_delivery','meal_takeaway'], blocked: ['corporate_office'] },
+  /* Salon / beauty */
+  'salon': { allowed: ['beauty_salon','hair_salon','nail_salon','barber_shop','spa'], blocked: ['gym','restaurant'] },
+  'beauty': { allowed: ['beauty_salon','hair_salon','nail_salon','barber_shop','spa','skin_care_clinic'], blocked: ['gym','restaurant'] },
+  /* Hotel / hospitality */
+  'hotel': { allowed: ['hotel','lodging','resort_hotel','guest_house','hostel','bed_and_breakfast','inn','motel'], blocked: ['real_estate_agency'] },
+  'hospitality': { allowed: ['hotel','lodging','resort_hotel','guest_house','hostel','restaurant','event_venue'], blocked: ['real_estate_agency'] },
+  /* Retail */
+  'retail': { allowed: ['store','clothing_store','department_store','grocery_store','supermarket','shopping_mall','electronics_store','furniture_store','hardware_store'], blocked: ['corporate_office'] },
+  'shop': { allowed: ['store','clothing_store','department_store','grocery_store','supermarket','shopping_mall'], blocked: ['corporate_office'] },
+  /* Education */
+  'school': { allowed: ['school','preschool','primary_school','secondary_school','university'], blocked: ['corporate_office','store'] },
+  'preschool': { allowed: ['preschool','school','child_care_agency'], blocked: ['corporate_office'] },
+  /* Medical */
+  'clinic': { allowed: ['medical_clinic','doctor','hospital','medical_center','dental_clinic','dentist','pharmacy'], blocked: ['beauty_salon'] },
+  'hospital': { allowed: ['hospital','medical_center','medical_clinic','doctor'], blocked: ['beauty_salon'] },
+  'dental': { allowed: ['dental_clinic','dentist','medical_clinic'], blocked: ['beauty_salon'] }
+};
+
+/* Derive blockedTypes for a group from its name and placesTypes.
+   Returns { allowedTypes: [...], blockedTypes: [...] }. */
+function deriveGroupTypeRules(group) {
+  var nameLower = (group.name || '').toLowerCase();
+  var allowed = new Set(group.placesTypes || []);
+  var blocked = new Set();
+  /* Match against known rule keywords */
+  for (var kw in GROUP_TYPE_RULES) {
+    if (nameLower.indexOf(kw) !== -1) {
+      var rules = GROUP_TYPE_RULES[kw];
+      rules.allowed.forEach(function(t) { allowed.add(t); });
+      rules.blocked.forEach(function(t) { if (!allowed.has(t)) blocked.add(t); });
+    }
+  }
+  /* Also add synonyms for allowed types */
+  var expanded = new Set(allowed);
+  allowed.forEach(function(t) {
+    var syns = TYPE_SYNONYMS[t];
+    if (syns) syns.forEach(function(s) { expanded.add(s); });
+  });
+  /* Ensure nothing in expanded is also blocked */
+  expanded.forEach(function(t) { blocked.delete(t); });
+  return { allowedTypes: Array.from(expanded), blockedTypes: Array.from(blocked) };
+}
+
+/* Apply type rules to all groups in a profile (mutates profile). */
+function applyGroupTypeRules(profile) {
+  if (!profile || !Array.isArray(profile.groups)) return profile;
+  profile.groups.forEach(function(g) {
+    var rules = deriveGroupTypeRules(g);
+    g.allowedTypes = rules.allowedTypes;
+    g.blockedTypes = rules.blockedTypes;
+  });
+  return profile;
+}
+
 /* Synonym groups: types that are equivalent for matching purposes.
    When comparing candidate types against group placesTypes, any type in the same
    synonym group counts as a match. */
@@ -3849,6 +3931,8 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   profile.exclude = (Array.isArray(profile.exclude) ? profile.exclude : []).slice(0, 20).map(function(e) { return String(e).slice(0, 60).toLowerCase(); });
   /* Correct invalid types and expand synonyms */
   correctProfileTypes(profile);
+  /* Derive allowed/blocked type rules per group */
+  applyGroupTypeRules(profile);
   /* Preserve confirmedAt from existing profile if re-generating */
   var _existingProf = await getLeadProfile(env, firmCode);
   profile.confirmedAt = (_existingProf && _existingProf.confirmedAt) || new Date().toISOString();
@@ -4085,31 +4169,44 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
     var nameKey = nameLower.replace(/[^a-z0-9]/g, '');
     if (nameCounts[nameKey] >= 3) { drops.push({ name: c.name, reason: 'chain' }); continue; }
 
-    /* Group type match — softer: only reject when the candidate has a specific
-       primaryType that clearly doesn't belong. If all types are generic, pass through. */
-    if (c._groupName && !isGenericPrimary) {
+    /* Group type match — two checks:
+       1. blockedTypes: reject if primaryType or any specific type is blocked for this group
+       2. allowedTypes: for non-generic primaryTypes, verify at least one type matches
+       Both checks run even for generic primaryTypes (service, general_contractor, etc.) */
+    if (c._groupName) {
       var matchedGroup = null;
       for (var gi = 0; gi < profile.groups.length; gi++) {
         if (profile.groups[gi].name === c._groupName) { matchedGroup = profile.groups[gi]; break; }
       }
-      if (matchedGroup && matchedGroup.placesTypes && matchedGroup.placesTypes.length > 0) {
-        var gTypes = new Set(matchedGroup.placesTypes.map(function(t) { return t.toLowerCase(); }));
-        var typeMatch = false;
-        /* Direct match or synonym match for primaryType */
-        if (gTypes.has(cPrimary)) { typeMatch = true; }
-        if (!typeMatch) { gTypes.forEach(function(gt) { if (typesMatch(cPrimary, gt)) typeMatch = true; }); }
-        /* Check specific types too */
-        if (!typeMatch) {
-          for (var ti = 0; ti < specificTypes.length; ti++) {
-            var st = specificTypes[ti].toLowerCase();
-            if (gTypes.has(st)) { typeMatch = true; break; }
-            /* Synonym match */
-            var found = false;
-            gTypes.forEach(function(gt) { if (typesMatch(st, gt)) found = true; });
-            if (found) { typeMatch = true; break; }
+      if (matchedGroup) {
+        /* Check blockedTypes first — always runs regardless of generic */
+        var blockedSet = matchedGroup.blockedTypes ? new Set(matchedGroup.blockedTypes.map(function(t){ return t.toLowerCase(); })) : new Set();
+        if (blockedSet.size > 0) {
+          var isBlocked = blockedSet.has(cPrimary);
+          if (!isBlocked) {
+            for (var bi = 0; bi < specificTypes.length; bi++) {
+              if (blockedSet.has(specificTypes[bi].toLowerCase())) { isBlocked = true; break; }
+            }
           }
+          if (isBlocked) { droppedByType++; drops.push({ name: c.name, reason: 'type_mismatch', primaryType: cPrimary, group: c._groupName }); continue; }
         }
-        if (!typeMatch) { droppedByType++; drops.push({ name: c.name, reason: 'type_excluded' }); continue; }
+        /* For non-generic primaryTypes, also check allowedTypes (positive match) */
+        if (!isGenericPrimary && matchedGroup.placesTypes && matchedGroup.placesTypes.length > 0) {
+          var gTypes = matchedGroup.allowedTypes ? new Set(matchedGroup.allowedTypes.map(function(t){ return t.toLowerCase(); })) : new Set(matchedGroup.placesTypes.map(function(t) { return t.toLowerCase(); }));
+          var typeMatch = false;
+          if (gTypes.has(cPrimary)) { typeMatch = true; }
+          if (!typeMatch) { gTypes.forEach(function(gt) { if (typesMatch(cPrimary, gt)) typeMatch = true; }); }
+          if (!typeMatch) {
+            for (var ti = 0; ti < specificTypes.length; ti++) {
+              var st = specificTypes[ti].toLowerCase();
+              if (gTypes.has(st)) { typeMatch = true; break; }
+              var found = false;
+              gTypes.forEach(function(gt) { if (typesMatch(st, gt)) found = true; });
+              if (found) { typeMatch = true; break; }
+            }
+          }
+          if (!typeMatch) { droppedByType++; drops.push({ name: c.name, reason: 'type_mismatch', primaryType: cPrimary, group: c._groupName }); continue; }
+        }
       }
     }
 
@@ -4153,7 +4250,12 @@ async function scoreLeadFit(env, candidates, profile, groupName, businessContext
     'Score each candidate 1-10 for fit against their assigned group.\n' +
     'A good fit (6+) means this business would realistically buy from, partner with, or refer customers to the owner. ' +
     'State concretely WHY (e.g. "Gym with 76 reviews — large member base for post-workout coffee").\n' +
-    'A poor fit (<6) means the business type has no natural overlap — score it low even if ratings are high.\n' +
+    'A poor fit (<6) means the business type has no natural overlap — score it low even if ratings are high.\n\n' +
+    'CRITICAL RULES:\n' +
+    '- Use ONLY the Google primaryType shown for each candidate. Never invent or guess a business type.\n' +
+    '- If the primaryType is generic (service, establishment, point_of_interest, general_contractor, consultant, professional_services) and you cannot tell from the name what the business actually does, say "unclear type" in the reason and score 3 or below.\n' +
+    '- If the business does not clearly belong to its assigned group, score 3 or below.\n' +
+    '- A contractor, builder, or consultant is NOT a residential society. A pest control firm is NOT a corporate office.\n\n' +
     'Each reason MUST be one complete sentence, at most 160 characters. ' +
     'Use plain English type names (e.g. "Coworking space" not "coworking_space", "Yoga studio" not "yoga_studio"). ' +
     'Cite facts from the data (name, rating, review count).\n\n' +
@@ -4676,7 +4778,7 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   var dryRun = opts && opts.dryRun;
   var allDrops = []; /* collects drop reasons across all stages */
   var profileJson = await getLeadProfile(env, firmCode);
-  if (profileJson) correctProfileTypes(profileJson);
+  if (profileJson) { correctProfileTypes(profileJson); applyGroupTypeRules(profileJson); }
 
   /* Check if leads already generated today — skip in dry run */
   var todayKey = 'scout:leads:' + firmCode + ':' + day;
@@ -4766,6 +4868,26 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     } catch (e) {}
   }
   pool = pool.filter(function(p) { return !existingPlaceIds.has(p.placeId); });
+
+  /* Re-filter pool entries against blockedTypes (pool may predate updated rules) */
+  var _poolDrops = [];
+  pool = pool.filter(function(p) {
+    if (!p._groupName) return true;
+    var grp = null;
+    for (var _gi = 0; _gi < enabledGroups.length; _gi++) {
+      if (enabledGroups[_gi].name === p._groupName) { grp = enabledGroups[_gi]; break; }
+    }
+    if (!grp || !grp.blockedTypes || grp.blockedTypes.length === 0) return true;
+    var bSet = new Set(grp.blockedTypes.map(function(t){ return t.toLowerCase(); }));
+    var pt = (p.primaryType || '').toLowerCase();
+    if (pt && bSet.has(pt)) { _poolDrops.push({ name: p.name, reason: 'type_mismatch', primaryType: pt, group: p._groupName }); return false; }
+    var pts = (p.types || []);
+    for (var _ti = 0; _ti < pts.length; _ti++) {
+      if (bSet.has(pts[_ti].toLowerCase())) { _poolDrops.push({ name: p.name, reason: 'type_mismatch', primaryType: pt, group: p._groupName }); return false; }
+    }
+    return true;
+  });
+  if (_poolDrops.length > 0) allDrops = allDrops.concat(_poolDrops);
 
   var textSearchCalls = 0;
   var detailsCalls = 0;
@@ -7206,6 +7328,37 @@ export default {
       } catch (e) {
         return jsonResponse({ error: 'news_email_failed', detail: String((e && e.message) || e).slice(0, 500) }, 500);
       }
+    }
+
+    // POST /admin/backfill-type-rules — { adminPassword, firmCode? }
+    // Apply allowed/blocked type rules to group profiles. If firmCode given, just that firm.
+    if (request.method === 'POST' && path === '/admin/backfill-type-rules') {
+      let body; try { body = await request.json(); } catch { return jsonResponse({ error: 'Invalid JSON' }, 400); }
+      if (!body.adminPassword || body.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Invalid admin password' }, 403);
+      var firms = [];
+      if (body.firmCode) {
+        firms.push(String(body.firmCode).toUpperCase().trim());
+      } else {
+        // Get all firms with lead profiles from KV
+        var _keys = await env.G7_KV.list({ prefix: 'scout:leadprofile:', limit: 100 });
+        (_keys.keys || []).forEach(function(k) {
+          var parts = k.name.split(':');
+          if (parts.length === 3 && parts[2] !== 'src' && parts[2].indexOf(':') === -1) firms.push(parts[2]);
+        });
+      }
+      var results = {};
+      for (var _fi = 0; _fi < firms.length; _fi++) {
+        var _fc = firms[_fi];
+        var _prof = await getLeadProfile(env, _fc);
+        if (!_prof) { results[_fc] = 'no_profile'; continue; }
+        correctProfileTypes(_prof);
+        applyGroupTypeRules(_prof);
+        await saveLeadProfile(env, _fc, _prof);
+        results[_fc] = (_prof.groups || []).map(function(g) {
+          return { name: g.name, allowedTypes: (g.allowedTypes || []).length, blockedTypes: (g.blockedTypes || []).length };
+        });
+      }
+      return jsonResponse({ ok: true, results: results });
     }
 
     // POST /admin/email/actions — DEPRECATED: merged into morning email.
