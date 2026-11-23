@@ -722,9 +722,15 @@ async function logBillingEvent(env, eventId, type, firmCode, payload) {
 async function isBillingActive(env, firmCode) {
   var b = await getBilling(env, firmCode);
   if (!b) return false;
-  if (b.status === 'active') return true;
-  /* Cancelled firms keep access until their paid period ends */
-  if (b.status === 'cancelled' && b.current_period_end && new Date(b.current_period_end) > new Date()) return true;
+  /* 1-day grace period after period end */
+  var _grace = b.current_period_end ? new Date(new Date(b.current_period_end).getTime() + 86400000) : null;
+  if (b.status === 'active') {
+    /* Active with a period end: honour it + grace. Active without period end (admin-activated): always true. */
+    if (!_grace) return true;
+    return new Date() < _grace;
+  }
+  /* Cancelled firms keep access until their paid period ends + grace */
+  if (b.status === 'cancelled' && _grace && new Date() < _grace) return true;
   return false;
 }
 
@@ -11273,6 +11279,7 @@ export default {
       if (!env.RAZORPAY_KEY_SECRET) return jsonResponse({ error: 'not configured' }, 501);
 
       var _bvPlan = String(_bvBody.plan || '').toLowerCase();
+      if (_bvPlan !== 'monthly' && _bvPlan !== 'yearly') return jsonResponse({ error: 'plan must be monthly or yearly' }, 400);
       var _bvValid = false;
 
       if (_bvPlan === 'monthly') {
@@ -11346,11 +11353,17 @@ export default {
       var _bwEvent;
       try { _bwEvent = JSON.parse(_bwRaw); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
       var _bwId = _bwEvent.event || '';
-      /* Use Razorpay's own event ID for deduplication (always present) */
-      var _bwEventId = _bwEvent.id || (_bwId + ':' + String(_bwEvent.created_at || Date.now()));
+      /* Razorpay sends a unique event ID in the x-razorpay-event-id header */
+      var _bwEventId = request.headers.get('x-razorpay-event-id') || '';
+      var _bwNoEventId = false;
+      if (!_bwEventId) {
+        /* Header missing — process the event but log the gap */
+        _bwNoEventId = true;
+        _bwEventId = 'noid_' + _bwId + '_' + Date.now();
+      }
 
-      /* Duplicate check */
-      if (env.DB) {
+      /* Duplicate check (only meaningful when we have a real event ID) */
+      if (env.DB && !_bwNoEventId) {
         try {
           var _bwDup = await env.DB.prepare("SELECT id FROM billing_events WHERE event_id = ?").bind(_bwEventId).first();
           if (_bwDup) return jsonResponse({ ok: true, duplicate: true });
@@ -11626,10 +11639,10 @@ export default {
       return jsonResponse({ ok: true, firm: _abeFirm, status: 'expired' });
     }
 
-    // ── GET /admin/billing/list — all billing rows ──
-    if (request.method === 'GET' && path === '/admin/billing/list') {
-      var _ablPwd = url.searchParams.get('adminPassword');
-      if (!_ablPwd || _ablPwd !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Forbidden' }, 403);
+    // ── POST /admin/billing/list — all billing rows ──
+    if (request.method === 'POST' && path === '/admin/billing/list') {
+      var _ablBody; try { _ablBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_ablBody.adminPassword || _ablBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'Forbidden' }, 403);
       if (!env.DB) return jsonResponse({ error: 'No D1' }, 501);
       var _ablRows = await env.DB.prepare("SELECT * FROM billing ORDER BY updated_at DESC").all();
       return jsonResponse({ billing: (_ablRows && _ablRows.results) || [] });
@@ -11765,6 +11778,17 @@ export default {
             await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE firm_code = ?").bind(_exr.firm_code).run();
             await logBillingEvent(env, 'cron_expire_' + _exr.firm_code + '_' + Date.now(), 'cron.yearly_expired', _exr.firm_code, {});
             _billingCron.push({ firm: _exr.firm_code, action: 'yearly_expired' });
+          }
+
+          /* 1b. Active monthly/yearly with period ended >3 days ago → expired (stale rows) */
+          var _staleRows = await env.DB.prepare(
+            "SELECT firm_code, current_period_end FROM billing WHERE status = 'active' AND current_period_end IS NOT NULL AND current_period_end < datetime('now', '-3 days')"
+          ).all();
+          for (var _sti = 0; _sti < ((_staleRows && _staleRows.results) || []).length; _sti++) {
+            var _str = _staleRows.results[_sti];
+            await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE firm_code = ?").bind(_str.firm_code).run();
+            await logBillingEvent(env, 'cron_stale_expire_' + _str.firm_code + '_' + Date.now(), 'cron.active_stale_expired', _str.firm_code, { period_end: _str.current_period_end });
+            _billingCron.push({ firm: _str.firm_code, action: 'active_stale_expired', period_end: _str.current_period_end });
           }
 
           /* 2. Move past_due to expired after 3 days */
@@ -12137,6 +12161,8 @@ export default {
       try {
         /* Expire yearly plans past their end date */
         await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE plan = 'yearly' AND status = 'active' AND current_period_end < datetime('now')").run();
+        /* Active with period ended >3 days ago → expired (stale rows) */
+        await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE status = 'active' AND current_period_end IS NOT NULL AND current_period_end < datetime('now', '-3 days')").run();
         /* past_due → expired after 3 days */
         await env.DB.prepare("UPDATE billing SET status = 'expired', updated_at = datetime('now') WHERE status = 'past_due' AND updated_at < datetime('now', '-3 days')").run();
         /* Cancelled past period end → expired */
