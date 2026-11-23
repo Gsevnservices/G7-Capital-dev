@@ -1817,7 +1817,7 @@ async function sendMorningLeadsEmail(env, firmCode, day, opts) {
     var cost = newCostAccum();
     var _costBucket = (opts && opts.adminCost) ? 'ADMIN' : firmCode;
     try {
-      var genResult = await runLeadsForFirm(env, firmCode, day, cost, { exemptBudget: true });
+      var genResult = await runLeadsForFirm(env, firmCode, day, cost, { scheduled: true });
       _leadGenStatus = genResult.status || 'unknown';
       await flushCost(env, day, _costBucket, cost);
       if (genResult.status === 'ok' || genResult.status === 'already_generated') {
@@ -3710,6 +3710,60 @@ var GROUP_TYPE_RULES = {
 
 /* Derive blockedTypes using Haiku AI — returns { allowedTypes, blockedTypes } with valid Google types only.
    Falls back to keyword rules on failure. */
+/* Derive the firm's own Google place types from business type string.
+   Returns an array of valid Google place types that match the firm's own business.
+   Used to block competitors from ever appearing as leads. */
+async function deriveOwnTypes(env, businessType, cost) {
+  if (!businessType) return [];
+  var validList = Array.from(VALID_PLACE_TYPES).filter(function(t) {
+    return t !== 'establishment' && t !== 'point_of_interest' && t !== 'geocode' &&
+           t !== 'neighborhood' && t !== 'political' && t !== 'premise' && t !== 'route' &&
+           t !== 'street_address' && t !== 'sublocality' && t !== 'locality';
+  }).sort();
+  var prompt = 'Business type: "' + businessType + '".\n\n' +
+    'From this list of valid Google Places types, pick ALL types that describe THIS business ' +
+    '(the business itself and its direct competitors). Include the most specific match and any close synonyms.\n' +
+    'For example: "Gym / Fitness Centre" → ["gym","fitness_center","sports_club"]\n' +
+    '"Restaurant / Café" → ["restaurant","cafe","coffee_shop","bakery"]\n\n' +
+    'VALID TYPES:\n' + validList.join(', ') + '\n\n' +
+    'Return ONLY valid JSON: {"ownTypes":["..."]}';
+  try {
+    var r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-5-5', max_tokens: 500, thinking: { type: 'disabled' },
+        system: 'You classify businesses into Google Places types. Return only valid JSON. Use only types from the provided list.',
+        messages: [{ role: 'user', content: prompt }]
+      })
+    }, 'own-types');
+    if (!r.ok) throw new Error('Haiku own-types: ' + r.status);
+    var data = await r.json();
+    if (cost) recordCost(cost, 'claude-haiku-5-5', data);
+    var text = (data.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('');
+    var jStart = text.indexOf('{'), jEnd = text.lastIndexOf('}');
+    if (jStart === -1 || jEnd === -1) throw new Error('No JSON');
+    var parsed = JSON.parse(text.slice(jStart, jEnd + 1));
+    var valid = (parsed.ownTypes || []).filter(function(t) { return VALID_PLACE_TYPES.has(t); });
+    /* Add synonyms */
+    var expanded = new Set(valid);
+    valid.forEach(function(t) {
+      var syns = TYPE_SYNONYMS[t];
+      if (syns) syns.forEach(function(s) { expanded.add(s); });
+    });
+    return Array.from(expanded);
+  } catch (e) {
+    console.log(JSON.stringify({ ownTypesFail: businessType, error: String(e.message || e).slice(0, 200) }));
+    return [];
+  }
+}
+
+/* Check if a group name suggests partners/suppliers of the same trade */
+function isPartnerGroup(groupName) {
+  var lower = (groupName || '').toLowerCase();
+  return /partner|supplier|vendor|refer|collab/i.test(lower);
+}
+
 async function deriveGroupTypeRulesAI(env, group, businessType, cost) {
   var validList = Array.from(VALID_PLACE_TYPES).filter(function(t) {
     /* Exclude overly generic Table B types */
@@ -3795,22 +3849,51 @@ function deriveGroupTypeRulesKeyword(group) {
   return { allowedTypes: Array.from(expanded), blockedTypes: Array.from(blocked), source: 'keyword' };
 }
 
-/* Apply type rules to all groups in a profile (sync fallback, keyword-only). */
+/* Apply type rules to all groups in a profile (sync fallback, keyword-only).
+   Also merges ownTypes into every group's blockedTypes (unless partner group). */
 function applyGroupTypeRules(profile) {
   if (!profile || !Array.isArray(profile.groups)) return profile;
+  var ownTypes = profile.ownTypes || [];
   profile.groups.forEach(function(g) {
     /* Skip if already has AI-derived rules */
-    if (g._typeRulesSource === 'haiku' && g.allowedTypes && g.blockedTypes) return;
+    if (g._typeRulesSource === 'haiku' && g.allowedTypes && g.blockedTypes) {
+      /* Still enforce ownTypes blocking */
+      if (ownTypes.length > 0 && !isPartnerGroup(g.name)) {
+        var bSet = new Set(g.blockedTypes);
+        ownTypes.forEach(function(t) { bSet.add(t); });
+        /* Remove any ownType that's also in allowedTypes */
+        var aSet = new Set(g.allowedTypes);
+        ownTypes.forEach(function(t) { aSet.delete(t); });
+        g.allowedTypes = Array.from(aSet);
+        g.blockedTypes = Array.from(bSet);
+      }
+      return;
+    }
     var rules = deriveGroupTypeRulesKeyword(g);
     g.allowedTypes = rules.allowedTypes;
     g.blockedTypes = rules.blockedTypes;
+    /* Merge ownTypes into blocked (unless partner group) */
+    if (ownTypes.length > 0 && !isPartnerGroup(g.name)) {
+      var bSet2 = new Set(g.blockedTypes);
+      ownTypes.forEach(function(t) { bSet2.add(t); });
+      var aSet2 = new Set(g.allowedTypes);
+      ownTypes.forEach(function(t) { aSet2.delete(t); });
+      g.allowedTypes = Array.from(aSet2);
+      g.blockedTypes = Array.from(bSet2);
+    }
   });
   return profile;
 }
 
-/* Apply type rules using Haiku AI for all groups (async, with keyword fallback). */
+/* Apply type rules using Haiku AI for all groups (async, with keyword fallback).
+   Also derives ownTypes if missing, and merges them into every group's blockedTypes. */
 async function applyGroupTypeRulesAI(env, profile, businessType, cost) {
   if (!profile || !Array.isArray(profile.groups)) return profile;
+  /* Derive ownTypes if not yet stored */
+  if (!profile.ownTypes || profile.ownTypes.length === 0) {
+    profile.ownTypes = await deriveOwnTypes(env, businessType, cost);
+  }
+  var ownTypes = profile.ownTypes || [];
   for (var i = 0; i < profile.groups.length; i++) {
     var g = profile.groups[i];
     var aiRules = await deriveGroupTypeRulesAI(env, g, businessType, cost);
@@ -3824,6 +3907,16 @@ async function applyGroupTypeRulesAI(env, profile, businessType, cost) {
       g.allowedTypes = kwRules.allowedTypes;
       g.blockedTypes = kwRules.blockedTypes;
       g._typeRulesSource = 'keyword';
+    }
+    /* Merge ownTypes into blocked (unless partner group) */
+    if (ownTypes.length > 0 && !isPartnerGroup(g.name)) {
+      var bSet = new Set(g.blockedTypes);
+      ownTypes.forEach(function(t) { bSet.add(t); });
+      /* Remove ownTypes from allowed — competitors can never be leads */
+      var aSet = new Set(g.allowedTypes);
+      ownTypes.forEach(function(t) { aSet.delete(t); });
+      g.allowedTypes = Array.from(aSet);
+      g.blockedTypes = Array.from(bSet);
     }
   }
   return profile;
@@ -4019,7 +4112,11 @@ async function generateLeadProfile(env, firmCode, analysisText, city, cost) {
   /* Derive allowed/blocked type rules per group (AI with keyword fallback) */
   var _bizType = '';
   var _typeMatch = context.match(/TYPE:\s*(.+)/);
-  if (_typeMatch) _bizType = _typeMatch[1].trim();
+  if (_typeMatch) { _bizType = _typeMatch[1].trim(); }
+  else {
+    var _bizLine = context.match(/BUSINESS:\s*[^|]+\|\s*([^|]+)/);
+    if (_bizLine) _bizType = _bizLine[1].trim();
+  }
   await applyGroupTypeRulesAI(env, profile, _bizType, cost);
   /* Preserve confirmedAt from existing profile if re-generating */
   var _existingProf = await getLeadProfile(env, firmCode);
@@ -4189,6 +4286,8 @@ async function filterPlacesCandidates(env, firmCode, candidates, profile, ownCat
 
   var excludeSet = new Set(profile.exclude || []);
   if (ownCategory) excludeSet.add(ownCategory.toLowerCase());
+  /* Block firm's own types (competitors) globally */
+  (profile.ownTypes || []).forEach(function(t) { excludeSet.add(t.toLowerCase()); });
 
   /* Track name frequency for chain detection */
   var nameCounts = {};
@@ -4864,7 +4963,7 @@ async function rebuildLeadProfile(env, firmCode, context, city, cost) {
 /* ── Main lead generation — pool-first, max 1-2 Text Search/day ── */
 async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   var dryRun = opts && opts.dryRun;
-  var exemptBudget = opts && opts.exemptBudget;
+  var scheduled = opts && opts.scheduled;
   var allDrops = []; /* collects drop reasons across all stages */
   var profileJson = await getLeadProfile(env, firmCode);
   if (profileJson) { correctProfileTypes(profileJson); applyGroupTypeRules(profileJson); }
@@ -4886,10 +4985,24 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     } catch (e) {}
   }
 
-  /* Budget check — skip in dry run AND when caller exempts (morning email / cron path) */
-  if (!dryRun && !exemptBudget) {
-    var bc = await budgetCheck(env, day, firmCode);
-    if (!bc.ok) return { status: 'budget_exceeded' };
+  /* Budget check:
+     - User-triggered: normal per-plan cap ($0.35 free, $0.50 paid)
+     - Scheduled (morning email / cron): hard ceiling $1.00, so Ask Scout
+       and other spending can never block the morning leads.
+     - Dry run: skip entirely */
+  if (!dryRun) {
+    if (scheduled) {
+      var LEAD_CEILING = 1.00;
+      var _lcSpent = parseFloat(await env.G7_KV.get('cost:' + day + ':' + firmCode) || '0');
+      if (_lcSpent >= LEAD_CEILING) {
+        try { await recordError(env, { source: 'worker', route: 'leads', firmCode: firmCode, kind: 'lead_ceiling_hit', message: 'Scheduled lead run hit $' + LEAD_CEILING.toFixed(2) + ' ceiling. Spent: $' + _lcSpent.toFixed(2) }); } catch(e) {}
+        try { await sendBudgetEmail(env, day, firmCode, _lcSpent, LEAD_CEILING); } catch(e) {}
+        return { status: 'lead_ceiling_hit', spent: _lcSpent, ceiling: LEAD_CEILING };
+      }
+    } else {
+      var bc = await budgetCheck(env, day, firmCode);
+      if (!bc.ok) return { status: 'budget_exceeded' };
+    }
   }
 
   var saved = await getMarketContext(env, firmCode);
@@ -4918,7 +5031,11 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   /* Get own business category for exclusion */
   var ownCategory = '';
   var typeMatch = context.match(/TYPE:\s*(.+)/);
-  if (typeMatch) ownCategory = typeMatch[1].trim().toLowerCase();
+  if (typeMatch) { ownCategory = typeMatch[1].trim().toLowerCase(); }
+  else {
+    var _bizFallback = context.match(/BUSINESS:\s*[^|]+\|\s*([^|]+)/);
+    if (_bizFallback) ownCategory = _bizFallback[1].trim().toLowerCase();
+  }
 
   var enabledGroups = profileJson.groups.filter(function(g) { return g.enabled !== false; });
   if (enabledGroups.length === 0) return { status: 'no_enabled_groups' };
@@ -4958,9 +5075,13 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
   }
   pool = pool.filter(function(p) { return !existingPlaceIds.has(p.placeId); });
 
-  /* Re-filter pool entries against blockedTypes (pool may predate updated rules) */
+  /* Re-filter pool entries against blockedTypes + ownTypes (pool may predate updated rules) */
+  var _ownTypeSet = new Set((profileJson.ownTypes || []).map(function(t){ return t.toLowerCase(); }));
   var _poolDrops = [];
   pool = pool.filter(function(p) {
+    var pt = (p.primaryType || '').toLowerCase();
+    /* Block competitors (ownTypes) globally */
+    if (pt && _ownTypeSet.has(pt)) { _poolDrops.push({ name: p.name, reason: 'competitor', primaryType: pt, group: p._groupName }); return false; }
     if (!p._groupName) return true;
     var grp = null;
     for (var _gi = 0; _gi < enabledGroups.length; _gi++) {
@@ -4968,7 +5089,6 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     }
     if (!grp || !grp.blockedTypes || grp.blockedTypes.length === 0) return true;
     var bSet = new Set(grp.blockedTypes.map(function(t){ return t.toLowerCase(); }));
-    var pt = (p.primaryType || '').toLowerCase();
     if (pt && bSet.has(pt)) { _poolDrops.push({ name: p.name, reason: 'type_mismatch', primaryType: pt, group: p._groupName }); return false; }
     var pts = (p.types || []);
     for (var _ti = 0; _ti < pts.length; _ti++) {
@@ -5197,9 +5317,6 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
     groupCounts = bpN.groupCounts;
   }
 
-  /* Record all Places text search cost */
-  recordPlacesCost(cost, textSearchCalls, 0);
-
   /* ── Zero-lead safety: if 0 picks with unused searches, try more groups ── */
   if (picked.length === 0 && !dryRun && textSearchCalls < MAX_SEARCHES) {
     shortfallReasons.push('zero_pick_retry');
@@ -5222,8 +5339,10 @@ async function runLeadsForFirm(env, firmCode, day, cost, opts) {
       picked = _retryBp.picked;
       groupCounts = _retryBp.groupCounts;
     }
-    recordPlacesCost(cost, textSearchCalls - (cost._prevTextCalls || 0), 0);
   }
+
+  /* Record ALL Places text search cost exactly once (after main + safety searches) */
+  recordPlacesCost(cost, textSearchCalls, 0);
 
   if (pool.length === 0 && picked.length === 0) {
     shortfallReasons.push('no_candidates_after_pool_and_search');
@@ -7478,13 +7597,23 @@ export default {
         var _bfBizType = '';
         if (_bfCtx && _bfCtx.context) {
           var _bfMatch = _bfCtx.context.match(/TYPE:\s*(.+)/);
-          if (_bfMatch) _bfBizType = _bfMatch[1].trim();
+          if (_bfMatch) { _bfBizType = _bfMatch[1].trim(); }
+          else {
+            /* Fallback: extract type from BUSINESS: name | type | location */
+            var _bfBizMatch = _bfCtx.context.match(/BUSINESS:\s*[^|]+\|\s*([^|]+)/);
+            if (_bfBizMatch) _bfBizType = _bfBizMatch[1].trim();
+          }
         }
+        /* Clear stale ownTypes so deriveOwnTypes runs fresh */
+        _prof.ownTypes = [];
         await applyGroupTypeRulesAI(env, _prof, _bfBizType, _bfCost);
         await saveLeadProfile(env, _fc, _prof);
-        results[_fc] = (_prof.groups || []).map(function(g) {
-          return { name: g.name, source: g._typeRulesSource || 'unknown', allowedTypes: g.allowedTypes || [], blockedTypes: g.blockedTypes || [] };
-        });
+        results[_fc] = {
+          ownTypes: _prof.ownTypes || [],
+          groups: (_prof.groups || []).map(function(g) {
+            return { name: g.name, source: g._typeRulesSource || 'unknown', allowedTypes: g.allowedTypes || [], blockedTypes: g.blockedTypes || [] };
+          })
+        };
       }
       await flushCost(env, new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10), 'ADMIN', _bfCost);
       return jsonResponse({ ok: true, results: results });
@@ -11062,7 +11191,7 @@ export default {
           var _dlt0 = Date.now();
           var _dlCost = newCostAccum();
           try {
-            var _dlResult = await runLeadsForFirm(env, _dFirm, day, _dlCost, { exemptBudget: true });
+            var _dlResult = await runLeadsForFirm(env, _dFirm, day, _dlCost, { scheduled: true });
             await flushCost(env, day, _dFirm, _dlCost);
             _devLeadReport.push({ firm: _dFirm, status: _dlResult.status, found: _dlResult.found || 0, ms: Date.now() - _dlt0 });
           } catch (e) {
