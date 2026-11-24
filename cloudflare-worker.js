@@ -827,6 +827,7 @@ async function createFirmFromPending(env, pendingId, paymentInfo, ctx) {
     await kvPut(env, 'auth:users:' + firmCode, JSON.stringify({
       firmName: pending.businessName,
       passwordHash: pending.passwordHash,
+      passwordSetByUser: true,
       createdAt: Date.now(),
       product: 'scout',
       tier: 'scout',
@@ -7147,7 +7148,9 @@ export default {
 
       /* Accept email or firm code — if input contains @, look up the email index */
       var normalizedCode = firmCode.trim();
+      var _loginViaEmail = false;
       if (normalizedCode.indexOf('@') !== -1) {
+        _loginViaEmail = true;
         var _emailLower = normalizedCode.toLowerCase();
         var _emailFirm = await env.G7_KV.get('auth:email:' + _emailLower);
         if (!_emailFirm) return jsonResponse({ error: 'Invalid credentials' }, 401);
@@ -7161,6 +7164,23 @@ export default {
       if (!user) {
         // Return same error message as wrong password — prevents user enumeration
         return jsonResponse({ error: 'Invalid credentials' }, 401);
+      }
+
+      /* If logged in via email, verify the firm's recoveryEmail matches.
+         Prevents stale auth:email: index from silently routing to wrong firm. */
+      if (_loginViaEmail && user.recoveryEmail) {
+        var _storedEmail = user.recoveryEmail.toLowerCase();
+        if (_storedEmail !== _emailLower) {
+          /* Index is stale — the firm changed their email but index wasn't cleaned up */
+          try {
+            await recordError(env, {
+              source: 'worker', route: 'login', firmCode: normalizedCode,
+              kind: 'stale_email_index',
+              message: 'Email index points ' + _emailLower + ' to ' + normalizedCode + ' but firm email is ' + _storedEmail
+            });
+          } catch (e) {}
+          return jsonResponse({ error: 'email_ambiguous', message: 'Log in with your firm code instead.' }, 409);
+        }
       }
 
       // Verify the submitted password against stored hash (PBKDF2 or legacy SHA-256)
@@ -8019,6 +8039,50 @@ export default {
       };
       var _tcResult = await createFirmFromPending(env, _tcPendingId, _tcPayInfo, ctx);
       return jsonResponse(_tcResult);
+    }
+
+    // POST /admin/test-welcome-email — dev-only: send free + paid welcome emails, return Resend IDs
+    if (request.method === 'POST' && path === '/admin/test-welcome-email') {
+      if (env.ENVIRONMENT !== 'dev') return jsonResponse({ error: 'Not found' }, 404);
+      var _twBody; try { _twBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_twBody.adminPassword || _twBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'forbidden' }, 403);
+      var _twTo = String(_twBody.to || '').trim().toLowerCase();
+      if (!_twTo) return jsonResponse({ error: 'to (email) required' }, 400);
+      var _twSiteUrl = (env.SITE_URL || '').replace(/\/$/, '');
+      /* Free welcome */
+      var _twFreeHtml = emailShell({
+        siteUrl: _twSiteUrl, headerLabel: 'Scout',
+        greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi Test, your free analysis is ready.</div>',
+        textGreeting: 'Hi Test, your free analysis is ready.\n\n',
+        htmlParts: [
+          emailRow('Your account <strong>TESTFREE</strong> is set up.'),
+          emailRow('Log in and answer a few questions about your business — Scout will prepare a personalised analysis.'),
+          emailGreyRow('You can log in with your email or firm code: <strong>TESTFREE</strong>')
+        ],
+        textParts: ['Your account TESTFREE is set up.\nLog in and answer a few questions.\nFirm code: TESTFREE'],
+        mainButton: { url: _twSiteUrl + '/login.html?product=scout', label: 'Start My Free Analysis' },
+        footerLine: 'Your free Scout analysis awaits.'
+      });
+      var _twFreeRes = await sendEmail(env, _twTo, 'Your free analysis is ready to start', _twFreeHtml.text, _twFreeHtml.html, {}, { fromName: 'Scout by G7' });
+      /* Paid welcome */
+      var _twPaidHtml = emailShell({
+        siteUrl: _twSiteUrl, headerLabel: 'Scout',
+        greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi Test, welcome to Scout.</div>',
+        textGreeting: 'Hi Test, welcome to Scout.\n\n',
+        htmlParts: [
+          emailRow('Your account <strong>TESTPAID</strong> is ready.'),
+          emailRow('Your plan is active — leads, Ask Scout, emails, everything is unlocked.'),
+          emailGreyRow('You can log in with your email or firm code: <strong>TESTPAID</strong>')
+        ],
+        textParts: ['Your account TESTPAID is ready.\nYour plan is active.\nFirm code: TESTPAID'],
+        mainButton: { url: _twSiteUrl + '/login.html?product=scout', label: 'Log In & Set Up' },
+        footerLine: 'Your Scout account is live.'
+      });
+      var _twPaidRes = await sendEmail(env, _twTo, 'Welcome to Scout — your account is ready', _twPaidHtml.text, _twPaidHtml.html, {}, { fromName: 'Scout by G7' });
+      return jsonResponse({
+        free: { ok: _twFreeRes.ok, resendId: _twFreeRes.id || null },
+        paid: { ok: _twPaidRes.ok, resendId: _twPaidRes.id || null }
+      });
     }
 
     // POST /admin/backfill-email-index — { adminPassword }
