@@ -194,11 +194,19 @@ document.addEventListener('mousemove', function(e) {
   var params = new URLSearchParams(window.location.search);
   var planParam = (params.get('plan') || '').toLowerCase();
   if (planParam === 'yearly') _plan = 'yearly';
+  else if (planParam === 'free') _plan = 'free';
 
-  /* Update plan badge */
+  /* Update plan badge and button text */
   var badge = document.getElementById('planBadge');
+  var btn = document.getElementById('submitBtn');
   if (_plan === 'yearly') {
     badge.textContent = 'Yearly — ₹28,800/year (save 20%)';
+  } else if (_plan === 'free') {
+    badge.textContent = 'Free business analysis — no card needed';
+    badge.style.background = 'rgba(201,168,76,0.12)';
+    badge.style.color = '#C9A84C';
+    badge.style.borderColor = 'rgba(201,168,76,0.3)';
+    btn.textContent = 'Get my free analysis';
   } else {
     badge.textContent = 'Monthly — ₹3,000/month';
   }
@@ -206,7 +214,7 @@ document.addEventListener('mousemove', function(e) {
   /* If already logged in, redirect to pricing (they can pay from there) */
   var token = localStorage.getItem('g7_session_token');
   if (token) {
-    window.location.href = 'pricing.html';
+    window.location.href = _plan === 'free' ? 'onboard.html' : 'pricing.html';
     return;
   }
 })();
@@ -256,11 +264,50 @@ async function handleSignup(e) {
 
   /* Disable button */
   var btn = document.getElementById('submitBtn');
+  var _btnLabel = _plan === 'free' ? 'Get my free analysis' : 'Create account & pay';
   btn.disabled = true;
   btn.textContent = 'Processing...';
 
+  /* Free plan — call /auth/signup-free directly, no Razorpay */
+  if (_plan === 'free') {
+    try {
+      var rf = await fetch(SCOUT_WORKER + '/auth/signup-free', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          businessName: biz, name: name, email: email,
+          phone: phone, password: pwd, website: honey
+        })
+      });
+      var df = await rf.json();
+      if (df.error) {
+        if (df.error === 'email_taken') {
+          showErr('errEmail', 'You already have an account. Log in instead.');
+        } else {
+          showStatus(df.error, 'error');
+        }
+        btn.disabled = false; btn.textContent = _btnLabel;
+        return;
+      }
+      if (df.ok && df.token) {
+        localStorage.setItem('g7_session_token', df.token);
+        localStorage.setItem('g7_firm_code', df.firmCode);
+        localStorage.setItem('g7_firm_name', df.firmName);
+        document.getElementById('successEmail').textContent = df.email || '';
+        document.getElementById('successOverlay').classList.add('show');
+      } else {
+        showStatus('Something went wrong. Please try again.', 'error');
+        btn.disabled = false; btn.textContent = _btnLabel;
+      }
+    } catch (e) {
+      showStatus('Something went wrong. Please try again.', 'error');
+      btn.disabled = false; btn.textContent = _btnLabel;
+    }
+    return;
+  }
+
+  /* Paid plan — POST /billing/start then Razorpay checkout */
   try {
-    /* POST /billing/start */
     var r = await fetch(SCOUT_WORKER + '/billing/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -283,7 +330,7 @@ async function handleSignup(e) {
         showStatus(d.error, 'error');
       }
       btn.disabled = false;
-      btn.textContent = 'Create account & pay';
+      btn.textContent = _btnLabel;
       return;
     }
 
@@ -299,7 +346,7 @@ async function handleSignup(e) {
       modal: {
         ondismiss: function() {
           btn.disabled = false;
-          btn.textContent = 'Create account & pay';
+          btn.textContent = _btnLabel;
         }
       },
       handler: function(response) {
@@ -320,14 +367,14 @@ async function handleSignup(e) {
     rzp.on('payment.failed', function(resp) {
       showStatus('Payment failed. Please try again.', 'error');
       btn.disabled = false;
-      btn.textContent = 'Create account & pay';
+      btn.textContent = _btnLabel;
     });
     rzp.open();
 
   } catch (e) {
     showStatus('Something went wrong. Please try again.', 'error');
     btn.disabled = false;
-    btn.textContent = 'Create account & pay';
+    btn.textContent = _btnLabel;
   }
 }
 

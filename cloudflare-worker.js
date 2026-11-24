@@ -840,12 +840,15 @@ async function createFirmFromPending(env, pendingId, paymentInfo, ctx) {
     await kvPut(env, 'firms:' + firmCode + ':deals', JSON.stringify([]));
     await kvPut(env, 'firms:' + firmCode + ':calibrations', JSON.stringify([]));
 
-    /* Write billing row as active */
+    /* Write billing row — 'none' for free, 'active' for paid */
+    var _billingStatus = paymentInfo.status_override || 'active';
     var billingFields = {
-      status: 'active',
-      plan: paymentInfo.plan || 'monthly',
-      first_paid_at: new Date().toISOString()
+      status: _billingStatus,
+      plan: paymentInfo.plan || 'monthly'
     };
+    if (_billingStatus === 'active') {
+      billingFields.first_paid_at = new Date().toISOString();
+    }
     if (paymentInfo.current_period_end) billingFields.current_period_end = paymentInfo.current_period_end;
     if (paymentInfo.razorpay_payment_id) billingFields.razorpay_payment_id = paymentInfo.razorpay_payment_id;
     if (paymentInfo.razorpay_subscription_id) billingFields.razorpay_subscription_id = paymentInfo.razorpay_subscription_id;
@@ -891,27 +894,49 @@ async function createFirmFromPending(env, pendingId, paymentInfo, ctx) {
       await kvPut(env, welcomeDedup, '1', { expirationTtl: 30 * 86400 });
       if (pending.email) {
         var _wSiteUrl = (env.SITE_URL || '').replace(/\/$/, '');
-        var _wSubj = 'Welcome to Scout — your account is ready';
         var _wFirstName = escEmail((pending.name || '').split(' ')[0]);
         var _wFirmCode = escEmail(firmCode);
-        var _wHtml = emailShell({
-          siteUrl: _wSiteUrl,
-          headerLabel: 'Scout',
-          greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + _wFirstName + ', welcome to Scout.</div>',
-          textGreeting: 'Hi ' + (pending.name || '').split(' ')[0] + ', welcome to Scout.\n\n',
-          htmlParts: [
-            emailRow('Your account <strong>' + _wFirmCode + '</strong> is ready.'),
-            emailRow('Your plan is active — leads, Ask Scout, emails, everything is unlocked.'),
-            emailGreyRow('You can log in with your email or firm code: <strong>' + _wFirmCode + '</strong>')
-          ],
-          textParts: [
-            'Your account ' + firmCode + ' is ready.\n' +
-            'Your plan is active — leads, Ask Scout, emails, everything is unlocked.\n' +
-            'You can log in with your email or firm code: ' + firmCode
-          ],
-          mainButton: { url: _wSiteUrl + '/login.html?product=scout', label: 'Log In & Set Up' },
-          footerLine: 'Your Scout account is live.'
-        });
+        var _wIsFree = (_billingStatus === 'none');
+        var _wSubj = _wIsFree
+          ? 'Your free analysis is ready to start'
+          : 'Welcome to Scout — your account is ready';
+        var _wHtml = _wIsFree
+          ? emailShell({
+              siteUrl: _wSiteUrl,
+              headerLabel: 'Scout',
+              greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + _wFirstName + ', your free analysis is ready.</div>',
+              textGreeting: 'Hi ' + (pending.name || '').split(' ')[0] + ', your free analysis is ready.\n\n',
+              htmlParts: [
+                emailRow('Your account <strong>' + _wFirmCode + '</strong> is set up.'),
+                emailRow('Log in and answer a few questions about your business — Scout will prepare a personalised analysis.'),
+                emailGreyRow('You can log in with your email or firm code: <strong>' + _wFirmCode + '</strong>')
+              ],
+              textParts: [
+                'Your account ' + firmCode + ' is set up.\n' +
+                'Log in and answer a few questions about your business — Scout will prepare a personalised analysis.\n' +
+                'You can log in with your email or firm code: ' + firmCode
+              ],
+              mainButton: { url: _wSiteUrl + '/login.html?product=scout', label: 'Start My Free Analysis' },
+              footerLine: 'Your free Scout analysis awaits.'
+            })
+          : emailShell({
+              siteUrl: _wSiteUrl,
+              headerLabel: 'Scout',
+              greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + _wFirstName + ', welcome to Scout.</div>',
+              textGreeting: 'Hi ' + (pending.name || '').split(' ')[0] + ', welcome to Scout.\n\n',
+              htmlParts: [
+                emailRow('Your account <strong>' + _wFirmCode + '</strong> is ready.'),
+                emailRow('Your plan is active — leads, Ask Scout, emails, everything is unlocked.'),
+                emailGreyRow('You can log in with your email or firm code: <strong>' + _wFirmCode + '</strong>')
+              ],
+              textParts: [
+                'Your account ' + firmCode + ' is ready.\n' +
+                'Your plan is active — leads, Ask Scout, emails, everything is unlocked.\n' +
+                'You can log in with your email or firm code: ' + firmCode
+              ],
+              mainButton: { url: _wSiteUrl + '/login.html?product=scout', label: 'Log In & Set Up' },
+              footerLine: 'Your Scout account is live.'
+            });
         ctx.waitUntil(sendEmail(env, pending.email, _wSubj, _wHtml.text, _wHtml.html, {}, { fromName: 'Scout by G7' }));
       }
     }
@@ -7996,6 +8021,56 @@ export default {
       return jsonResponse(_tcResult);
     }
 
+    // POST /admin/backfill-email-index — { adminPassword }
+    // Scans all auth:users:* records and writes auth:email:{email} → firmCode
+    // for any user with a recoveryEmail. Never overwrites existing entries.
+    if (request.method === 'POST' && path === '/admin/backfill-email-index') {
+      var _beiBody; try { _beiBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!_beiBody.adminPassword || _beiBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'forbidden' }, 403);
+      var _beiCursor = undefined;
+      var _beiCreated = 0;
+      var _beiSkipped = 0;
+      var _beiDuplicates = [];
+      var _beiTotal = 0;
+      /* Paginate through all auth:users: keys */
+      do {
+        var _beiList = await env.G7_KV.list({ prefix: 'auth:users:', limit: 100, cursor: _beiCursor });
+        var _beiKeys = (_beiList && _beiList.keys) || [];
+        for (var _beiI = 0; _beiI < _beiKeys.length; _beiI++) {
+          var _beiKey = _beiKeys[_beiI].name;
+          var _beiFirm = _beiKey.replace('auth:users:', '');
+          var _beiUser = await env.G7_KV.get(_beiKey, 'json');
+          if (!_beiUser || !_beiUser.recoveryEmail) continue;
+          _beiTotal++;
+          var _beiEmail = _beiUser.recoveryEmail.toLowerCase();
+          var _beiExisting = await env.G7_KV.get('auth:email:' + _beiEmail);
+          if (_beiExisting) {
+            if (_beiExisting !== _beiFirm) {
+              _beiDuplicates.push({ email: _beiEmail, existingFirm: _beiExisting, skippedFirm: _beiFirm });
+              /* Log to errors table */
+              try {
+                await recordError(env, {
+                  source: 'worker', route: 'backfill-email-index', firmCode: _beiFirm,
+                  kind: 'duplicate_email',
+                  message: 'Email ' + _beiEmail + ' belongs to ' + _beiExisting + ', skipped for ' + _beiFirm
+                });
+              } catch (e) {}
+            }
+            _beiSkipped++;
+          } else {
+            await kvPut(env, 'auth:email:' + _beiEmail, _beiFirm);
+            _beiCreated++;
+          }
+        }
+        _beiCursor = _beiList.list_complete ? undefined : _beiList.cursor;
+      } while (_beiCursor);
+      return jsonResponse({
+        ok: true, usersWithEmail: _beiTotal,
+        created: _beiCreated, skipped: _beiSkipped,
+        duplicates: _beiDuplicates
+      });
+    }
+
     // ─────────────────────────────────────────────────────────────
     // POST /admin/leads/regen-messages — { adminPassword, firmCode, language }
     // Regenerates first message, reminders and visit pitch for leads
@@ -11613,6 +11688,78 @@ export default {
         firmCode: _vsResult.firmCode,
         firmName: _vsResult.firmName,
         email: _vsResult.email
+      });
+    }
+
+    // ── POST /auth/signup-free — free sign-up (no payment, billing=none) ──
+    if (request.method === 'POST' && path === '/auth/signup-free') {
+      var _sfBody; try { _sfBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+
+      /* Validate fields — same checks as /billing/start */
+      var _sfBiz = String(_sfBody.businessName || '').trim();
+      var _sfName = String(_sfBody.name || '').trim();
+      var _sfEmail = String(_sfBody.email || '').trim().toLowerCase();
+      var _sfPhone = String(_sfBody.phone || '').replace(/\s+/g, '');
+      var _sfPwd = String(_sfBody.password || '');
+      var _sfHoney = String(_sfBody.website || '');  /* honeypot field */
+
+      if (_sfHoney) return jsonResponse({ ok: true, firmCode: 'ok' }); /* bot trap — fake success */
+      if (!_sfBiz || _sfBiz.length < 2) return jsonResponse({ error: 'Business name is required' }, 400);
+      if (_sfBiz.length > 200) return jsonResponse({ error: 'Business name too long (max 200 characters)' }, 400);
+      if (!_sfName || _sfName.length < 2) return jsonResponse({ error: 'Your name is required' }, 400);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(_sfEmail)) return jsonResponse({ error: 'Enter a valid email address' }, 400);
+      if (!/^[6-9]\d{9}$/.test(_sfPhone)) return jsonResponse({ error: 'Enter a valid 10-digit Indian mobile number' }, 400);
+      if (_sfPwd.length < 8) return jsonResponse({ error: 'Password must be at least 8 characters' }, 400);
+
+      /* Check email uniqueness */
+      var _sfExisting = await env.G7_KV.get('auth:email:' + _sfEmail);
+      if (_sfExisting) return jsonResponse({ error: 'email_taken', message: 'You already have an account. Log in instead.' }, 409);
+
+      /* Rate limit: 5 per hour per IP */
+      var _sfIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      var _sfRlKey = 'rl:signup:' + _sfIp;
+      var _sfRlCount = parseInt((await env.G7_KV.get(_sfRlKey)) || '0', 10);
+      if (_sfRlCount >= 5) return jsonResponse({ error: 'Too many sign-ups from this address. Try again later.' }, 429);
+      await kvPut(env, _sfRlKey, String(_sfRlCount + 1), { expirationTtl: 3600 });
+
+      /* Hash password, store pending record, then create firm directly */
+      var _sfHash = await hashPassword(_sfPwd);
+      var _sfPendingId = crypto.randomUUID();
+      await kvPut(env, 'signup:pending:' + _sfPendingId, JSON.stringify({
+        businessName: _sfBiz,
+        name: _sfName,
+        email: _sfEmail,
+        phone: _sfPhone,
+        passwordHash: _sfHash,
+        plan: 'free',
+        createdAt: Date.now()
+      }), { expirationTtl: 86400 });
+
+      /* Create the firm with billing status=none (free account) */
+      var _sfPayInfo = {
+        plan: 'free',
+        status_override: 'none'  /* createFirmFromPending uses this to set billing status */
+      };
+      var _sfResult = await createFirmFromPending(env, _sfPendingId, _sfPayInfo, ctx);
+      if (_sfResult.error) return jsonResponse({ error: _sfResult.error }, _sfResult.status || 400);
+
+      /* Create a login session */
+      var _sfToken = crypto.randomUUID() + '-' + crypto.randomUUID();
+      var _sfNow = Date.now();
+      await kvPut(env, 'auth:sessions:' + _sfToken, JSON.stringify({
+        firmCode: _sfResult.firmCode,
+        firmName: _sfResult.firmName,
+        createdAt: _sfNow,
+        refreshedAt: _sfNow,
+        expiresAt: _sfNow + SESSION_IDLE_MS
+      }), { expirationTtl: SESSION_KV_TTL_S });
+
+      return jsonResponse({
+        ok: true,
+        token: _sfToken,
+        firmCode: _sfResult.firmCode,
+        firmName: _sfResult.firmName,
+        email: _sfResult.email
       });
     }
 
