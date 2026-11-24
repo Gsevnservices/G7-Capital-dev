@@ -305,14 +305,12 @@ body::before{
     <form id="loginForm" onsubmit="handleLogin(event)">
 
       <div class="field">
-        <label for="firmCode">Firm Code</label>
+        <label for="firmCode">Email or Firm Code</label>
         <input
           type="text"
           id="firmCode"
-          class="uppercase"
-          placeholder="e.g. ANDREESSEN"
+          placeholder="e.g. you@example.com or ANDREESSEN"
           autocomplete="username"
-          autocapitalize="characters"
           required
         >
       </div>
@@ -383,7 +381,12 @@ body::before{
       if (valid) {
         // Check if user came via Scout URL
         const urlParams = new URLSearchParams(window.location.search);
+        const nextPage  = urlParams.get('next');
         const product   = urlParams.get('product');
+        if (nextPage && /^(scout|workspace)\/[a-zA-Z0-9_-]+\.html/.test(nextPage)) {
+          window.location.href = nextPage;
+          return;
+        }
         if (product === 'scout') {
           window.location.href = 'scout/index.html';
           return;
@@ -410,7 +413,8 @@ body::before{
 async function handleLogin(event) {
   event.preventDefault();
 
-  const firmCode = document.getElementById('firmCode').value.trim().toUpperCase();
+  var _rawInput = document.getElementById('firmCode').value.trim();
+  const firmCode = _rawInput.indexOf('@') !== -1 ? _rawInput.toLowerCase() : _rawInput.toUpperCase();
   const password = document.getElementById('password').value;
   const btn      = document.getElementById('signinBtn');
   const errorEl  = document.getElementById('loginError');
@@ -439,19 +443,27 @@ async function handleLogin(event) {
 
     /* Work out where this user is going, then detour through the password
        page first if the account still has an administrator-set password. */
-    var _p = new URLSearchParams(window.location.search).get('product');
-    var _dest = (_p === 'scout')
-      ? 'scout/index.html'
-      : (localStorage.getItem('g7_firm_config') ? 'workspace/index.html' : 'workspace/onboard.html');
+    var _p = new URLSearchParams(window.location.search);
+    var _nextP = _p.get('next');
+    var _dest = (_nextP && /^(scout|workspace)\/[a-zA-Z0-9_-]+\.html/.test(_nextP))
+      ? _nextP
+      : (_p.get('product') === 'scout')
+        ? 'scout/index.html'
+        : (localStorage.getItem('g7_firm_config') ? 'workspace/index.html' : 'workspace/onboard.html');
     if (loginData && loginData.mustChangePassword) {
       localStorage.setItem('g7_after_change', _dest);
       window.location.href = 'change-password.html';
       return;
     }
 
-    // Check if user came via Scout URL
+    // Check for explicit next redirect
     const urlParams = new URLSearchParams(window.location.search);
+    const nextPage  = urlParams.get('next');
     const product   = urlParams.get('product');
+    if (nextPage && /^(scout|workspace)\/[a-zA-Z0-9_-]+\.html/.test(nextPage)) {
+      window.location.href = nextPage;
+      return;
+    }
     if (product === 'scout') {
       window.location.href = 'scout/index.html';
       return;
@@ -486,9 +498,12 @@ async function handleLogin(event) {
 // UPPERCASE INPUT — keep firm code field uppercase as user types
 // ─────────────────────────────────────────────────────────────
 document.getElementById('firmCode').addEventListener('input', function() {
-  const pos = this.selectionStart;
-  this.value = this.value.toUpperCase();
-  this.setSelectionRange(pos, pos);
+  /* Only uppercase when it looks like a firm code (no @ sign) */
+  if (this.value.indexOf('@') === -1) {
+    const pos = this.selectionStart;
+    this.value = this.value.toUpperCase();
+    this.setSelectionRange(pos, pos);
+  }
 });
 
 

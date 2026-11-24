@@ -717,6 +717,218 @@ async function logBillingEvent(env, eventId, type, firmCode, payload) {
   } catch (e) {}
 }
 
+/* ── createFirmFromPending ──
+   Shared idempotent account-creation function called by both
+   /billing/verify-signup (browser callback) and the webhook (fallback).
+   Uses D1 signups table as the concurrency guard:
+     1. INSERT OR IGNORE — only the caller whose insert writes a row proceeds.
+        We check meta.changes to know if we won.
+     2. The winner creates the firm, then sets status=done + firm_code.
+     3. Any other caller polls briefly until done, then returns the firm.
+     4. If stuck at creating > 2 min, the next caller takes over.
+     5. On failure, marks row failed so a retry can claim it.
+   Returns { firmCode, firmName, email } on success, or { error, status }. */
+async function createFirmFromPending(env, pendingId, paymentInfo, ctx) {
+  if (!pendingId) return { error: 'pending_id required', status: 400 };
+  if (!env.DB) return { error: 'Database not available', status: 500 };
+
+  /* Step 1: Try to claim this pending_id in D1 — check meta.changes */
+  var _iAmCreator = false;
+  try {
+    var _insResult = await env.DB.prepare(
+      "INSERT OR IGNORE INTO signups (pending_id, status, created_at, updated_at) VALUES (?, 'creating', datetime('now'), datetime('now'))"
+    ).bind(pendingId).run();
+    /* D1 returns meta.changes = 1 if our INSERT actually wrote a row */
+    _iAmCreator = !!(_insResult && _insResult.meta && _insResult.meta.changes > 0);
+  } catch (e) { /* table issue — fall through to select */ }
+
+  if (!_iAmCreator) {
+    /* Row already exists — someone else claimed it. Poll for completion. */
+    for (var _poll = 0; _poll < 6; _poll++) {
+      var _check = await env.DB.prepare("SELECT status, firm_code, created_at FROM signups WHERE pending_id = ?").bind(pendingId).first();
+      if (!_check) { _iAmCreator = true; break; } /* row vanished? take over */
+      if (_check.status === 'done' && _check.firm_code) {
+        /* Already completed — return the result */
+        var _pUser = await env.G7_KV.get('auth:users:' + _check.firm_code, 'json');
+        return {
+          firmCode: _check.firm_code,
+          firmName: _pUser ? _pUser.firmName : '',
+          email: _pUser ? (_pUser.recoveryEmail || '') : ''
+        };
+      }
+      if (_check.status === 'failed') {
+        /* Previous attempt failed — try to take over with UPDATE WHERE status='failed' */
+        var _retake = await env.DB.prepare(
+          "UPDATE signups SET status = 'creating', updated_at = datetime('now') WHERE pending_id = ? AND status = 'failed'"
+        ).bind(pendingId).run();
+        if (_retake && _retake.meta && _retake.meta.changes > 0) { _iAmCreator = true; break; }
+      }
+      if (_check.status === 'creating') {
+        /* Check age — if stuck > 2 min, take over */
+        var _age = Date.now() - new Date(_check.created_at + 'Z').getTime();
+        if (_age > 120000) {
+          var _takeover = await env.DB.prepare(
+            "UPDATE signups SET updated_at = datetime('now') WHERE pending_id = ? AND status = 'creating' AND updated_at = ?"
+          ).bind(pendingId, _check.updated_at || _check.created_at).run();
+          if (_takeover && _takeover.meta && _takeover.meta.changes > 0) { _iAmCreator = true; break; }
+        }
+      }
+      /* Wait 1s before next poll */
+      await new Promise(function(r) { setTimeout(r, 1000); });
+    }
+    if (!_iAmCreator) {
+      /* Final check after all retries */
+      var _final = await env.DB.prepare("SELECT status, firm_code FROM signups WHERE pending_id = ?").bind(pendingId).first();
+      if (_final && _final.status === 'done' && _final.firm_code) {
+        var _fUser = await env.G7_KV.get('auth:users:' + _final.firm_code, 'json');
+        return {
+          firmCode: _final.firm_code,
+          firmName: _fUser ? _fUser.firmName : '',
+          email: _fUser ? (_fUser.recoveryEmail || '') : ''
+        };
+      }
+      return { error: 'Account creation in progress. Please try again in a moment.', status: 409 };
+    }
+  }
+
+  /* ── We are the creator. Load pending record from KV. ── */
+  var pending = await env.G7_KV.get('signup:pending:' + pendingId, 'json');
+  if (!pending) {
+    await env.DB.prepare("UPDATE signups SET status = 'failed', updated_at = datetime('now') WHERE pending_id = ?").bind(pendingId).run();
+    return { error: 'Signup expired or not found. Please sign up again.', status: 410 };
+  }
+
+  try {
+    /* Check if a previous partial attempt already assigned a firm code.
+       This prevents duplicate firms on retry after partial failure. */
+    var _prevRow = await env.DB.prepare("SELECT firm_code FROM signups WHERE pending_id = ?").bind(pendingId).first();
+    var firmCode = (_prevRow && _prevRow.firm_code) || '';
+
+    if (!firmCode) {
+      /* Generate unique firm code: first 3 consonants of business name + 3 digits */
+      var consonants = pending.businessName.toUpperCase().replace(/[^BCDFGHJKLMNPQRSTVWXYZ]/g, '');
+      var prefix = (consonants + 'XXX').slice(0, 3);
+      for (var attempt = 0; attempt < 5; attempt++) {
+        var suffix = String(Math.floor(Math.random() * 900) + 100);
+        var candidate = prefix + suffix;
+        var existing = await env.G7_KV.get('auth:users:' + candidate);
+        if (!existing) { firmCode = candidate; break; }
+      }
+      if (!firmCode) {
+        firmCode = 'G7' + crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
+      }
+      /* Store firm_code immediately so retries reuse the same code */
+      await env.DB.prepare(
+        "UPDATE signups SET firm_code = ?, updated_at = datetime('now') WHERE pending_id = ?"
+      ).bind(firmCode, pendingId).run();
+    }
+
+    /* Create auth:users:{FIRM} */
+    await kvPut(env, 'auth:users:' + firmCode, JSON.stringify({
+      firmName: pending.businessName,
+      passwordHash: pending.passwordHash,
+      createdAt: Date.now(),
+      product: 'scout',
+      tier: 'scout',
+      recoveryEmail: pending.email,
+      phone: pending.phone,
+      contactName: pending.name,
+      messageLanguage: 'Hinglish'
+    }));
+
+    /* Initialise empty firm data stores */
+    await kvPut(env, 'firms:' + firmCode + ':deals', JSON.stringify([]));
+    await kvPut(env, 'firms:' + firmCode + ':calibrations', JSON.stringify([]));
+
+    /* Write billing row as active */
+    var billingFields = {
+      status: 'active',
+      plan: paymentInfo.plan || 'monthly',
+      first_paid_at: new Date().toISOString()
+    };
+    if (paymentInfo.current_period_end) billingFields.current_period_end = paymentInfo.current_period_end;
+    if (paymentInfo.razorpay_payment_id) billingFields.razorpay_payment_id = paymentInfo.razorpay_payment_id;
+    if (paymentInfo.razorpay_subscription_id) billingFields.razorpay_subscription_id = paymentInfo.razorpay_subscription_id;
+    billingFields.cancel_at_period_end = 0;
+    await upsertBilling(env, firmCode, billingFields);
+
+    /* Email uniqueness re-check inside creation.
+       If another signup took this email in the meantime, the firm is still
+       created (they paid) but we do NOT overwrite the other firm's index. */
+    var _emailOwner = await env.G7_KV.get('auth:email:' + pending.email);
+    if (_emailOwner && _emailOwner !== firmCode) {
+      /* Another firm already claimed this email — log it, don't overwrite */
+      try {
+        await recordError(env, {
+          source: 'worker', route: 'signup', firmCode: firmCode,
+          kind: 'duplicate_email',
+          message: 'Email ' + pending.email + ' already claimed by ' + _emailOwner + ' during signup ' + pendingId
+        });
+      } catch (e2) {}
+      /* Notify admin */
+      ctx.waitUntil(sendEmail(env, env.ADMIN_EMAIL || 'contact@gsevnservices.in',
+        'Duplicate email during signup: ' + pending.email,
+        'Firm ' + firmCode + ' signed up with email ' + pending.email + ' but it is already owned by ' + _emailOwner + '. Pending ID: ' + pendingId,
+        '<p>Firm <b>' + escEmail(firmCode) + '</b> signed up with email <b>' + escEmail(pending.email) + '</b> but it is already owned by <b>' + escEmail(_emailOwner) + '</b>.</p><p>Pending ID: ' + escEmail(pendingId) + '</p>',
+        {}, { fromName: 'Scout System' }
+      ));
+    } else {
+      /* Safe to write email index */
+      await kvPut(env, 'auth:email:' + pending.email, firmCode);
+    }
+
+    /* Mark D1 row as done */
+    await env.DB.prepare(
+      "UPDATE signups SET status = 'done', firm_code = ?, updated_at = datetime('now') WHERE pending_id = ?"
+    ).bind(firmCode, pendingId).run();
+
+    /* Delete pending KV record — creation succeeded */
+    try { await env.G7_KV.delete('signup:pending:' + pendingId); } catch (e) {}
+
+    /* Send welcome email (dedupe: once per firm) */
+    var welcomeDedup = 'email:welcome:' + firmCode;
+    if (!(await env.G7_KV.get(welcomeDedup))) {
+      await kvPut(env, welcomeDedup, '1', { expirationTtl: 30 * 86400 });
+      if (pending.email) {
+        var _wSiteUrl = (env.SITE_URL || '').replace(/\/$/, '');
+        var _wSubj = 'Welcome to Scout — your account is ready';
+        var _wFirstName = escEmail((pending.name || '').split(' ')[0]);
+        var _wFirmCode = escEmail(firmCode);
+        var _wHtml = emailShell({
+          siteUrl: _wSiteUrl,
+          headerLabel: 'Scout',
+          greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + _wFirstName + ', welcome to Scout.</div>',
+          textGreeting: 'Hi ' + (pending.name || '').split(' ')[0] + ', welcome to Scout.\n\n',
+          htmlParts: [
+            emailRow('Your account <strong>' + _wFirmCode + '</strong> is ready.'),
+            emailRow('Your plan is active — leads, Ask Scout, emails, everything is unlocked.'),
+            emailGreyRow('You can log in with your email or firm code: <strong>' + _wFirmCode + '</strong>')
+          ],
+          textParts: [
+            'Your account ' + firmCode + ' is ready.\n' +
+            'Your plan is active — leads, Ask Scout, emails, everything is unlocked.\n' +
+            'You can log in with your email or firm code: ' + firmCode
+          ],
+          mainButton: { url: _wSiteUrl + '/login.html?product=scout', label: 'Log In & Set Up' },
+          footerLine: 'Your Scout account is live.'
+        });
+        ctx.waitUntil(sendEmail(env, pending.email, _wSubj, _wHtml.text, _wHtml.html, {}, { fromName: 'Scout by G7' }));
+      }
+    }
+
+    return { firmCode: firmCode, firmName: pending.businessName, email: pending.email };
+
+  } catch (createErr) {
+    /* Creation failed part-way — mark as failed so retry is possible */
+    try {
+      await env.DB.prepare(
+        "UPDATE signups SET status = 'failed', updated_at = datetime('now') WHERE pending_id = ?"
+      ).bind(pendingId).run();
+    } catch (e2) {}
+    return { error: 'Account creation failed: ' + String(createErr.message || createErr).slice(0, 200), status: 500 };
+  }
+}
+
 /* Check if a firm has active billing. Returns true/false.
    This is THE gate for all paid features. */
 async function isBillingActive(env, firmCode) {
@@ -6908,8 +7120,16 @@ export default {
         return jsonResponse({ error: 'firmCode and password are required' }, 400);
       }
 
-      // Normalize firmCode to uppercase so G7CAP and g7cap both work
-      const normalizedCode = firmCode.toUpperCase().trim();
+      /* Accept email or firm code — if input contains @, look up the email index */
+      var normalizedCode = firmCode.trim();
+      if (normalizedCode.indexOf('@') !== -1) {
+        var _emailLower = normalizedCode.toLowerCase();
+        var _emailFirm = await env.G7_KV.get('auth:email:' + _emailLower);
+        if (!_emailFirm) return jsonResponse({ error: 'Invalid credentials' }, 401);
+        normalizedCode = _emailFirm;
+      } else {
+        normalizedCode = normalizedCode.toUpperCase();
+      }
 
       // Look up the firm in KV
       const user = await env.G7_KV.get('auth:users:' + normalizedCode, 'json');
@@ -7037,8 +7257,17 @@ export default {
       const generic = jsonResponse({ success: true });
       let body;
       try { body = await request.json(); } catch { return generic; }
-      const code = (body.firmCode || '').toUpperCase().trim();
-      if (!code) return generic;
+      var _fpInput = (body.firmCode || '').trim();
+      if (!_fpInput) return generic;
+      /* Accept email or firm code */
+      var code;
+      if (_fpInput.indexOf('@') !== -1) {
+        var _fpFirm = await env.G7_KV.get('auth:email:' + _fpInput.toLowerCase());
+        if (!_fpFirm) return generic;
+        code = _fpFirm;
+      } else {
+        code = _fpInput.toUpperCase();
+      }
 
       /* Three requests per firm per hour. Stops inbox flooding and quota burn. */
       const rlKey = 'auth:reset-rl:' + code;
@@ -7748,6 +7977,23 @@ export default {
         expiresAt: _tsNow + 3600000  // 1 hour
       }), { expirationTtl: 3700 });
       return jsonResponse({ token: _tsToken, firmCode: _tsFirm, expiresIn: 3600 });
+    }
+
+    // POST /admin/test-create-from-pending — dev-only: exercise createFirmFromPending
+    if (request.method === 'POST' && path === '/admin/test-create-from-pending') {
+      if (env.ENVIRONMENT !== 'dev') return jsonResponse({ error: 'Not found' }, 404);
+      var _tcBody; try { _tcBody = await request.json(); } catch { return jsonResponse({ error: 'bad json' }, 400); }
+      if (!_tcBody.adminPassword || _tcBody.adminPassword !== env.ADMIN_PASSWORD) return jsonResponse({ error: 'forbidden' }, 403);
+      var _tcPendingId = String(_tcBody.pendingId || '');
+      if (!_tcPendingId) return jsonResponse({ error: 'pendingId required' }, 400);
+      var _tcPayInfo = {
+        plan: _tcBody.plan || 'monthly',
+        current_period_end: new Date(Date.now() + 30 * 86400000).toISOString(),
+        razorpay_payment_id: _tcBody.razorpay_payment_id || null,
+        razorpay_subscription_id: _tcBody.razorpay_subscription_id || null
+      };
+      var _tcResult = await createFirmFromPending(env, _tcPendingId, _tcPayInfo, ctx);
+      return jsonResponse(_tcResult);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -10332,8 +10578,21 @@ export default {
         if (!check.ok) return jsonResponse({ error: 'Password is incorrect.' }, 403);
       }
 
+      /* Email uniqueness check — another firm can't already have this email */
+      var _reExisting = await env.G7_KV.get('auth:email:' + newEmail);
+      if (_reExisting && _reExisting !== session.firmCode) {
+        return jsonResponse({ error: 'This email is already used by another account.' }, 409);
+      }
+
+      /* Remove old email index if changing */
+      if (oldEmail && oldEmail !== newEmail) {
+        try { await env.G7_KV.delete('auth:email:' + oldEmail.toLowerCase()); } catch (e) {}
+      }
+
       user.recoveryEmail = newEmail;
       await kvPut(env, key, JSON.stringify(user));
+      /* Write email→firm index for email login */
+      await kvPut(env, 'auth:email:' + newEmail, session.firmCode);
 
       // Revoke all other sessions (recovery email change is security-sensitive)
       var revokeNow = Date.now();
@@ -11213,6 +11472,151 @@ export default {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // PAY-FIRST SIGNUP — no session required
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // ── POST /billing/start — begin signup + create Razorpay checkout ──
+    if (request.method === 'POST' && path === '/billing/start') {
+      var _bsBody; try { _bsBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return jsonResponse({ error: 'Payment not configured' }, 501);
+
+      /* Validate fields */
+      var _bsBiz = String(_bsBody.businessName || '').trim();
+      var _bsName = String(_bsBody.name || '').trim();
+      var _bsEmail = String(_bsBody.email || '').trim().toLowerCase();
+      var _bsPhone = String(_bsBody.phone || '').replace(/\s+/g, '');
+      var _bsPwd = String(_bsBody.password || '');
+      var _bsPlan = String(_bsBody.plan || '').toLowerCase();
+      var _bsHoney = String(_bsBody.website || '');  /* honeypot field */
+
+      if (_bsHoney) return jsonResponse({ ok: true, pendingId: 'ok' }); /* bot trap — fake success */
+      if (!_bsBiz || _bsBiz.length < 2) return jsonResponse({ error: 'Business name is required' }, 400);
+      if (_bsBiz.length > 200) return jsonResponse({ error: 'Business name too long (max 200 characters)' }, 400);
+      if (!_bsName || _bsName.length < 2) return jsonResponse({ error: 'Your name is required' }, 400);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(_bsEmail)) return jsonResponse({ error: 'Enter a valid email address' }, 400);
+      if (!/^[6-9]\d{9}$/.test(_bsPhone)) return jsonResponse({ error: 'Enter a valid 10-digit Indian mobile number' }, 400);
+      if (_bsPwd.length < 8) return jsonResponse({ error: 'Password must be at least 8 characters' }, 400);
+      if (_bsPlan !== 'monthly' && _bsPlan !== 'yearly') return jsonResponse({ error: 'plan must be monthly or yearly' }, 400);
+
+      /* Check email uniqueness */
+      var _bsExisting = await env.G7_KV.get('auth:email:' + _bsEmail);
+      if (_bsExisting) return jsonResponse({ error: 'email_taken', message: 'You already have an account. Log in instead.' }, 409);
+
+      /* Rate limit: 5 per hour per IP */
+      var _bsIp = request.headers.get('cf-connecting-ip') || 'unknown';
+      var _bsRlKey = 'rl:signup:' + _bsIp;
+      var _bsRlCount = parseInt((await env.G7_KV.get(_bsRlKey)) || '0', 10);
+      if (_bsRlCount >= 5) return jsonResponse({ error: 'Too many sign-ups from this address. Try again later.' }, 429);
+      await kvPut(env, _bsRlKey, String(_bsRlCount + 1), { expirationTtl: 3600 });
+
+      /* Hash password and store pending signup */
+      var _bsHash = await hashPassword(_bsPwd);
+      var _bsPendingId = crypto.randomUUID();
+      await kvPut(env, 'signup:pending:' + _bsPendingId, JSON.stringify({
+        businessName: _bsBiz,
+        name: _bsName,
+        email: _bsEmail,
+        phone: _bsPhone,
+        passwordHash: _bsHash,
+        plan: _bsPlan,
+        createdAt: Date.now()
+      }), { expirationTtl: 86400 }); /* 24-hour TTL */
+
+      /* Create Razorpay subscription or order */
+      var _bsAuth = 'Basic ' + btoa(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET);
+      if (_bsPlan === 'monthly') {
+        var _bsPlanId = await env.G7_KV.get('billing:plan:monthly');
+        if (!_bsPlanId) return jsonResponse({ error: 'Monthly plan not created yet' }, 501);
+        var _bsSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
+          method: 'POST',
+          headers: { 'Authorization': _bsAuth, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            plan_id: _bsPlanId, total_count: 120, quantity: 1,
+            notes: { pending_id: _bsPendingId, business_name: _bsBiz, email: _bsEmail }
+          })
+        });
+        var _bsSub = await _bsSubRes.json();
+        if (_bsSub.error) return jsonResponse({ error: _bsSub.error.description || 'Could not create subscription' }, 502);
+        return jsonResponse({
+          key_id: env.RAZORPAY_KEY_ID, subscription_id: _bsSub.id,
+          pending_id: _bsPendingId, plan: 'monthly',
+          prefill: { name: _bsName, email: _bsEmail, contact: _bsPhone }
+        });
+      } else {
+        var _bsOrdRes = await fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: { 'Authorization': _bsAuth, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: 2880000, currency: 'INR',
+            receipt: 'yearly_signup_' + _bsPendingId.slice(0, 8),
+            notes: { pending_id: _bsPendingId, business_name: _bsBiz, email: _bsEmail, plan: 'yearly' }
+          })
+        });
+        var _bsOrd = await _bsOrdRes.json();
+        if (_bsOrd.error) return jsonResponse({ error: _bsOrd.error.description || 'Could not create order' }, 502);
+        return jsonResponse({
+          key_id: env.RAZORPAY_KEY_ID, order_id: _bsOrd.id,
+          pending_id: _bsPendingId, plan: 'yearly',
+          prefill: { name: _bsName, email: _bsEmail, contact: _bsPhone }
+        });
+      }
+    }
+
+    // ── POST /billing/verify-signup — verify payment + create account ──
+    if (request.method === 'POST' && path === '/billing/verify-signup') {
+      var _vsBody; try { _vsBody = await request.json(); } catch { return jsonResponse({ error: 'bad_json' }, 400); }
+      if (!env.RAZORPAY_KEY_SECRET) return jsonResponse({ error: 'not configured' }, 501);
+
+      var _vsPendingId = String(_vsBody.pending_id || '');
+      var _vsPlan = String(_vsBody.plan || '').toLowerCase();
+      if (!_vsPendingId) return jsonResponse({ error: 'pending_id required' }, 400);
+      if (_vsPlan !== 'monthly' && _vsPlan !== 'yearly') return jsonResponse({ error: 'plan must be monthly or yearly' }, 400);
+
+      /* Verify signature */
+      var _vsValid = false;
+      if (_vsPlan === 'monthly') {
+        var _vsPayload = (_vsBody.razorpay_payment_id || '') + '|' + (_vsBody.razorpay_subscription_id || '');
+        _vsValid = await verifyRazorpaySignature(env.RAZORPAY_KEY_SECRET, _vsPayload, _vsBody.razorpay_signature || '');
+      } else {
+        var _vsPayload2 = (_vsBody.razorpay_order_id || '') + '|' + (_vsBody.razorpay_payment_id || '');
+        _vsValid = await verifyRazorpaySignature(env.RAZORPAY_KEY_SECRET, _vsPayload2, _vsBody.razorpay_signature || '');
+      }
+      if (!_vsValid) return jsonResponse({ error: 'Invalid signature' }, 400);
+
+      /* Create the firm account */
+      var _vsPayInfo = {
+        plan: _vsPlan,
+        razorpay_payment_id: _vsBody.razorpay_payment_id || null,
+        razorpay_subscription_id: _vsBody.razorpay_subscription_id || null,
+        razorpay_order_id: _vsBody.razorpay_order_id || null,
+        current_period_end: _vsPlan === 'yearly'
+          ? new Date(Date.now() + 365 * 86400000).toISOString()
+          : new Date(Date.now() + 30 * 86400000).toISOString()
+      };
+      var _vsResult = await createFirmFromPending(env, _vsPendingId, _vsPayInfo, ctx);
+      if (_vsResult.error) return jsonResponse({ error: _vsResult.error }, _vsResult.status || 400);
+
+      /* Create a login session */
+      var _vsToken = crypto.randomUUID() + '-' + crypto.randomUUID();
+      var _vsNow = Date.now();
+      await kvPut(env, 'auth:sessions:' + _vsToken, JSON.stringify({
+        firmCode: _vsResult.firmCode,
+        firmName: _vsResult.firmName,
+        createdAt: _vsNow,
+        refreshedAt: _vsNow,
+        expiresAt: _vsNow + SESSION_IDLE_MS
+      }), { expirationTtl: SESSION_KV_TTL_S });
+
+      return jsonResponse({
+        ok: true,
+        token: _vsToken,
+        firmCode: _vsResult.firmCode,
+        firmName: _vsResult.firmName,
+        email: _vsResult.email
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // BILLING ROUTES — Razorpay integration (test mode)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -11399,6 +11803,31 @@ export default {
         }
       }
 
+      /* ── New signup via pending_id in notes ──
+         If no firm_code but we have a pending_id, this is a pay-first signup.
+         Create the firm account from the pending record, then continue
+         with normal webhook billing processing. */
+      if (!_bwFirm) {
+        var _bwPendingId = '';
+        if (_bwEntity && _bwEntity.notes && _bwEntity.notes.pending_id) {
+          _bwPendingId = _bwEntity.notes.pending_id;
+        }
+        if (_bwPendingId) {
+          var _bwPlan = (_bwEntity.notes && _bwEntity.notes.plan) || 'monthly';
+          var _bwPEnd = null;
+          if (_bwEntity && _bwEntity.current_end) _bwPEnd = new Date(_bwEntity.current_end * 1000).toISOString();
+          if (!_bwPEnd) _bwPEnd = new Date(Date.now() + (_bwPlan === 'yearly' ? 365 : 30) * 86400000).toISOString();
+          var _bwPPayInfo = {
+            plan: _bwPlan,
+            current_period_end: _bwPEnd,
+            razorpay_payment_id: (_bwEntity && _bwEntity.id && _bwEntity.id.indexOf('pay_') === 0) ? _bwEntity.id : null,
+            razorpay_subscription_id: (_bwEntity && _bwEntity.id && _bwEntity.id.indexOf('sub_') === 0) ? _bwEntity.id : null
+          };
+          var _bwPResult = await createFirmFromPending(env, _bwPendingId, _bwPPayInfo, ctx);
+          if (_bwPResult.firmCode) _bwFirm = _bwPResult.firmCode;
+        }
+      }
+
       await logBillingEvent(env, _bwEventId, _bwId, _bwFirm, _bwRaw);
 
       if (!_bwFirm) return jsonResponse({ ok: true, skipped: 'no_firm_code' });
@@ -11416,6 +11845,31 @@ export default {
         if (!_bwExist || !_bwExist.first_paid_at) _bwUpd.first_paid_at = _bwNow;
         _bwUpd.cancel_at_period_end = 0;
         await upsertBilling(env, _bwFirm, _bwUpd);
+        /* Send payment-received email (dedupe: once per firm+payment) */
+        var _bwPayId = (_bwEntity && _bwEntity.id) || 'sub';
+        var _bwPaidDedup = 'email:paid:' + _bwFirm + ':' + _bwPayId;
+        if (!(await env.G7_KV.get(_bwPaidDedup))) {
+          await kvPut(env, _bwPaidDedup, '1', { expirationTtl: 30 * 86400 });
+          var _bwPUser = await env.G7_KV.get('auth:users:' + _bwFirm, 'json') || {};
+          if (_bwPUser.recoveryEmail) {
+            var _bwPSubj = 'Payment received — your Scout plan is active';
+            var _bwPHtml = emailShell({
+              siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+              headerLabel: 'Scout',
+              greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Thank you for your payment.</div>',
+              textGreeting: 'Thank you for your payment.\n\n',
+              htmlParts: [
+                emailRow('Your <strong>₹3,000/month</strong> plan is now active.'),
+                emailRow('Leads, Ask Scout, emails, and all features are unlocked.'),
+                emailGreyRow('Fully refundable within 7 days of your first payment.')
+              ],
+              textParts: ['Your ₹3,000/month plan is now active.\nLeads, Ask Scout, emails, and all features are unlocked.\n\nFully refundable within 7 days of your first payment.'],
+              mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/today.html', label: 'Open Today' },
+              footerLine: 'Your plan is active.'
+            });
+            ctx.waitUntil(sendEmail(env, _bwPUser.recoveryEmail, _bwPSubj, _bwPHtml.text, _bwPHtml.html, {}, { fromName: 'Scout by G7' }));
+          }
+        }
       } else if (_bwId === 'payment.captured') {
         /* One-time yearly order */
         var _bwNotes = (_bwEntity && _bwEntity.notes) || {};
@@ -11427,6 +11881,31 @@ export default {
           if (!_bwYExist || !_bwYExist.first_paid_at) _bwYUpd.first_paid_at = _bwNow;
           _bwYUpd.cancel_at_period_end = 0;
           await upsertBilling(env, _bwFirm, _bwYUpd);
+          /* Send payment-received email for yearly (dedupe) */
+          var _bwYPayId = (_bwEntity && _bwEntity.id) || 'order';
+          var _bwYPaidDedup = 'email:paid:' + _bwFirm + ':' + _bwYPayId;
+          if (!(await env.G7_KV.get(_bwYPaidDedup))) {
+            await kvPut(env, _bwYPaidDedup, '1', { expirationTtl: 30 * 86400 });
+            var _bwYPUser = await env.G7_KV.get('auth:users:' + _bwFirm, 'json') || {};
+            if (_bwYPUser.recoveryEmail) {
+              var _bwYPSubj = 'Payment received — your Scout plan is active';
+              var _bwYPHtml = emailShell({
+                siteUrl: (env.SITE_URL || '').replace(/\/$/, ''),
+                headerLabel: 'Scout',
+                greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Thank you for your payment.</div>',
+                textGreeting: 'Thank you for your payment.\n\n',
+                htmlParts: [
+                  emailRow('Your <strong>₹28,800/year</strong> plan is now active.'),
+                  emailRow('Leads, Ask Scout, emails, and all features are unlocked.'),
+                  emailGreyRow('Fully refundable within 7 days of your first payment.')
+                ],
+                textParts: ['Your ₹28,800/year plan is now active.\nLeads, Ask Scout, emails, and all features are unlocked.\n\nFully refundable within 7 days of your first payment.'],
+                mainButton: { url: (env.SITE_URL || 'https://gsevnservices.in').replace(/\/$/, '') + '/scout/today.html', label: 'Open Today' },
+                footerLine: 'Your plan is active.'
+              });
+              ctx.waitUntil(sendEmail(env, _bwYPUser.recoveryEmail, _bwYPSubj, _bwYPHtml.text, _bwYPHtml.html, {}, { fromName: 'Scout by G7' }));
+            }
+          }
         }
       } else if (_bwId === 'subscription.pending' || _bwId === 'payment.failed') {
         await upsertBilling(env, _bwFirm, { status: 'past_due' });
@@ -11539,8 +12018,16 @@ export default {
         headers: { 'Authorization': _brAuth, 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes: { firm_code: _brSess.firmCode, reason: 'User requested refund within 7 days' } })
       });
+      /* Only mark refunded if Razorpay returns HTTP 2xx with a rfnd_ ID */
+      if (!_brRefRes.ok) {
+        var _brErrBody; try { _brErrBody = await _brRefRes.json(); } catch { _brErrBody = {}; }
+        return jsonResponse({ error: (_brErrBody.error && _brErrBody.error.description) || 'Razorpay refund failed (HTTP ' + _brRefRes.status + ')' }, 502);
+      }
       var _brRefBody = await _brRefRes.json();
-      if (_brRefBody.error) return jsonResponse({ error: _brRefBody.error.description || 'Refund failed' }, 502);
+      var _brRefId = _brRefBody.id || '';
+      if (!_brRefId.startsWith('rfnd_')) {
+        return jsonResponse({ error: 'Unexpected Razorpay response — no refund ID' }, 502);
+      }
 
       /* Cancel subscription if monthly */
       if (_brBill.plan === 'monthly' && _brBill.razorpay_subscription_id) {
@@ -11554,9 +12041,9 @@ export default {
       }
 
       var _brNow = new Date().toISOString();
-      await upsertBilling(env, _brSess.firmCode, { status: 'refunded', refunded_at: _brNow });
-      await logBillingEvent(env, 'refund_' + Date.now(), 'user.refund', _brSess.firmCode, { refundId: _brRefBody.id || null });
-      return jsonResponse({ ok: true, status: 'refunded' });
+      await upsertBilling(env, _brSess.firmCode, { status: 'refunded', refunded_at: _brNow, razorpay_refund_id: _brRefId });
+      await logBillingEvent(env, 'refund_' + Date.now(), 'user.refund', _brSess.firmCode, { refundId: _brRefId });
+      return jsonResponse({ ok: true, status: 'refunded', refundId: _brRefId });
     }
 
     // ── GET /billing/status — current billing status ──
