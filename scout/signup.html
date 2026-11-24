@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Up — G7 Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<script src="../assets/env.js?v=1"></script>
+<script src="../assets/auth.js?v=19"></script>
+<script src="../assets/scout.js?v=55"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23080808'/><text y='.9em' font-size='70' font-family='serif' fill='%23C9A84C'>G</text></svg>">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;font-size:16px}
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;--black4:#1E1E1E;
+  --gold:#C9A84C;--gold-l:#E2C97E;--gold-m:#A8873A;
+  --amber:#E0922F;--amber-l:#EDB36A;
+  --white:#FAFAF8;--white2:#F0EFE9;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(201,168,76,0.15);--border2:rgba(250,250,248,0.08)
+}
+body{font-family:'Tenor Sans',sans-serif;background:var(--black);color:var(--white);overflow-x:hidden;cursor:none;min-height:100vh;visibility:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:.4}
+.cursor{position:fixed;width:8px;height:8px;background:var(--gold);border-radius:50%;pointer-events:none;z-index:9999;transition:transform .15s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+.cursor-ring{position:fixed;width:36px;height:36px;border:1px solid rgba(201,168,76,.5);border-radius:50%;pointer-events:none;z-index:9998;transition:all .12s ease;transform:translate(-50%,-50%);left:-100px;top:-100px}
+@media(max-width:480px){.cursor,.cursor-ring{display:none}body{cursor:auto}}
+
+/* Nav */
+nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:center;justify-content:space-between;padding:0 64px;height:80px;background:rgba(8,8,8,.92);backdrop-filter:blur(24px);border-bottom:1px solid var(--border2)}
+.nav-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:300;letter-spacing:.25em;text-transform:uppercase;color:var(--white);text-decoration:none}
+.nav-logo em{font-style:normal;color:var(--gold)}
+.nav-right{display:flex;align-items:center;gap:32px}
+.nav-link{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .3s}
+.nav-link:hover{color:var(--white)}
+@media(max-width:768px){nav{padding:0 24px}}
+
+/* Page layout */
+.page{margin-top:80px;display:flex;justify-content:center;padding:40px 24px 60px}
+.card{width:100%;max-width:390px;background:var(--black2);border:1px solid var(--border2);padding:36px 28px}
+
+/* Header */
+.eyebrow{font-size:9px;letter-spacing:.25em;text-transform:uppercase;color:var(--gold);margin-bottom:16px}
+.page-heading{font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:300;line-height:1.2;color:var(--white);margin-bottom:8px}
+.page-sub{font-size:13px;color:var(--grey1);line-height:1.6;margin-bottom:28px}
+
+/* Plan badge */
+.plan-badge{display:inline-block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;background:rgba(224,146,47,0.12);color:var(--amber);padding:6px 14px;border:1px solid rgba(224,146,47,0.3);margin-bottom:24px}
+
+/* Form fields */
+.field{margin-bottom:18px}
+.field label{display:block;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--grey2);margin-bottom:6px}
+.field input{width:100%;background:var(--black);border:1px solid var(--border2);color:var(--white);font-family:'Tenor Sans',sans-serif;font-size:14px;padding:12px 14px;outline:none;transition:border-color .3s}
+.field input:focus{border-color:var(--border)}
+.field input::placeholder{color:var(--grey2);font-size:13px}
+.field .hint{font-size:11px;color:var(--grey2);margin-top:4px}
+.field .err{font-size:11px;color:#C45A5A;margin-top:4px;display:none}
+
+/* Honeypot — invisible to users, bots fill it in */
+.hp{position:absolute;left:-9999px;height:0;width:0;overflow:hidden;opacity:0;pointer-events:none}
+
+/* Submit button */
+.submit-btn{display:block;width:100%;background:var(--amber);color:var(--black);font-family:'Tenor Sans',sans-serif;font-size:11px;letter-spacing:.18em;text-transform:uppercase;padding:16px;border:none;cursor:pointer;transition:all .3s;margin-top:24px}
+.submit-btn:hover{background:var(--amber-l);transform:translateY(-2px)}
+.submit-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+/* Status message */
+.status-msg{text-align:center;font-size:12px;color:var(--grey2);padding:12px 0;display:none;line-height:1.5}
+.status-msg.error{color:#C45A5A}
+.status-msg.success{color:var(--gold)}
+
+/* Login link */
+.login-link{text-align:center;font-size:12px;color:var(--grey2);margin-top:20px}
+.login-link a{color:var(--gold);text-decoration:none;border-bottom:1px solid rgba(201,168,76,0.4)}
+.login-link a:hover{color:var(--gold-l)}
+
+/* Success overlay */
+.success-overlay{display:none;position:fixed;inset:0;background:rgba(8,8,8,0.95);z-index:2000;align-items:center;justify-content:center}
+.success-overlay.show{display:flex}
+.success-box{text-align:center;max-width:390px;padding:48px 32px}
+.success-icon{font-size:48px;margin-bottom:20px}
+.success-heading{font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:300;color:var(--white);margin-bottom:12px}
+.success-sub{font-size:13px;color:var(--grey1);line-height:1.6;margin-bottom:8px}
+.success-email{font-size:14px;color:var(--gold);margin-bottom:28px}
+.success-btn{display:inline-block;background:var(--amber);color:var(--black);font-family:'Tenor Sans',sans-serif;font-size:11px;letter-spacing:.18em;text-transform:uppercase;padding:16px 40px;text-decoration:none;transition:all .3s}
+.success-btn:hover{background:var(--amber-l);transform:translateY(-2px)}
+</style>
+</head>
+<body>
+
+<div class="cursor" id="cursor"></div>
+<div class="cursor-ring" id="cursorRing"></div>
+
+<nav>
+  <a href="landing.html" class="nav-logo">G<em>7</em> Scout</a>
+  <div class="nav-right">
+    <a href="../login.html?product=scout" class="nav-link">Sign In</a>
+  </div>
+</nav>
+
+<div class="page">
+  <div class="card">
+    <div class="eyebrow">Create your account</div>
+    <h1 class="page-heading">Start getting customers</h1>
+    <p class="page-sub">Set up takes 2 minutes. Your first leads arrive tomorrow morning.</p>
+
+    <!-- Plan badge — filled by JS -->
+    <div class="plan-badge" id="planBadge">Monthly — ₹3,000/month</div>
+
+    <form id="signupForm" onsubmit="handleSignup(event)" novalidate>
+      <div class="field">
+        <label for="businessName">Business Name</label>
+        <input type="text" id="businessName" placeholder="e.g. Sharma Dental Clinic" required>
+        <div class="err" id="errBiz"></div>
+      </div>
+
+      <div class="field">
+        <label for="yourName">Your Name</label>
+        <input type="text" id="yourName" placeholder="e.g. Rahul Sharma" required>
+        <div class="err" id="errName"></div>
+      </div>
+
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="you@example.com" autocomplete="email" required>
+        <div class="err" id="errEmail"></div>
+      </div>
+
+      <div class="field">
+        <label for="phone">Phone (10-digit Indian mobile)</label>
+        <input type="tel" id="phone" placeholder="e.g. 9876543210" maxlength="10" inputmode="numeric" required>
+        <div class="err" id="errPhone"></div>
+      </div>
+
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="At least 8 characters" autocomplete="new-password" required>
+        <div class="err" id="errPwd"></div>
+      </div>
+
+      <div class="field">
+        <label for="confirmPassword">Confirm Password</label>
+        <input type="password" id="confirmPassword" placeholder="Type your password again" autocomplete="new-password" required>
+        <div class="err" id="errPwd2"></div>
+      </div>
+
+      <!-- Honeypot field — hidden from users, bots fill it in -->
+      <div class="hp" aria-hidden="true">
+        <label for="website">Website</label>
+        <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+      </div>
+
+      <div class="status-msg" id="statusMsg"></div>
+
+      <button type="submit" class="submit-btn" id="submitBtn">Create account & pay</button>
+    </form>
+
+    <div class="login-link">
+      Already have an account? <a href="../login.html?product=scout">Sign in</a>
+    </div>
+  </div>
+</div>
+
+<!-- Success overlay — shown after payment -->
+<div class="success-overlay" id="successOverlay">
+  <div class="success-box">
+    <div class="success-icon">🎉</div>
+    <div class="success-heading">Your account is created</div>
+    <div class="success-sub">We sent a welcome email to</div>
+    <div class="success-email" id="successEmail"></div>
+    <a href="onboard.html" class="success-btn" id="successBtn">Set up my business</a>
+  </div>
+</div>
+
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+/* ── Globals ── */
+var _plan = 'monthly';
+var _pendingId = '';
+
+/* ── Cursor (desktop only) ── */
+var cur = document.getElementById('cursor');
+var ring = document.getElementById('cursorRing');
+document.addEventListener('mousemove', function(e) {
+  cur.style.left = e.clientX + 'px'; cur.style.top = e.clientY + 'px';
+  ring.style.left = e.clientX + 'px'; ring.style.top = e.clientY + 'px';
+});
+
+/* ── Init ── */
+(function() {
+  document.body.style.visibility = 'visible';
+
+  /* Read plan from URL */
+  var params = new URLSearchParams(window.location.search);
+  var planParam = (params.get('plan') || '').toLowerCase();
+  if (planParam === 'yearly') _plan = 'yearly';
+
+  /* Update plan badge */
+  var badge = document.getElementById('planBadge');
+  if (_plan === 'yearly') {
+    badge.textContent = 'Yearly — ₹28,800/year (save 20%)';
+  } else {
+    badge.textContent = 'Monthly — ₹3,000/month';
+  }
+
+  /* If already logged in, redirect to pricing (they can pay from there) */
+  var token = localStorage.getItem('g7_session_token');
+  if (token) {
+    window.location.href = 'pricing.html';
+    return;
+  }
+})();
+
+/* ── Validation helpers ── */
+function showErr(id, msg) {
+  var el = document.getElementById(id);
+  el.textContent = msg; el.style.display = 'block';
+}
+function clearErr(id) {
+  var el = document.getElementById(id);
+  el.textContent = ''; el.style.display = 'none';
+}
+function showStatus(msg, type) {
+  var el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (type ? ' ' + type : '');
+  el.style.display = 'block';
+}
+
+/* ── Form submit ── */
+async function handleSignup(e) {
+  e.preventDefault();
+
+  /* Clear previous errors */
+  ['errBiz','errName','errEmail','errPhone','errPwd','errPwd2'].forEach(clearErr);
+  document.getElementById('statusMsg').style.display = 'none';
+
+  /* Read fields */
+  var biz = document.getElementById('businessName').value.trim();
+  var name = document.getElementById('yourName').value.trim();
+  var email = document.getElementById('email').value.trim();
+  var phone = document.getElementById('phone').value.replace(/\s+/g, '');
+  var pwd = document.getElementById('password').value;
+  var pwd2 = document.getElementById('confirmPassword').value;
+  var honey = document.getElementById('website').value;
+
+  /* Browser-side validation */
+  var ok = true;
+  if (!biz || biz.length < 2) { showErr('errBiz', 'Enter your business name'); ok = false; }
+  if (!name || name.length < 2) { showErr('errName', 'Enter your name'); ok = false; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showErr('errEmail', 'Enter a valid email address'); ok = false; }
+  if (!/^[6-9]\d{9}$/.test(phone)) { showErr('errPhone', 'Enter a valid 10-digit Indian mobile number'); ok = false; }
+  if (pwd.length < 8) { showErr('errPwd', 'Password must be at least 8 characters'); ok = false; }
+  if (pwd !== pwd2) { showErr('errPwd2', 'Passwords do not match'); ok = false; }
+  if (!ok) return;
+
+  /* Disable button */
+  var btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+
+  try {
+    /* POST /billing/start */
+    var r = await fetch(SCOUT_WORKER + '/billing/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        businessName: biz,
+        name: name,
+        email: email,
+        phone: phone,
+        password: pwd,
+        plan: _plan,
+        website: honey  /* honeypot */
+      })
+    });
+    var d = await r.json();
+
+    if (d.error) {
+      if (d.error === 'email_taken') {
+        showErr('errEmail', 'You already have an account. Log in instead.');
+      } else {
+        showStatus(d.error, 'error');
+      }
+      btn.disabled = false;
+      btn.textContent = 'Create account & pay';
+      return;
+    }
+
+    _pendingId = d.pending_id;
+
+    /* Open Razorpay Checkout */
+    var options = {
+      key: d.key_id,
+      name: 'Scout by G7',
+      description: _plan === 'monthly' ? 'Monthly plan — ₹3,000/month' : 'Yearly plan — ₹28,800/year',
+      prefill: d.prefill || {},
+      theme: { color: '#E0922F' },
+      modal: {
+        ondismiss: function() {
+          btn.disabled = false;
+          btn.textContent = 'Create account & pay';
+        }
+      },
+      handler: function(response) {
+        /* Payment succeeded — verify and create account */
+        verifySignup(response);
+      }
+    };
+
+    if (_plan === 'monthly') {
+      options.subscription_id = d.subscription_id;
+    } else {
+      options.order_id = d.order_id;
+      options.amount = 2880000;
+      options.currency = 'INR';
+    }
+
+    var rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(resp) {
+      showStatus('Payment failed. Please try again.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Create account & pay';
+    });
+    rzp.open();
+
+  } catch (e) {
+    showStatus('Something went wrong. Please try again.', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Create account & pay';
+  }
+}
+
+/* ── Verify payment + create account ── */
+async function verifySignup(response) {
+  showStatus('Creating your account...', '');
+  var btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Creating account...';
+
+  try {
+    var payload = {
+      pending_id: _pendingId,
+      plan: _plan,
+      razorpay_payment_id: response.razorpay_payment_id,
+      razorpay_signature: response.razorpay_signature
+    };
+    if (_plan === 'monthly') {
+      payload.razorpay_subscription_id = response.razorpay_subscription_id;
+    } else {
+      payload.razorpay_order_id = response.razorpay_order_id;
+    }
+
+    var r = await fetch(SCOUT_WORKER + '/billing/verify-signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var d = await r.json();
+
+    if (d.ok && d.token) {
+      /* Save session and show success */
+      localStorage.setItem('g7_session_token', d.token);
+      localStorage.setItem('g7_firm_code', d.firmCode);
+      localStorage.setItem('g7_firm_name', d.firmName);
+
+      document.getElementById('successEmail').textContent = d.email || '';
+      document.getElementById('successOverlay').classList.add('show');
+    } else {
+      showStatus(d.error || 'Could not verify payment. If you were charged, contact support.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Create account & pay';
+    }
+  } catch (e) {
+    showStatus('Could not verify payment. If you were charged, your account will be created automatically within a few minutes.', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Create account & pay';
+  }
+}
+</script>
+</body>
+</html>

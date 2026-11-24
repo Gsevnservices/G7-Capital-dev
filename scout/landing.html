@@ -65,6 +65,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:900;o
 .hero-sub{font-family:var(--serif);font-style:italic;font-size:15px;color:var(--grey2);margin-top:14px}
 .hero-signin{font-size:11px;letter-spacing:.04em;color:var(--grey1);text-decoration:none;border-bottom:1px solid var(--border);padding-bottom:2px;transition:color .35s,border-color .35s}
 .hero-signin:hover{color:var(--amber);border-color:var(--amber)}
+.hero-sub-links{margin-top:14px;opacity:0;animation:rise 1s ease .8s both}
 @keyframes rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:translateY(0)}}
 .scrollcue{position:absolute;bottom:30px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:9px;z-index:3;opacity:0;animation:rise 1s ease 1.2s both}
 .scrollcue .ln{width:1px;height:42px;background:linear-gradient(var(--amber),transparent);animation:cue 2.6s ease infinite}
@@ -254,8 +255,11 @@ footer{border-top:1px solid var(--border3);padding:44px 64px;max-width:1340px;ma
       </h1>
       <p data-hi="Scout आपके सही कस्टमर ढूंढता है, उन्हें जोड़ने के लिए तैयार मैसेज देता है, और उन्हें बार-बार वापस लाता है — रोज़ का एक आसान प्लान, पहले दिन से।">Scout finds your best customers, helps you win them, keeps them coming back, and grows your revenue — all in a simple plan you can follow from day one.</p>
       <div class="hero-actions">
-        <a id="heroCta" class="btn-amber" href="#pricing">Book a Free Demo</a>
-        <a href="../login.html?product=scout" class="hero-signin">Sign in →</a>
+        <a id="heroCta" class="btn-amber" href="pricing.html">Start now: ₹3,000/month</a>
+        <a id="heroFree" class="btn-ghost" href="../login.html?product=scout&amp;next=scout/onboard.html" style="padding:17px 20px;font-size:11px;text-align:center">Get a free business analysis</a>
+      </div>
+      <div class="hero-sub-links">
+        <a href="../login.html?product=scout" class="hero-signin">Already have an account? Sign in →</a>
       </div>
       <div class="hero-sub" data-hi="एक नया कस्टमर ही इसकी कीमत निकाल देता है।">One new customer pays for it.</div>
     </div>
@@ -426,7 +430,8 @@ footer{border-top:1px solid var(--border3);padding:44px 64px;max-width:1340px;ma
   <div class="cta-inner reveal">
     <h2>Your competition is already using it —<br><span class="it">and getting ahead.</span></h2>
     <p class="lead">Just one new customer covers your cost. Everything after that is profit.</p>
-    <a id="ctaBtn" class="btn-amber" href="#pricing">Book a Free Demo</a>
+    <a id="ctaBtn" class="btn-amber" href="pricing.html">Start now: ₹3,000/month</a>
+    <div style="margin-top:12px"><a id="ctaFree" class="btn-ghost" href="../login.html?product=scout&amp;next=scout/onboard.html" style="padding:14px 32px;font-size:11px;text-align:center;display:inline-block">Get a free business analysis</a></div>
     <div class="cta-links">
       <div class="row">Already have an account? <a href="../login.html?product=scout">Sign in →</a></div>
     </div>
@@ -451,7 +456,8 @@ var HI = {
   heroRole: 'आपका AI सेल्स साथी',
   heroBody: 'Scout आपके सही कस्टमर ढूंढता है, उन्हें जोड़ने के लिए तैयार मैसेज देता है, और उन्हें बार-बार वापस लाता है — रोज़ का एक आसान प्लान, पहले दिन से।',
   heroSub: 'एक नया कस्टमर ही इसकी कीमत निकाल देता है।',
-  heroCta: 'फ्री डेमो बुक करें',
+  heroCta: 'अभी शुरू करें: ₹3,000/month',
+  heroFree: 'फ्री बिज़नेस एनालिसिस पाएं',
   pricingH: 'एक नया कस्टमर ही <span class="it">इसकी कीमत निकाल देता है।</span>',
   faq: [
     { q: 'क्या मेरा डेटा सेफ है?', a: 'आपका डेटा सुरक्षित रहता है — कभी शेयर या बेचा नहीं जाता। कभी भी डिलीट करवा सकते हैं।' },
@@ -509,6 +515,11 @@ function applyLang() {
     if (!heroCta._enText) heroCta._enText = heroCta.textContent;
     heroCta.textContent = hi ? HI.heroCta : heroCta._enText;
   }
+  var heroFree = document.getElementById('heroFree');
+  if (heroFree) {
+    if (!heroFree._enText) heroFree._enText = heroFree.textContent;
+    heroFree.textContent = hi ? HI.heroFree : heroFree._enText;
+  }
 
   /* FAQ */
   renderFaq();
@@ -533,12 +544,8 @@ function renderFaq() {
 function renderPriceButtons() {
   var el = document.getElementById('priceBtns');
   if (!el) return;
-  var demoHref = SCOUT_SITE.demoUrl || (SCOUT_SITE.whatsapp ? 'https://wa.me/' + SCOUT_SITE.whatsapp + '?text=' + encodeURIComponent('Hi, I\'d like a demo of Scout.') : '');
-  var waHref = SCOUT_SITE.whatsapp ? 'https://wa.me/' + SCOUT_SITE.whatsapp + '?text=' + encodeURIComponent('Hi, I\'d like to know more about Scout.') : '';
-  var html = '';
-  if (demoHref) html += '<a href="' + esc(demoHref) + '" class="btn-amber" target="_blank" rel="noopener">Book a Demo</a>';
-  if (waHref) html += '<a href="' + esc(waHref) + '" class="btn-ghost" target="_blank" rel="noopener">WhatsApp Us</a>';
-  if (!html) html = '<a href="mailto:' + esc(SCOUT_SITE.email) + '?subject=Scout%20Pricing" class="btn-amber">Contact for Pricing</a>';
+  var html = '<a href="signup.html?plan=monthly" class="btn-amber">Start now: ₹3,000/month</a>';
+  html += '<a href="signup.html?plan=yearly" class="btn-ghost">Save 20%: ₹28,800/year</a>';
   el.innerHTML = html;
 }
 
@@ -590,18 +597,9 @@ function renderWhatsApp() {
 }
 
 function renderHeroCta() {
-  var btn = document.getElementById('heroCta');
-  var ctaBtn = document.getElementById('ctaBtn');
   var navCta = document.getElementById('navCta');
-  var demoHref = SCOUT_SITE.demoUrl || (SCOUT_SITE.whatsapp ? 'https://wa.me/' + SCOUT_SITE.whatsapp + '?text=' + encodeURIComponent('Hi, I\'d like a demo of Scout.') : '');
-  if (demoHref) {
-    [btn, ctaBtn, navCta].forEach(function(el) {
-      if (el) { el.href = demoHref; el.target = '_blank'; el.rel = 'noopener'; }
-    });
-  } else {
-    /* Fallback: scroll to pricing section */
-    if (navCta) navCta.href = '#pricing';
-  }
+  /* Nav CTA always goes to pricing */
+  if (navCta) { navCta.href = 'pricing.html'; navCta.textContent = 'Start Now'; }
 }
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
