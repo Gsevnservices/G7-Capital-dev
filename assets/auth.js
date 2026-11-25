@@ -122,14 +122,18 @@ async function g7Login(firmCode, password) {
        JSON on screen. Parse it, and fall back to a readable sentence for
        anything unexpected. */
     var msg = '';
+    var errJson = null;
     try {
-      var errJson = await response.json();
+      errJson = await response.json();
       msg = (errJson && errJson.error) || '';
     } catch (e) {}
-    if (response.status === 401) {
-      msg = 'Wrong firm code or password. Check both and try again.';
+    if (response.status === 409 && errJson && errJson.message) {
+      /* email_ambiguous — show server's user-friendly message */
+      msg = errJson.message;
+    } else if (response.status === 401) {
+      msg = 'Wrong username or password. Check both and try again.';
     } else if (response.status === 400 && !msg) {
-      msg = 'Please enter both your firm code and password.';
+      msg = 'Please enter both your username and password.';
     } else if (!msg) {
       msg = 'Could not sign in just now. Please try again in a moment.';
     }
