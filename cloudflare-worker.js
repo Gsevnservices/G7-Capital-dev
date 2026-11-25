@@ -2038,7 +2038,10 @@ function emailGreyRow(html) { return '<tr><td style="padding:6px 28px;font-size:
    opts: { siteUrl, firstName, firmCode, email, isFree } — firstName/firmCode/email are raw (unescaped). */
 function buildWelcomeEmail(opts) {
   var _esc = escEmail;
-  var firstName = _esc(opts.firstName);
+  var rawFirst = (opts.firstName || '').trim();
+  var firstName = rawFirst ? _esc(rawFirst) : '';
+  var hiName = firstName || 'there';          /* "Hi Pranjal," or "Hi there," */
+  var rawHiName = rawFirst || 'there';
   var fc = _esc(opts.firmCode);
   var em = _esc(opts.email);
   var siteUrl = opts.siteUrl;
@@ -2060,17 +2063,19 @@ function buildWelcomeEmail(opts) {
   if (opts.isFree) {
     var shell = emailShell({
       siteUrl: siteUrl, headerLabel: 'Scout',
-      greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + firstName + ', your free analysis is ready.</div>',
-      textGreeting: 'Hi ' + opts.firstName + ', your free analysis is ready.\n\n',
+      greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + hiName + ', your free analysis is ready.</div>',
+      textGreeting: 'Hi ' + rawHiName + ', your free analysis is ready.\n\n',
       htmlParts: [
         emailRow('Your account is set up.'),
         emailRow('Log in and answer a few questions about your business — Scout will prepare a personalised analysis.'),
-        loginHtml
+        loginHtml,
+        emailGreyRow('Upgrade anytime to get 5 new customer leads every day.')
       ],
       textParts: [
         'Your account is set up.\n' +
         'Log in and answer a few questions about your business — Scout will prepare a personalised analysis.\n\n' +
-        loginText
+        loginText + '\n\n' +
+        'Upgrade anytime to get 5 new customer leads every day.'
       ],
       mainButton: { url: siteUrl + '/login.html?product=scout', label: 'Start My Free Analysis' },
       footerLine: 'Your free Scout analysis awaits.'
@@ -2079,8 +2084,8 @@ function buildWelcomeEmail(opts) {
   } else {
     var shell2 = emailShell({
       siteUrl: siteUrl, headerLabel: 'Scout',
-      greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + firstName + ', welcome to Scout.</div>',
-      textGreeting: 'Hi ' + opts.firstName + ', welcome to Scout.\n\n',
+      greeting: '<div style="font-size:18px;color:#111;margin-top:8px">Hi ' + hiName + ', welcome to Scout.</div>',
+      textGreeting: 'Hi ' + rawHiName + ', welcome to Scout.\n\n',
       htmlParts: [
         emailRow('Your account is ready.'),
         emailRow('Your plan is active — leads, Ask Scout, emails, everything is unlocked.'),
@@ -8077,9 +8082,10 @@ export default {
       var _twTo = String(_twBody.to || '').trim().toLowerCase();
       if (!_twTo) return jsonResponse({ error: 'to (email) required' }, 400);
       var _twSiteUrl = (env.SITE_URL || '').replace(/\/$/, '');
-      var _twFree = buildWelcomeEmail({ siteUrl: _twSiteUrl, firstName: 'Test', firmCode: 'TESTFREE', email: _twTo, isFree: true });
+      var _twName = String(_twBody.testName || 'Test').trim();
+      var _twFree = buildWelcomeEmail({ siteUrl: _twSiteUrl, firstName: _twName, firmCode: 'TESTFREE', email: _twTo, isFree: true });
       var _twFreeRes = await sendEmail(env, _twTo, _twFree.subject, _twFree.text, _twFree.html, {}, { fromName: 'Scout by G7' });
-      var _twPaid = buildWelcomeEmail({ siteUrl: _twSiteUrl, firstName: 'Test', firmCode: 'TESTPAID', email: _twTo, isFree: false });
+      var _twPaid = buildWelcomeEmail({ siteUrl: _twSiteUrl, firstName: _twName, firmCode: 'TESTPAID', email: _twTo, isFree: false });
       var _twPaidRes = await sendEmail(env, _twTo, _twPaid.subject, _twPaid.text, _twPaid.html, {}, { fromName: 'Scout by G7' });
       return jsonResponse({
         free: { ok: _twFreeRes.ok, resendId: _twFreeRes.id || null },

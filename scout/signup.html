@@ -166,7 +166,9 @@ nav{position:fixed;top:0;left:0;right:0;z-index:999;display:flex;align-items:cen
   <div class="success-box">
     <div class="success-icon">🎉</div>
     <div class="success-heading">Your account is created</div>
-    <div class="success-sub">We sent a welcome email to</div>
+    <div class="success-sub">Your username is</div>
+    <div class="success-email" id="successFirmCode" style="font-size:16px;letter-spacing:.12em;margin-bottom:4px"></div>
+    <div class="success-sub" style="margin-bottom:4px">We sent a welcome email to</div>
     <div class="success-email" id="successEmail"></div>
     <a href="onboard.html" class="success-btn" id="successBtn">Set up my business</a>
   </div>
@@ -293,6 +295,7 @@ async function handleSignup(e) {
         localStorage.setItem('g7_session_token', df.token);
         localStorage.setItem('g7_firm_code', df.firmCode);
         localStorage.setItem('g7_firm_name', df.firmName);
+        document.getElementById('successFirmCode').textContent = df.firmCode || '';
         document.getElementById('successEmail').textContent = df.email || '';
         document.getElementById('successOverlay').classList.add('show');
       } else {
@@ -411,6 +414,7 @@ async function verifySignup(response) {
       localStorage.setItem('g7_firm_code', d.firmCode);
       localStorage.setItem('g7_firm_name', d.firmName);
 
+      document.getElementById('successFirmCode').textContent = d.firmCode || '';
       document.getElementById('successEmail').textContent = d.email || '';
       document.getElementById('successOverlay').classList.add('show');
     } else {
