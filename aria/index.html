@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aria — Your AI Audit Employee · G7 Capital</title>
+<meta name="description" content="Aria audits your company the way your statutory auditor will — through the year — so every query, adjustment and qualification is found and fixed before the real audit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Tenor+Sans&display=swap" rel="stylesheet">
+<!-- Favicon: same "G" mark as the rest of the site, in Aria's sage green -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23080808'/%3E%3Ctext y='.9em' font-size='70' font-family='serif' fill='%237FBF94'%3EG%3C/text%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   DESIGN TOKENS — same system as Scout's landing page,
+   with Aria's sage green (from the main page planet tint)
+   ============================================================ */
+:root{
+  --black:#080808;--black2:#0F0F0F;--black3:#161616;
+  --sage:#5A9E6F;--sage-d:#3F7A53;--sage-l:#7FBF94;--gold:#C9A84C;
+  --white:#FAFAF8;--grey1:#8A8880;--grey2:#5A5855;
+  --border:rgba(90,158,111,0.22);--border2:rgba(250,250,248,0.08);--border3:rgba(250,250,248,0.04);
+  --serif:'Cormorant Garamond',Georgia,serif;--sans:'Tenor Sans',sans-serif;
+  --card:#0a0c0b;--card-h:#0e110f;
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans);color:var(--white);overflow-x:hidden;
+  background:
+    radial-gradient(ellipse 74% 58% at 58% 34%, rgba(90,158,111,0.16) 0%, rgba(50,100,66,0.06) 30%, rgba(8,8,8,0) 64%),
+    #080808;
+  background-attachment:fixed;
+}
+::selection{background:rgba(90,158,111,.32);color:var(--white)}
+/* film grain — brand signature */
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:900;opacity:.24;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E")}
+
+/* ============ NAV ============ */
+.topbar{position:fixed;top:0;left:0;right:0;z-index:600;display:flex;align-items:center;justify-content:space-between;
+  padding:24px 44px;transition:background .5s,backdrop-filter .5s,border-color .5s;border-bottom:1px solid transparent}
+.topbar.scrolled{background:rgba(8,8,8,.72);backdrop-filter:blur(14px);border-bottom-color:var(--border3)}
+.brand{display:flex;align-items:baseline;gap:18px}
+.wordmark{font-family:var(--serif);font-size:19px;font-weight:300;letter-spacing:.28em;text-transform:uppercase;text-decoration:none;color:var(--white);white-space:nowrap}
+.wordmark b{font-weight:400;color:var(--gold)}
+.brand-sep{width:1px;height:15px;background:var(--border);align-self:center}
+.brand-tag{font-size:9px;letter-spacing:.34em;text-transform:uppercase;color:var(--sage-l)}
+.nav-right{display:flex;align-items:center;gap:24px}
+.nav-link{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .3s;padding:8px 4px}
+.nav-link:hover{color:var(--sage-l)}
+.btn-sage{font-family:var(--sans);font-size:10px;letter-spacing:.24em;text-transform:uppercase;color:var(--black);background:var(--sage);
+  padding:14px 30px;text-decoration:none;border:none;cursor:pointer;transition:all .35s;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;min-height:44px;line-height:1}
+.btn-sage:hover{background:var(--sage-l);transform:translateY(-2px);box-shadow:0 14px 44px rgba(90,158,111,.32)}
+.btn-ghost{font-family:var(--sans);font-size:10px;letter-spacing:.24em;text-transform:uppercase;color:var(--sage-l);background:transparent;
+  border:1px solid rgba(90,158,111,.4);padding:14px 30px;text-decoration:none;cursor:pointer;transition:all .35s;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;min-height:44px;line-height:1}
+.btn-ghost:hover{border-color:var(--sage-l);background:rgba(90,158,111,.08)}
+.nav-cta{padding:12px 26px;min-height:44px}
+
+/* ============ HERO ============ */
+.hero{position:relative;min-height:100vh;display:flex;align-items:center;overflow:hidden}
+#sweep{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+.hero-inner{position:relative;z-index:3;width:100%;max-width:1340px;margin:0 auto;padding:120px 64px 80px;pointer-events:none}
+.hero-copy{max-width:520px;pointer-events:auto}
+.eyebrow{display:inline-flex;align-items:center;gap:14px;font-size:10px;letter-spacing:.34em;text-transform:uppercase;color:var(--sage-l);margin-bottom:30px;opacity:0;animation:rise 1s ease .2s both}
+.eyebrow::before{content:'';width:34px;height:1px;background:var(--sage-l)}
+.hero h1{font-family:var(--serif);font-weight:300;line-height:1.02;letter-spacing:-.01em;color:var(--white);margin-bottom:26px;opacity:0;animation:rise 1s ease .35s both}
+.hero h1 .nm{display:block;font-size:clamp(56px,8vw,104px);line-height:.95}
+.hero h1 .rl{display:block;font-style:italic;color:var(--sage-l);font-size:clamp(26px,3.3vw,42px);margin-top:10px;line-height:1.1}
+.hero p{font-size:16px;line-height:1.95;color:var(--grey1);max-width:490px;margin-bottom:38px;opacity:0;animation:rise 1s ease .5s both}
+.hero-actions{display:flex;gap:18px;align-items:center;flex-wrap:wrap;opacity:0;animation:rise 1s ease .65s both}
+.hero-sub{font-family:var(--serif);font-style:italic;font-size:15px;color:var(--grey2);margin-top:14px;opacity:0;animation:rise 1s ease .8s both}
+.status-pill{display:inline-flex;align-items:center;gap:9px;font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--sage-l);
+  border:1px solid var(--border);padding:8px 14px;border-radius:999px}
+.status-pill::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--sage-l);box-shadow:0 0 10px var(--sage-l)}
+@keyframes rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:translateY(0)}}
+.scrollcue{position:absolute;bottom:30px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:9px;z-index:3;opacity:0;animation:rise 1s ease 1.2s both}
+.scrollcue .ln{width:1px;height:42px;background:linear-gradient(var(--sage-l),transparent);animation:cue 2.6s ease infinite}
+@keyframes cue{0%{transform:scaleY(0);transform-origin:top;opacity:0}50%{transform:scaleY(1);opacity:1}100%{transform:scaleY(0);transform-origin:bottom;opacity:0}}
+.scrollcue span{font-size:9px;letter-spacing:.26em;text-transform:uppercase;color:var(--grey2)}
+
+/* ============ SECTIONS ============ */
+.section{max-width:1180px;margin:0 auto;padding:128px 64px;border-top:1px solid var(--border3)}
+.sec-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--sage-l);margin-bottom:26px}
+.sec-h{font-family:var(--serif);font-weight:300;line-height:1.12;letter-spacing:-.01em;color:var(--white)}
+.sec-h .it{font-style:italic;color:var(--sage-l)}
+.sec-body{font-size:16px;line-height:2;color:var(--grey1);max-width:660px}
+.sec-body strong{color:var(--white);font-weight:400}
+.sec-body + .sec-body{margin-top:26px}
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .9s ease,transform .9s ease}
+.reveal.in{opacity:1;transform:none}
+
+/* pain cards (3 / 4 across) */
+.pains{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border3);border:1px solid var(--border3);margin-top:64px}
+.pains.four{grid-template-columns:repeat(4,1fr)}
+.pain{background:var(--card);padding:40px 32px;position:relative}
+.pain::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--sage);transform:scaleY(0);transform-origin:top;transition:transform .6s ease}
+.pain:hover::before{transform:scaleY(1)}
+.pain-t{font-family:var(--serif);font-weight:300;font-size:30px;color:var(--sage-l);margin-bottom:16px;line-height:1.05}
+.pain-d{font-size:14px;line-height:1.8;color:var(--grey1)}
+
+/* audit flow (5 stages) */
+.flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;align-items:stretch;gap:6px;margin-top:72px}
+.fnode{background:var(--card);border:1px solid var(--border3);padding:30px 18px;text-align:center;display:flex;flex-direction:column;align-items:center}
+.fnode .fn-no{font-size:9px;letter-spacing:.24em;color:var(--grey2);margin-bottom:14px}
+.fnode .fn-k{font-family:var(--serif);font-size:26px;font-weight:400;color:var(--sage-l);margin-bottom:12px;line-height:1}
+.fnode .fn-d{font-size:12.5px;line-height:1.7;color:var(--grey1)}
+.farrow{display:flex;align-items:center;justify-content:center;color:var(--sage-l);font-size:15px;opacity:.65}
+
+/* what Aria does — numbered grid */
+.get-sub{font-size:16px;line-height:1.9;color:var(--grey1);max-width:640px;margin-top:24px}
+.get-group{display:flex;align-items:center;gap:14px;font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--sage-l);margin:60px 0 18px}
+.get-group::before{content:'';width:28px;height:1px;background:var(--sage-l)}
+.get-group.first{margin-top:56px}
+.gets{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border3);border:1px solid var(--border3)}
+.get{background:var(--card);padding:36px 32px;min-height:200px;display:flex;flex-direction:column;transition:background .4s;position:relative}
+.get::before{content:'';position:absolute;left:0;top:0;height:2px;width:100%;background:var(--sage);transform:scaleX(0);transform-origin:left;transition:transform .5s ease}
+.get:hover::before{transform:scaleX(1)}
+.get:hover{background:var(--card-h)}
+.get-n{font-family:var(--serif);font-size:15px;color:var(--sage-l);letter-spacing:.08em;margin-bottom:22px}
+.get-t{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--white);margin-bottom:16px;line-height:1.5}
+.get-d{font-size:13px;line-height:1.85;color:var(--grey1);margin-top:auto}
+.get-ref{font-size:10px;letter-spacing:.12em;color:var(--grey2);margin-top:14px}
+
+/* "work with Aria" — three HTML frames that look like product screens */
+.frames{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:64px}
+.frame{background:var(--card);border:1px solid var(--border3);display:flex;flex-direction:column}
+.frame-body{padding:22px 20px;display:flex;flex-direction:column;gap:12px;flex:1}
+.frame-cap{padding:18px 20px;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--sage-l);border-top:1px solid var(--border3)}
+.who{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.who-av{width:28px;height:28px;border-radius:50%;background:rgba(90,158,111,.16);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
+  font-family:var(--serif);font-size:15px;color:var(--sage-l)}
+.who-n{font-size:12px;color:var(--white);letter-spacing:.04em}
+.who-r{font-size:10px;color:var(--grey2);letter-spacing:.06em}
+.msg{font-size:12.5px;line-height:1.75;color:#cfcdc6;background:rgba(250,250,248,.03);border:1px solid var(--border3);padding:12px 14px}
+.msg.me{background:rgba(90,158,111,.10);border-color:var(--border);align-self:flex-end;max-width:86%;color:var(--white)}
+.msg b{color:var(--white);font-weight:400}
+.chip{display:inline-block;font-size:9px;letter-spacing:.16em;text-transform:uppercase;padding:5px 9px;border:1px solid var(--border);color:var(--sage-l);margin-right:6px}
+.chip.warn{border-color:rgba(201,168,76,.35);color:var(--gold)}
+.row-kv{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--grey1);padding:9px 0;border-top:1px solid var(--border3)}
+.row-kv span:last-child{color:var(--white)}
+.row-kv .warn{color:var(--gold)}
+.row-kv .ok{color:var(--sage-l)}
+.file{font-size:11px;color:var(--grey1);letter-spacing:.04em;display:flex;gap:8px;align-items:center}
+.file::before{content:'';width:10px;height:12px;border:1px solid var(--grey2)}
+
+/* tag cloud — what Aria is trained on */
+.tags{display:flex;flex-wrap:wrap;gap:12px;margin-top:60px;max-width:940px}
+.tag{font-size:12px;letter-spacing:.06em;color:var(--grey1);border:1px solid var(--border);padding:10px 18px;border-radius:999px;transition:all .35s;cursor:default}
+.tag:hover{color:var(--sage-l);border-color:var(--sage-l);background:rgba(90,158,111,.06)}
+.tag-note{margin-top:42px;font-family:var(--serif);font-style:italic;font-size:19px;color:var(--sage-l);max-width:700px;line-height:1.5}
+
+/* books integration row */
+.books{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border3);border:1px solid var(--border3);margin-top:56px}
+.book{background:var(--card);padding:30px 26px;text-align:center}
+.book-n{font-family:var(--serif);font-size:24px;font-weight:300;color:var(--white);margin-bottom:8px}
+.book-d{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--grey2)}
+.promise{display:flex;flex-wrap:wrap;gap:28px;margin-top:36px}
+.promise span{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--grey1)}
+.promise span::before{content:'';width:16px;height:16px;border-radius:50%;background:rgba(90,158,111,.14);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%237FBF94' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:center}
+
+/* early access form */
+.access-wrap{display:flex;justify-content:center;margin-top:64px}
+.access{width:100%;max-width:540px;background:var(--card);border:1px solid var(--border);padding:46px 44px 40px;position:relative}
+.access::after{content:'';position:absolute;inset:0;border:1px solid transparent;background:linear-gradient(180deg,rgba(90,158,111,.55),transparent 60%) border-box;-webkit-mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+.access-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--sage-l);margin-bottom:28px;text-align:center}
+.field{display:flex;flex-direction:column;border-bottom:1px solid var(--border2);transition:border-color .3s;margin-bottom:22px}
+.field:focus-within{border-bottom-color:rgba(90,158,111,.6)}
+.field label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--grey2);padding:0 0 4px}
+.field input,.field select{background:transparent;border:none;outline:none;font-family:var(--serif);font-size:18px;font-weight:300;color:var(--white);padding:4px 0 12px;width:100%;min-height:40px}
+.field select{cursor:pointer;-webkit-appearance:none;appearance:none}
+.field select option{background:#0c0c0c;color:var(--white)}
+.field select:invalid{color:rgba(250,250,248,.32)}
+.field input::placeholder{color:rgba(250,250,248,.22)}
+.access .btn-sage{width:100%;text-align:center;padding:17px 20px;font-size:11px;margin-top:8px}
+.form-msg{font-family:var(--serif);font-style:italic;font-size:18px;color:var(--sage-l);text-align:center;padding:10px 0;line-height:1.5}
+.form-err{font-size:12px;color:#e08a7a;margin-top:12px;text-align:center;line-height:1.6;display:none}
+.form-err a{color:var(--sage-l)}
+.access-note{font-size:11px;color:var(--grey2);text-align:center;margin-top:18px;line-height:1.7}
+
+/* FAQ */
+.faq-list{max-width:740px;margin-top:48px}
+.faq-item{border-bottom:1px solid var(--border3)}
+.faq-q{width:100%;background:none;border:none;color:var(--white);font-family:var(--sans);font-size:14px;letter-spacing:.02em;
+  padding:22px 0;text-align:left;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:16px;min-height:44px;line-height:1.5}
+.faq-q::after{content:'+';font-size:18px;color:var(--sage-l);transition:transform .3s;flex-shrink:0}
+.faq-item.open .faq-q::after{transform:rotate(45deg)}
+.faq-a{max-height:0;overflow:hidden;transition:max-height .4s ease,padding .4s ease}
+.faq-item.open .faq-a{max-height:240px;padding:0 0 20px 0}
+.faq-a p{font-size:13px;line-height:1.85;color:var(--grey1)}
+
+/* final CTA */
+.cta{position:relative;text-align:center;padding:150px 32px;overflow:hidden;border-top:1px solid var(--border3)}
+.cta::before{content:'';position:absolute;left:50%;top:48%;width:780px;height:780px;max-width:120vw;max-height:120vw;transform:translate(-50%,-50%);
+  background:radial-gradient(circle, rgba(90,158,111,.18) 0%, rgba(90,158,111,.06) 32%, rgba(8,8,8,0) 64%);pointer-events:none;z-index:0}
+.cta-inner{position:relative;z-index:2;max-width:760px;margin:0 auto;display:flex;flex-direction:column;align-items:center}
+.cta h2{font-family:var(--serif);font-weight:300;font-size:clamp(38px,5.4vw,56px);line-height:1.08;letter-spacing:-.01em;margin-bottom:18px}
+.cta h2 .it{font-style:italic;color:var(--sage-l)}
+.cta .lead{font-size:16px;line-height:1.9;color:var(--grey1);max-width:460px;margin-bottom:42px}
+.cta .btn-sage{font-size:11px;padding:18px 48px}
+
+/* footer */
+footer{border-top:1px solid var(--border3);padding:44px 64px;max-width:1340px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.foot-l{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--grey2)}
+.foot-l b{color:var(--sage-l);font-weight:400}
+.foot-c{font-size:11px;letter-spacing:.1em;color:var(--grey2)}
+.foot-r{display:flex;gap:24px;flex-wrap:wrap}
+.foot-r a{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--grey1);text-decoration:none;transition:color .35s}
+.foot-r a:hover{color:var(--sage-l)}
+
+/* ============ RESPONSIVE ============ */
+@media(max-width:980px){
+  .topbar{padding:20px 28px}
+  .brand{gap:12px}
+  .nav-link{display:none}
+  .hero-inner{padding:128px 32px 400px;text-align:center;display:flex;justify-content:center}
+  .hero-copy{max-width:600px}
+  .eyebrow{justify-content:center}
+  .hero p{margin-left:auto;margin-right:auto}
+  .hero-actions{justify-content:center}
+  .section{padding:96px 32px}
+  .scrollcue{display:none}
+  .pains,.pains.four,.gets{grid-template-columns:1fr}
+  .flow{grid-template-columns:1fr;gap:6px}
+  .farrow{transform:rotate(90deg);padding:2px 0}
+  .frames{grid-template-columns:1fr;max-width:440px;margin-left:auto;margin-right:auto}
+  .books{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:560px){
+  .topbar{padding:16px 20px}
+  .brand-sep,.brand-tag{display:none}
+  .nav-cta{padding:11px 18px;font-size:9px;letter-spacing:.16em}
+  .section{padding:78px 22px}
+  .access{padding:38px 24px 32px}
+  footer{padding:38px 22px;flex-direction:column;text-align:center}
+  .foot-r{justify-content:center}
+  .cta{padding:110px 22px}
+}
+@media(max-width:375px){
+  .hero-inner{padding:110px 18px 360px}
+  .section{padding:64px 16px}
+  .access{padding:32px 18px 28px}
+  .books{grid-template-columns:1fr}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .eyebrow,.hero h1,.hero p,.hero-actions,.hero-sub,.scrollcue{animation:none;opacity:1;transform:none}
+  .scrollcue .ln{animation:none}
+  .reveal{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     NAV — G7 wordmark returns to the main site; Aria tag on the right
+     ============================================================ -->
+<div class="topbar" id="topbar">
+  <div class="brand">
+    <a href="../index.html" class="wordmark"><b>G7</b> Capital</a>
+    <span class="brand-sep"></span>
+    <span class="brand-tag">Aria</span>
+  </div>
+  <div class="nav-right">
+    <a href="#how" class="nav-link">How it works</a>
+    <a href="../index.html#employees" class="nav-link">All employees</a>
+    <a href="#access" class="btn-sage nav-cta">Get early access</a>
+  </div>
+</div>
+
+<!-- ============================================================
+     HERO — copy on the left, "audit sweep" canvas animation behind
+     ============================================================ -->
+<section class="hero" id="top">
+  <canvas id="sweep" aria-hidden="true"></canvas>
+  <div class="hero-inner">
+    <div class="hero-copy">
+      <div class="eyebrow">G7 Capital · AI Employees</div>
+      <h1>
+        <span class="nm">Aria</span>
+        <span class="rl">Your AI Audit Employee</span>
+      </h1>
+      <p>Aria audits your company the way your statutory auditor will — all year, not just in May. Every query, adjustment and qualification is found and fixed before the real audit begins.</p>
+      <div class="hero-actions">
+        <a href="#access" class="btn-sage">Get early access</a>
+        <span class="status-pill">Early access</span>
+      </div>
+      <div class="hero-sub">No surprises in your audit report.</div>
+    </div>
+  </div>
+  <div class="scrollcue"><div class="ln"></div><span>Scroll</span></div>
+</section>
+
+<!-- ============================================================
+     01 — THE PROBLEM
+     ============================================================ -->
+<section class="section" id="problem">
+  <div class="reveal">
+    <div class="sec-label">01 · The Problem</div>
+    <h2 class="sec-h" style="font-size:clamp(30px,4.4vw,44px);margin-bottom:46px">Get your financials audited internally —<br><span class="it">before your external auditor does.</span></h2>
+    <p class="sec-body">Most companies meet their auditor once a year — after the books are closed. By then, a missed approval or a wrong treatment is no longer a fix. It is a qualification, a CARO remark, or a penalty notice with <strong>the CFO's and directors' names on it.</strong></p>
+  </div>
+  <div class="pains reveal">
+    <div class="pain"><div class="pain-t">Found too late</div><div class="pain-d">Issues surface at year-end audit, when they can only be disclosed — not prevented.</div></div>
+    <div class="pain"><div class="pain-t">Personal liability</div><div class="pain-d">Accounting-standard breaches flow into the Directors' Responsibility Statement. Penalties land on the company, the CFO and the directors.</div></div>
+    <div class="pain"><div class="pain-t">The knowledge gap</div><div class="pain-d">Ind AS, CARO, Section 188, IFC — the rules are complex, and most finance teams have no auditor sitting with them.</div></div>
+  </div>
+</section>
+
+<!-- ============================================================
+     02 — MEET ARIA (5-stage audit flow)
+     ============================================================ -->
+<section class="section" id="how">
+  <div class="reveal">
+    <div class="sec-label">02 · Meet Aria</div>
+    <h2 class="sec-h" style="font-size:clamp(30px,4.4vw,44px);margin-bottom:46px">Aria audits you<br><span class="it">before your auditor does.</span></h2>
+    <p class="sec-body">Aria follows the same Standards on Auditing your statutory auditor uses. She learns your business, tests your books, raises queries with your team, and drafts the audit report your auditor is likely to issue — while there is still time to change it.</p>
+  </div>
+  <div class="flow reveal">
+    <div class="fnode"><div class="fn-no">STAGE 01</div><div class="fn-k">Understand</div><div class="fn-d">Learns your business, people and past audits.</div></div>
+    <div class="farrow">→</div>
+    <div class="fnode"><div class="fn-no">STAGE 02</div><div class="fn-k">Plan</div><div class="fn-d">Sets materiality and maps your risk areas.</div></div>
+    <div class="farrow">→</div>
+    <div class="fnode"><div class="fn-no">STAGE 03</div><div class="fn-k">Test</div><div class="fn-d">Tests entries, controls and approvals.</div></div>
+    <div class="farrow">→</div>
+    <div class="fnode"><div class="fn-no">STAGE 04</div><div class="fn-k">Fix</div><div class="fn-d">Raises queries and proposes adjustments.</div></div>
+    <div class="farrow">→</div>
+    <div class="fnode"><div class="fn-no">STAGE 05</div><div class="fn-k">Report</div><div class="fn-d">Drafts your audit report before the auditor.</div></div>
+  </div>
+</section>
+
+<!-- ============================================================
+     03 — WHAT ARIA DOES (mirrors the auditor's own work)
+     ============================================================ -->
+<section class="section" id="does">
+  <div class="reveal">
+    <div class="sec-label">03 · What Aria Does</div>
+    <h2 class="sec-h" style="font-size:clamp(28px,4vw,40px)">Everything your auditor checks.<br><span class="it">Months earlier.</span></h2>
+    <p class="get-sub">Each area follows the auditing standard behind it — so what Aria finds is what your auditor would find.</p>
+  </div>
+
+  <div class="get-group first reveal">Plan &amp; Assess</div>
+  <div class="gets reveal">
+    <div class="get"><div class="get-n">01</div><div class="get-t">Risk Assessment</div><div class="get-d">Maps your business, processes and where misstatements are most likely.</div><div class="get-ref">SA 315 · SA 320</div></div>
+    <div class="get"><div class="get-n">02</div><div class="get-t">Journal Entry Testing</div><div class="get-d">Reviews every entry in your books for unusual, late or manual postings — not a sample.</div><div class="get-ref">SA 240</div></div>
+    <div class="get"><div class="get-n">03</div><div class="get-t">Internal Controls</div><div class="get-d">Tests approvals, segregation of duties and audit trail — before the IFC opinion.</div><div class="get-ref">IFC · Audit Trail</div></div>
+  </div>
+
+  <div class="get-group reveal">Test &amp; Verify</div>
+  <div class="gets reveal">
+    <div class="get"><div class="get-n">04</div><div class="get-t">Vouching &amp; Analytics</div><div class="get-d">Checks entries against invoices and agreements, and explains every unusual movement.</div><div class="get-ref">SA 500 · SA 520 · SA 530</div></div>
+    <div class="get"><div class="get-n">05</div><div class="get-t">Related Parties &amp; Approvals</div><div class="get-d">Finds related-party transactions in your books and checks approvals and disclosures.</div><div class="get-ref">SA 550 · Sec 185 · 186 · 188</div></div>
+    <div class="get"><div class="get-n">06</div><div class="get-t">Estimates &amp; Provisions</div><div class="get-d">Tests provisions, impairment, expected credit loss and employee benefits.</div><div class="get-ref">SA 540 · Ind AS / AS</div></div>
+  </div>
+
+  <div class="get-group reveal">Report &amp; Resolve</div>
+  <div class="gets reveal">
+    <div class="get"><div class="get-n">07</div><div class="get-t">Audit Queries</div><div class="get-d">Raises queries with your team, requests evidence, and follows up until each one is cleared.</div><div class="get-ref">Query tracker</div></div>
+    <div class="get"><div class="get-n">08</div><div class="get-t">Proposed Adjustments</div><div class="get-d">Drafts the corrections — with working, journal entry and the standard behind it.</div><div class="get-ref">Ind AS · Indian GAAP</div></div>
+    <div class="get"><div class="get-n">09</div><div class="get-t">Draft Audit Report</div><div class="get-d">The opinion, CARO, IFC and key audit matters your auditor is likely to issue — today.</div><div class="get-ref">SA 700 · SA 701 · CARO 2020</div></div>
+  </div>
+</section>
+
+<!-- ============================================================
+     04 — WORK WITH ARIA (three product "frames" built in HTML)
+     ============================================================ -->
+<section class="section" id="work">
+  <div class="reveal">
+    <div class="sec-label">04 · Work With Aria</div>
+    <h2 class="sec-h" style="font-size:clamp(28px,4vw,40px)">She works like a member of your team.<br><span class="it">Not like software.</span></h2>
+    <p class="get-sub">Message her on WhatsApp, forward her an agreement, ask her anything. Aria comes back with finished work.</p>
+  </div>
+  <div class="frames reveal">
+
+    <!-- Frame 1: an audit query -->
+    <div class="frame">
+      <div class="frame-body">
+        <div class="who"><div class="who-av">A</div><div><div class="who-n">Aria</div><div class="who-r">Audit query #14</div></div></div>
+        <div class="msg">₹40,00,000 paid to <b>Sharma Enterprises</b> on 12 Nov. Your MD's brother is a partner there. Section 188 approval is not in the board minutes.</div>
+        <div class="msg me">Board meets on 2 Dec. We'll take it then.</div>
+        <div class="msg">Noted. I've drafted the resolution and the related-party disclosure. This query stays open until the minutes are uploaded.</div>
+        <div><span class="chip warn">Open</span><span class="chip">Owner · CS</span></div>
+      </div>
+      <div class="frame-cap">Audit Queries</div>
+    </div>
+
+    <!-- Frame 2: a proposed adjustment -->
+    <div class="frame">
+      <div class="frame-body">
+        <div class="who"><div class="who-av">A</div><div><div class="who-n">Aria</div><div class="who-r">Proposed adjustment #6</div></div></div>
+        <div class="msg">Debtors over 180 days have grown 38% this year with no provision. Your auditor will test this under Ind AS 109.</div>
+        <div class="row-kv"><span>Expected credit loss</span><span>₹12,40,000</span></div>
+        <div class="row-kv"><span>Impact on profit</span><span class="warn">− ₹12,40,000</span></div>
+        <div class="row-kv"><span>Standard</span><span>Ind AS 109</span></div>
+        <div class="file">ECL_working.xlsx</div>
+        <div class="file">Journal_entry.pdf</div>
+      </div>
+      <div class="frame-cap">Proposed Adjustments</div>
+    </div>
+
+    <!-- Frame 3: the draft audit report -->
+    <div class="frame">
+      <div class="frame-body">
+        <div class="who"><div class="who-av">A</div><div><div class="who-n">Aria</div><div class="who-r">Draft audit report · as of today</div></div></div>
+        <div class="row-kv"><span>Opinion</span><span class="ok">Unmodified</span></div>
+        <div class="row-kv"><span>CARO remarks likely</span><span class="warn">2</span></div>
+        <div class="row-kv"><span>IFC gaps</span><span class="warn">1</span></div>
+        <div class="row-kv"><span>Queries open</span><span>5 of 31</span></div>
+        <div class="row-kv"><span>Audit readiness</span><span class="ok">82 / 100</span></div>
+        <div class="msg">Clear the MSME dues and the s.188 approval, and both CARO remarks drop off.</div>
+      </div>
+      <div class="frame-cap">Draft Audit Report</div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     05 — TRAINED ON (tag cloud)
+     ============================================================ -->
+<section class="section" id="trained">
+  <div class="reveal">
+    <div class="sec-label">05 · Trained, Not Generic</div>
+    <h2 class="sec-h" style="font-size:clamp(28px,4vw,40px)">Trained on the rules<br><span class="it">your auditor applies.</span></h2>
+  </div>
+  <div class="tags reveal" id="tags"></div>
+  <div class="tag-note reveal">Trained to the standard of a Big 4 audit senior — and every answer cites the section or paragraph behind it.</div>
+</section>
+
+<!-- ============================================================
+     06 — WHO ARIA IS FOR
+     ============================================================ -->
+<section class="section" id="who">
+  <div class="reveal">
+    <div class="sec-label">06 · Built For</div>
+    <h2 class="sec-h" style="font-size:clamp(28px,4vw,40px)">Private or listed.<br><span class="it">Indian GAAP or Ind AS.</span></h2>
+    <p class="get-sub">Aria works out which laws and standards apply to your company — and audits you against exactly those.</p>
+  </div>
+  <div class="pains four reveal">
+    <div class="pain"><div class="pain-t">Private companies</div><div class="pain-d">Clean books, a clean CARO report, and a faster, cheaper audit.</div></div>
+    <div class="pain"><div class="pain-t">Ind AS companies</div><div class="pain-d">Revenue, leases, financial instruments and ESOPs — the judgement areas, done right.</div></div>
+    <div class="pain"><div class="pain-t">Listed companies</div><div class="pain-d">Quarterly results, related-party approvals and LODR — ready every quarter.</div></div>
+    <div class="pain"><div class="pain-t">Pre-IPO</div><div class="pain-d">Due-diligence-ready books and restated financials, on deadline.</div></div>
+  </div>
+</section>
+
+<!-- ============================================================
+     07 — WORKS WITH YOUR BOOKS
+     ============================================================ -->
+<section class="section" id="books">
+  <div class="reveal">
+    <div class="sec-label">07 · Your Books</div>
+    <h2 class="sec-h" style="font-size:clamp(28px,4vw,40px)">Built to work with<br><span class="it">the books you already keep.</span></h2>
+  </div>
+  <div class="books reveal">
+    <div class="book"><div class="book-n">TallyPrime</div><div class="book-d">Most Indian companies</div></div>
+    <div class="book"><div class="book-n">SAP</div><div class="book-d">Business One · S/4HANA</div></div>
+    <div class="book"><div class="book-n">Zoho Books</div><div class="book-d">Cloud accounting</div></div>
+    <div class="book"><div class="book-n">Exports</div><div class="book-d">Excel · XML · PDF</div></div>
+  </div>
+  <div class="promise reveal">
+    <span>Read-only access</span>
+    <span>Aria proposes — your team posts</span>
+    <span>Your data kept separate</span>
+    <span>Never shared or sold</span>
+  </div>
+</section>
+
+<!-- ============================================================
+     08 — EARLY ACCESS FORM (posts to Formspree)
+     ============================================================ -->
+<section class="section" id="access">
+  <div class="reveal">
+    <div class="sec-label">08 · Early Access</div>
+    <h2 class="sec-h" style="font-size:clamp(30px,4.4vw,44px)">Be among the first companies<br><span class="it">audited by Aria.</span></h2>
+  </div>
+  <div class="access-wrap reveal">
+    <div class="access" id="accessBox">
+      <div class="access-label">Aria — Early Access</div>
+      <form id="accessForm" novalidate>
+        <div class="field"><label for="fEmail">Work email</label><input type="email" id="fEmail" name="email" placeholder="you@company.com" required autocomplete="email"></div>
+        <div class="field"><label for="fCompany">Company</label><input type="text" id="fCompany" name="company" placeholder="Company name" required autocomplete="organization"></div>
+        <div class="field"><label for="fRole">Your role</label>
+          <select id="fRole" name="role" required>
+            <option value="" disabled selected>Select your role</option>
+            <option>CFO / Finance Head</option>
+            <option>Founder / MD / CEO</option>
+            <option>Company Secretary</option>
+            <option>Accounts Manager</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="field"><label for="fType">Company type</label>
+          <select id="fType" name="company_type" required>
+            <option value="" disabled selected>Select company type</option>
+            <option>Private — Indian GAAP</option>
+            <option>Private — Ind AS</option>
+            <option>Listed</option>
+            <option>Preparing for IPO</option>
+          </select>
+        </div>
+        <input type="hidden" name="product" value="Aria">
+        <button type="submit" class="btn-sage" id="fBtn">Request early access</button>
+        <div class="form-err" id="fErr"></div>
+      </form>
+      <div class="access-note">We'll reach out personally. No spam.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     FAQ
+     ============================================================ -->
+<section class="section" id="faq">
+  <div class="reveal">
+    <div class="sec-label">Questions</div>
+    <h2 class="sec-h" style="font-size:clamp(28px,4vw,40px)">Frequently asked.</h2>
+  </div>
+  <div class="faq-list reveal" id="faqList"></div>
+</section>
+
+<!-- ============================================================
+     FINAL CTA
+     ============================================================ -->
+<section class="cta" id="start">
+  <div class="cta-inner reveal">
+    <h2>Know your audit report<br><span class="it">before your auditor writes it.</span></h2>
+    <p class="lead">Aria finds it, helps you fix it, and hands your auditor a ready file.</p>
+    <a href="#access" class="btn-sage">Get early access</a>
+  </div>
+</section>
+
+<!-- ============================================================
+     FOOTER
+     ============================================================ -->
+<footer>
+  <div class="foot-l"><b>Aria</b> · A G7 Capital AI Employee</div>
+  <div class="foot-c">© 2026 G7 Capital</div>
+  <div class="foot-r">
+    <a href="../index.html">G7 Capital</a>
+    <a href="../index.html#employees">Employees</a>
+    <a href="mailto:gsevnservices@gmail.com?subject=Aria">Contact</a>
+  </div>
+</footer>
+
+<script>
+/* ============================================================
+   SETTINGS — change these in one place
+   ============================================================ */
+var ARIA_SITE = {
+  formEndpoint: 'https://formspree.io/f/xzdjwjqy',   /* Formspree endpoint from the project brief */
+  email: 'gsevnservices@gmail.com'
+};
+
+/* ============================================================
+   FAQ CONTENT
+   ============================================================ */
+var FAQ = [
+  { q: 'Does Aria replace my statutory auditor?', a: 'No. Aria does not sign your audit report or give an audit opinion — your auditor does. Aria prepares you, so the real audit has no surprises.' },
+  { q: 'Which companies is Aria for?', a: 'Private and listed companies in India, on Indian GAAP or Ind AS. Aria works out which laws and standards apply to you and audits you against those.' },
+  { q: 'What does Aria need from us?', a: 'Read-only access to your books (Tally, SAP, Zoho Books or exports), plus your last audited financials, audit reports, board minutes and key agreements.' },
+  { q: 'Will Aria change entries in our books?', a: 'No. Aria proposes entries with the working and the standard behind them. Your team reviews and posts them.' },
+  { q: 'Who checks Aria\'s judgement?', a: 'Every finding cites the section or paragraph it relies on. Judgement calls are flagged with a memo for your CA or auditor — never decided silently.' },
+  { q: 'Is our data safe?', a: 'Your data is stored securely, kept separate from every other company, and never shared or sold. Delete it anytime on request.' },
+  { q: 'When can we start?', a: 'Aria is in early access. Request access above and we\'ll reach out to set up your company.' }
+];
+
+/* ============================================================
+   WHAT ARIA IS TRAINED ON (tag cloud)
+   ============================================================ */
+var TRAINED = ['Ind AS','Indian GAAP (AS)','Standards on Auditing','CARO 2020','Companies Act, 2013','Schedule III',
+  'Internal Financial Controls','SEBI LODR','ITFG Clarifications','EAC Opinions','Audit Trail Rules','MSME Act',
+  'NFRA Orders','ROC Adjudication Orders','ICAI Guidance Notes','Tax Audit (3CD) tie-out'];
+
+/* ============================================================
+   RENDER — FAQ + tags
+   ============================================================ */
+function esc(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+(function renderFaq(){
+  var list=document.getElementById('faqList'); if(!list) return;
+  list.innerHTML = FAQ.map(function(f){
+    return '<div class="faq-item"><button class="faq-q" type="button" aria-expanded="false">'+esc(f.q)+
+      '</button><div class="faq-a"><p>'+esc(f.a)+'</p></div></div>';
+  }).join('');
+  /* open / close each answer */
+  list.querySelectorAll('.faq-q').forEach(function(b){
+    b.addEventListener('click',function(){
+      var item=b.parentNode, open=item.classList.toggle('open');
+      b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  });
+})();
+
+(function renderTags(){
+  var el=document.getElementById('tags'); if(!el) return;
+  el.innerHTML = TRAINED.map(function(t){ return '<span class="tag">'+esc(t)+'</span>'; }).join('');
+})();
+
+/* ============================================================
+   EARLY ACCESS FORM — validates, posts to Formspree,
+   falls back to email if the request fails
+   ============================================================ */
+(function(){
+  var form=document.getElementById('accessForm'); if(!form) return;
+  var btn=document.getElementById('fBtn'), err=document.getElementById('fErr');
+
+  function showErr(html){ err.innerHTML=html; err.style.display='block'; }
+  /* clear the error as soon as the person edits any field */
+  form.addEventListener('input',function(){ err.style.display='none'; });
+  form.addEventListener('change',function(){ err.style.display='none'; });
+
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    var email=form.email.value.trim(), company=form.company.value.trim();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ showErr('Enter a valid work email.'); form.email.focus(); return; }
+    if(!company){ showErr('Enter your company name.'); form.company.focus(); return; }
+    if(!form.role.value){ showErr('Select your role.'); form.role.focus(); return; }
+    if(!form.company_type.value){ showErr('Select your company type.'); form.company_type.focus(); return; }
+
+    btn.disabled=true; btn.textContent='Sending…';
+    fetch(ARIA_SITE.formEndpoint,{ method:'POST', headers:{'Accept':'application/json'}, body:new FormData(form) })
+      .then(function(r){
+        if(!r.ok) throw new Error('bad');
+        document.getElementById('accessBox').innerHTML =
+          '<div class="access-label">Aria — Early Access</div>'+
+          '<div class="form-msg">You’re on the list.<br>We’ll reach out personally to set up your company.</div>';
+      })
+      .catch(function(){
+        btn.disabled=false; btn.textContent='Request early access';
+        var body=encodeURIComponent('Company: '+company+'\nRole: '+form.role.value+'\nCompany type: '+form.company_type.value+'\nEmail: '+email);
+        showErr('That didn’t go through. <a href="mailto:'+ARIA_SITE.email+'?subject=Aria%20early%20access&body='+body+'">Email us instead →</a>');
+      });
+  });
+})();
+
+/* ============================================================
+   NAV + SCROLL REVEAL
+   ============================================================ */
+var REDUCE = matchMedia('(prefers-reduced-motion:reduce)').matches;
+
+(function(){
+  var bar=document.getElementById('topbar');
+  var f=function(){ bar.classList.toggle('scrolled', scrollY>24); }; f();
+  addEventListener('scroll',f,{passive:true});
+})();
+
+(function(){
+  var els=document.querySelectorAll('.reveal');
+  if(REDUCE || !('IntersectionObserver' in window)){ els.forEach(function(el){el.classList.add('in');}); return; }
+  var io=new IntersectionObserver(function(es){ es.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target); } }); },{threshold:0.12});
+  els.forEach(function(el){ io.observe(el); });
+})();
+
+/* ============================================================
+   HERO — "AUDIT SWEEP" CANVAS
+   A ledger of entries. A scan beam passes over it: most entries
+   clear (sage), a few are flagged (gold). Flagged entries are then
+   fixed one by one, and the whole ledger glows clean.
+   Loop: TEST (sweep) → FIX → CLEAR → repeat.
+   ============================================================ */
+(function(){
+  var canvas=document.getElementById('sweep'); if(!canvas) return;
+  var ctx=canvas.getContext('2d');
+  var heroCopy=document.querySelector('.hero-copy');
+  var SAGE=[90,158,111], SAGE_L=[127,191,148], GOLD=[201,168,76], GREY=[138,136,128];
+  function rgba(c,a){ return 'rgba('+c[0]+','+c[1]+','+c[2]+','+a.toFixed(3)+')'; }
+  function lerp(a,b,k){ return a+(b-a)*k; }
+  var TAU=Math.PI*2;
+
+  /* timing of one loop, in seconds */
+  var CYCLE=10.5, T_SWEEP=5.6, T_FIX=8.4;
+  var CAPTIONS={
+    TEST: 'Every entry tested — not a sample.',
+    FIX: 'Issues fixed before your auditor sees them.',
+    CLEAR: 'No surprises in your audit report.'
+  };
+
+  var W,H,DPR,narrow,cols,rows,cell,gx0,gy0,gridW,gridH;
+  var cells=[], dust=[], dustW=-1, perf=0, last=0, raf=0, running=false, prevT=0, glowAll=0;
+
+  /* fresh random ledger for each loop: about 1 in 10 entries gets flagged */
+  function resetCells(){
+    var flagged=[];
+    cells.forEach(function(c){
+      c.st=0; c.t0=0; c.flag=Math.random()<0.1; c.fixAt=0;
+      if(c.flag) flagged.push(c);
+    });
+    if(!flagged.length && cells.length){ var k=cells[Math.floor(cells.length/2)]; k.flag=true; flagged.push(k); }
+    var span=(T_FIX-T_SWEEP-0.4);
+    flagged.sort(function(a,b){ return a.c-b.c; });
+    flagged.forEach(function(c,i){ c.fixAt=T_SWEEP+0.2+span*(i/Math.max(1,flagged.length)); });
+  }
+
+  /* size the canvas and lay out the ledger grid to the right of the copy (below it on mobile) */
+  function resize(){
+    DPR=Math.min(devicePixelRatio||1,2);
+    W=canvas.clientWidth; H=canvas.clientHeight;
+    canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    narrow=W<980;
+    var cr=canvas.getBoundingClientRect();
+    var hr=heroCopy?heroCopy.getBoundingClientRect():null;
+    var textRight=hr?hr.right-cr.left:W*0.4;
+    var copyBottom=hr?hr.bottom-cr.top:H*0.6;
+    var left = narrow ? W*0.12 : textRight+90;
+    var right = narrow ? W*0.88 : W-90;
+    var top = narrow ? Math.max(H-360, copyBottom+70) : H*0.26;
+    var bot = narrow ? H-120 : H*0.70;
+    var areaW=Math.max(160,right-left), areaH=Math.max(120,bot-top);
+    cols = narrow ? (W<420?9:12) : 16;
+    cell = Math.min(areaW/cols, 34);
+    rows = Math.max(5, Math.min(9, Math.floor(areaH/cell)));
+    gridW=cols*cell; gridH=rows*cell;
+    gx0=left+(areaW-gridW)/2; gy0=top+(areaH-gridH)/2;
+    if(cells.length!==cols*rows){
+      cells=[];
+      for(var r=0;r<rows;r++) for(var c=0;c<cols;c++) cells.push({c:c,r:r,st:0,t0:0,flag:false,fixAt:0});
+      resetCells();
+    }
+    if(dustW!==W){
+      dustW=W; dust=[]; var n=narrow?30:60;
+      for(var i=0;i<n;i++) dust.push({x:Math.random()*W,y:Math.random()*H,s:Math.random()*1.2+0.4,b:Math.random()*0.28+0.08,ph:Math.random()*TAU,sage:Math.random()<0.4});
+    }
+  }
+
+  /* where the loop is right now */
+  function phase(t){ return t<T_SWEEP ? 'TEST' : (t<T_FIX ? 'FIX' : 'CLEAR'); }
+
+  function update(dt){
+    var t=perf%CYCLE;
+    if(t<prevT){ resetCells(); glowAll=0; }   /* new loop */
+    prevT=t;
+    var beamX=gx0+(t/T_SWEEP)*(gridW+cell);
+    cells.forEach(function(c){
+      var cx=gx0+c.c*cell+cell/2;
+      if(t<T_SWEEP && c.st===0 && cx<beamX){ c.st=c.flag?2:1; c.t0=perf; }     /* tested */
+      if(c.st===2 && t>=c.fixAt){ c.st=3; c.t0=perf; }                         /* fixed */
+    });
+    glowAll=lerp(glowAll, t>=T_FIX ? 1 : 0, Math.min(1,dt*2));
+  }
+
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    if(ctx.roundRect){ ctx.roundRect(x,y,w,h,r); }
+    else { ctx.rect(x,y,w,h); }
+  }
+
+  function drawDust(){
+    dust.forEach(function(d){
+      var tw=REDUCE?1:(0.6+0.4*Math.sin(perf*1.1+d.ph));
+      ctx.fillStyle = d.sage ? rgba(SAGE_L,d.b*tw) : 'rgba(250,250,248,'+(d.b*tw).toFixed(3)+')';
+      ctx.beginPath(); ctx.arc(d.x,d.y,d.s,0,TAU); ctx.fill();
+    });
+  }
+
+  /* the ledger frame + small header text */
+  function drawFrame(){
+    var pad=cell*0.55;
+    ctx.strokeStyle=rgba(SAGE,0.14); ctx.lineWidth=1;
+    ctx.strokeRect(gx0-pad, gy0-pad, gridW+pad*2, gridH+pad*2);
+    ctx.font='10px "Tenor Sans", sans-serif';
+    if('letterSpacing' in ctx) ctx.letterSpacing='2px';
+    ctx.textAlign='left'; ctx.textBaseline='bottom';
+    ctx.fillStyle=rgba(GREY,0.6);
+    ctx.fillText('LEDGER · FY 2026–27', gx0-pad, gy0-pad-10);
+    ctx.textAlign='right';
+    ctx.fillStyle=rgba(SAGE_L,0.75);
+    ctx.fillText('ARIA · AUDITING', gx0+gridW+pad, gy0-pad-10);
+    if('letterSpacing' in ctx) ctx.letterSpacing='0px';
+  }
+
+  /* each entry is a small rounded square; colour = its audit state */
+  function drawCells(fadeOut){
+    var s=cell*0.46, rr=Math.max(2,s*0.18);
+    cells.forEach(function(c){
+      var x=gx0+c.c*cell+(cell-s)/2, y=gy0+c.r*cell+(cell-s)/2, cx=x+s/2, cy=y+s/2;
+      var age=Math.min(1,(perf-c.t0)*3);
+      if(c.st===0){
+        ctx.fillStyle='rgba(250,250,248,'+(0.05*fadeOut+0.03).toFixed(3)+')';
+        roundRect(x,y,s,s,rr); ctx.fill();
+      } else if(c.st===1){
+        ctx.fillStyle=rgba(SAGE,(0.28+0.22*age+0.25*glowAll)*fadeOut);
+        roundRect(x,y,s,s,rr); ctx.fill();
+      } else if(c.st===2){
+        var p=REDUCE?1:(0.75+0.25*Math.sin(perf*5+c.c));
+        ctx.save(); ctx.shadowColor=rgba(GOLD,0.8); ctx.shadowBlur=14*p;
+        ctx.fillStyle=rgba(GOLD,0.92*fadeOut); roundRect(x,y,s,s,rr); ctx.fill(); ctx.restore();
+        ctx.strokeStyle=rgba(GOLD,0.45*p*fadeOut); ctx.lineWidth=1;
+        ctx.beginPath(); ctx.arc(cx,cy,s*(0.95+0.25*p),0,TAU); ctx.stroke();
+      } else {
+        /* fixed: bright sage with a ring that expands and fades */
+        ctx.fillStyle=rgba(SAGE_L,(0.85+0.15*glowAll)*fadeOut);
+        roundRect(x,y,s,s,rr); ctx.fill();
+        var k=Math.min(1,(perf-c.t0)*1.4);
+        if(k<1 && !REDUCE){
+          ctx.strokeStyle=rgba(SAGE_L,0.6*(1-k)); ctx.lineWidth=1.2;
+          ctx.beginPath(); ctx.arc(cx,cy,s*(0.7+1.6*k),0,TAU); ctx.stroke();
+        }
+      }
+    });
+  }
+
+  /* the vertical scan beam during TEST */
+  function drawBeam(t){
+    if(t>=T_SWEEP) return;
+    var bx=gx0+(t/T_SWEEP)*(gridW+cell);
+    if(bx>gx0+gridW+cell*0.5) return;
+    var pad=cell*0.55;
+    var g=ctx.createLinearGradient(bx-cell*2.2,0,bx,0);
+    g.addColorStop(0,rgba(SAGE,0)); g.addColorStop(1,rgba(SAGE_L,0.16));
+    ctx.fillStyle=g; ctx.fillRect(bx-cell*2.2, gy0-pad, cell*2.2, gridH+pad*2);
+    ctx.save(); ctx.shadowColor=rgba(SAGE_L,0.9); ctx.shadowBlur=16;
+    ctx.strokeStyle=rgba(SAGE_L,0.85); ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(bx,gy0-pad); ctx.lineTo(bx,gy0+gridH+pad); ctx.stroke(); ctx.restore();
+  }
+
+  /* stage label + one line of copy under the ledger */
+  function drawCaption(t){
+    var ph=phase(t);
+    var start = ph==='TEST'?0:(ph==='FIX'?T_SWEEP:T_FIX);
+    var end = ph==='TEST'?T_SWEEP:(ph==='FIX'?T_FIX:CYCLE);
+    var sp=(t-start)/(end-start);
+    var fade=REDUCE?1:Math.min(1, Math.min(sp,1-sp)*6+0.25);
+    var y=gy0+gridH+cell*0.55+(narrow?30:40);
+    var mid=gx0+gridW/2;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='10px "Tenor Sans", sans-serif';
+    if('letterSpacing' in ctx) ctx.letterSpacing='3px';
+    ctx.fillStyle=rgba(ph==='FIX'?GOLD:SAGE_L,0.9*fade); ctx.fillText(ph, mid, y);
+    if('letterSpacing' in ctx) ctx.letterSpacing='0px';
+    ctx.font='300 17px "Cormorant Garamond", serif';
+    ctx.fillStyle='rgba(240,239,233,'+(0.86*fade).toFixed(3)+')';
+    ctx.fillText(CAPTIONS[ph], mid, y+22);
+  }
+
+  function render(){
+    var t=perf%CYCLE;
+    var fadeOut = (!REDUCE && t>CYCLE-0.7) ? Math.max(0.15,(CYCLE-t)/0.7) : 1;
+    ctx.clearRect(0,0,W,H);
+    drawDust();
+    drawFrame();
+    drawCells(fadeOut);
+    drawBeam(t);
+    drawCaption(t);
+    /* darken behind the copy on desktop so text stays readable */
+    if(!narrow){
+      var sx=Math.max(0,(heroCopy?heroCopy.getBoundingClientRect().right:W*0.3));
+      var g=ctx.createLinearGradient(0,0,sx,0);
+      g.addColorStop(0,'rgba(8,8,8,1)'); g.addColorStop(0.7,'rgba(8,8,8,0.9)'); g.addColorStop(1,'rgba(8,8,8,0)');
+      ctx.fillStyle=g; ctx.fillRect(0,0,sx,H);
+    }
+  }
+
+  function tick(ts){
+    if(!last) last=ts; var dt=(ts-last)/1000; last=ts; if(dt>0.05) dt=0.05;
+    perf+=dt; update(dt); render();
+    raf=requestAnimationFrame(tick);
+  }
+
+  resize();
+  addEventListener('resize',resize);
+
+  if(REDUCE){
+    /* reduced motion: show the finished, clean ledger with one fixed entry */
+    cells.forEach(function(c){ c.st = c.flag ? 3 : 1; c.t0=-10; });
+    perf=T_FIX+0.5; glowAll=1;
+    render();
+  } else {
+    render(); running=true; last=0; raf=requestAnimationFrame(tick);
+    /* pause the animation when the hero is off screen */
+    var io=new IntersectionObserver(function(es){ es.forEach(function(en){
+      if(en.isIntersecting && !running){ running=true; last=0; raf=requestAnimationFrame(tick); }
+      else if(!en.isIntersecting && running){ running=false; cancelAnimationFrame(raf); }
+    }); },{threshold:0.02});
+    io.observe(canvas);
+  }
+})();
+</script>
+</body>
+</html>

@@ -342,7 +342,7 @@ const EMP = {
   scout:  { name:'Scout',  role:'AI BD Employee',       tint:'#C77B30', live:true,  sum:'Finds your best customers and builds your acquisition plan.', desc:'Finds your best customers and builds your acquisition plan. Built for Indian SMBs.', href:'scout/landing.html' },
   priya:  { name:'Priya',  role:'AI Credit Analyst',    tint:'#3E8C84', live:false, sum:'Assesses creditworthiness and structures lending decisions.', desc:'Assesses creditworthiness and structures lending decisions. Built for NBFCs and banks.' },
   maya:   { name:'Maya',   role:'AI Portfolio Monitor', tint:'#4A6FA5', live:false, sum:'Tracks portfolio health and flags risks before they surface.', desc:'Tracks portfolio health and flags risks before they surface. Built for investors.' },
-  aria:   { name:'Aria',   role:'AI Audit Analyst',     tint:'#5A9E6F', live:false, sum:"Reviews books with a chartered accountant's eye.", desc:"Reviews books and surfaces audit findings with a chartered accountant's eye. Built for firms and auditors." },
+  aria:   { name:'Aria',   role:'AI Audit Employee',    tint:'#5A9E6F', live:false, stage:'Early Access', sum:'Audits your company before your auditor does.', desc:'Audits your company the way your statutory auditor will, all year, so the real audit has no surprises. Built for private and listed companies.', href:'aria/index.html' },
   stella: { name:'Stella', role:'AI Marketing Officer', tint:'#B0567E', live:false, sum:'Plans and runs growth campaigns end to end.', desc:'Plans and runs growth campaigns end to end. Built for marketing and growth teams.' },
 };
 const ORDER = ['alex','scout','priya','maya','aria','stella'];
@@ -370,8 +370,8 @@ const ORDER = ['alex','scout','priya','maya','aria','stella'];
   const grid = document.getElementById('empGrid');
   grid.innerHTML = ORDER.map(k=>{
     const e = EMP[k];
-    const badge = e.live ? '<span class="badge live">Live</span>' : '<span class="badge soon">Coming Soon</span>';
-    const link = e.live
+    const badge = e.live ? '<span class="badge live">Live</span>' : '<span class="badge soon">' + (e.stage || 'Coming Soon') + '</span>';
+    const link = e.href
       ? `<a class="emp-link" href="${e.href}">Open →</a>`
       : `<button class="emp-link" data-notify="${k}">Notify me →</button>`;
     return `<div class="emp" style="--ec:${e.tint}">
@@ -409,7 +409,7 @@ document.querySelectorAll('.planet').forEach(pl=>{
     tipName.textContent = e.name;
     tipRole.textContent = e.role;
     tipSum.textContent = e.sum;
-    tipStatus.textContent = e.live ? 'Live' : 'Coming Soon';
+    tipStatus.textContent = e.live ? 'Live' : (e.stage || 'Coming Soon');
     tipStatus.className = 'ts ' + (e.live ? 'live' : 'soon');
     positionTip(pl);            // measure with content in place
     tip.classList.add('show');
@@ -420,7 +420,7 @@ document.querySelectorAll('.planet').forEach(pl=>{
     tip.classList.remove('show');
   });
   pl.addEventListener('click', ()=>{
-    if(e.live){ if(e.href.charAt(0)==='#'){ window.location.hash = e.href.slice(1); } else { window.location.href = e.href; } }
+    if(e.href){ if(e.href.charAt(0)==='#'){ window.location.hash = e.href.slice(1); } else { window.location.href = e.href; } }
     else { openModal(pl.dataset.key); }
   });
 });
